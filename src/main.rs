@@ -1,9 +1,13 @@
+mod config;
+mod control;
 mod disc;
 mod makemkv;
 mod player;
 mod resume;
 mod store;
 mod ui;
+
+use std::sync::{Arc, Mutex};
 
 use eframe::egui;
 
@@ -16,6 +20,12 @@ fn main() -> eframe::Result {
     // `--windowed` for development; the media center normally runs fullscreen.
     let windowed = std::env::args().any(|a| a == "--windowed");
 
+    let config_path = config::config_path();
+    if let Some(path) = &config_path {
+        log::info!("config: {}", path.display());
+    }
+    let shared = Arc::new(Mutex::new(config::load_initial(config_path.as_deref())));
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("familynovice")
@@ -26,6 +36,17 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "familynovice",
         options,
-        Box::new(|cc| Ok(Box::new(ui::App::new(cc.egui_ctx.clone())))),
+        Box::new(move |cc| {
+            if let Some(path) = config_path {
+                let ctx = cc.egui_ctx.clone();
+                control::spawn_server(
+                    store::control_socket_path(),
+                    path,
+                    shared.clone(),
+                    move || ctx.request_repaint(),
+                );
+            }
+            Ok(Box::new(ui::App::new(cc.egui_ctx.clone(), shared)))
+        }),
     )
 }

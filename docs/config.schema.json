@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://familynovice.local/config.schema.json",
+  "title": "familynovice media center config",
+  "description": "Stored as $XDG_CONFIG_HOME/familynovice/config.json of the media center user. Written by the admin interface (admin/src/config.ts), read by the media center (src/config.rs). Change both sides together and bump `version` for incompatible changes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "discs": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "DVD/Blu-ray playback. Missing fields take their defaults.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the disc tile as usable at all."
+        },
+        "allow_disc_menu": {
+          "type": "boolean",
+          "default": true,
+          "description": "Offer \"Disc menu\" (regular start with the disc's own menus)."
+        },
+        "audio_languages": {
+          "$ref": "#/$defs/languages",
+          "description": "Preferred audio languages, most preferred first."
+        },
+        "subtitle_languages": {
+          "$ref": "#/$defs/languages",
+          "description": "Preferred subtitle languages, most preferred first. Empty: no subtitles."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "languages": {
+      "type": "array",
+      "default": [],
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z]{3}$",
+        "description": "ISO 639-2 code as used on discs, e.g. \"deu\", \"eng\"."
+      }
+    }
+  }
+}

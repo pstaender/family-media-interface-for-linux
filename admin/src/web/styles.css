@@ -1,0 +1,244 @@
+:root {
+  --bg: #f5f6f8;
+  --card: #ffffff;
+  --text: #1c1f26;
+  --muted: #5d6475;
+  --border: #dde1e8;
+  --accent: #2f6fe0;
+  --accent-text: #ffffff;
+  --ok-bg: #e6f4ea;
+  --ok-text: #1e5e2f;
+  --warn-bg: #fff4e0;
+  --warn-text: #7a4b00;
+  --err-bg: #fdecec;
+  --err-text: #8a1f1f;
+  --radius: 12px;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12141c;
+    --card: #1c2030;
+    --text: #eef0f5;
+    --muted: #9aa1b3;
+    --border: #2e3446;
+    --accent: #4d8dff;
+    --ok-bg: #173323;
+    --ok-text: #9be2b0;
+    --warn-bg: #3a2c10;
+    --warn-text: #f3cf8a;
+    --err-bg: #3d1a1a;
+    --err-text: #f4a9a9;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+h1 {
+  font-size: 22px;
+  margin: 0;
+  font-weight: 600;
+}
+
+h2 {
+  font-size: 17px;
+  margin: 0 0 4px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+.narrow {
+  max-width: 400px;
+  margin: 10vh auto 0;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 14px;
+  margin: 0 0 16px;
+}
+
+label.field {
+  display: block;
+  margin-bottom: 14px;
+}
+
+label.field span {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+input[type="password"],
+select {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.toggle {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.toggle:first-of-type {
+  border-top: none;
+}
+
+.toggle input {
+  margin-top: 4px;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.toggle small {
+  display: block;
+  color: var(--muted);
+}
+
+button {
+  font: inherit;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+button.small {
+  padding: 2px 8px;
+  font-size: 13px;
+}
+
+.languages {
+  border-top: 1px solid var(--border);
+  padding: 12px 0;
+}
+
+.languages ol {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+
+.languages li {
+  margin: 4px 0;
+}
+
+.languages li .actions {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.add-language {
+  display: flex;
+  gap: 8px;
+  max-width: 360px;
+}
+
+.banner {
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.banner.ok {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+.banner.warn {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.banner.error {
+  background: var(--err-bg);
+  color: var(--err-text);
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.dot.on {
+  background: #2fa35a;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+details summary {
+  cursor: pointer;
+  font-weight: 600;
+}

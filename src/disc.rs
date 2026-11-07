@@ -148,10 +148,23 @@ pub fn eject(device: &Path) -> Result<(), String> {
         ),
         Err(e) => log::warn!("udisksctl not available: {e}"),
     }
-    eject_ioctl(device).map_err(|e| {
-        log::warn!("eject failed: {e}");
-        "The disc could not be ejected. Is it still in use?".to_string()
-    })?;
+    if let Err(e) = eject_ioctl(device) {
+        // Some drives keep "medium removal prevented" set even after unmounting, and the
+        // kernel won't unlock while other processes have the device open. util-linux
+        // `eject` falls back to SCSI commands (ALLOW MEDIUM REMOVAL + START STOP UNIT).
+        log::info!("eject still refused ({e}), trying util-linux eject");
+        let out = Command::new("eject")
+            .arg(device)
+            .output()
+            .map_err(|e| format!("The disc could not be ejected (eject: {e})."))?;
+        if !out.status.success() {
+            log::warn!(
+                "eject failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            return Err("The disc could not be ejected. Is it still in use?".to_string());
+        }
+    }
     log::info!("ejected {} after unmounting", device.display());
     Ok(())
 }

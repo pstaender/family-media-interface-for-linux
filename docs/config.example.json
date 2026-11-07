@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "discs": {
+    "enabled": true,
+    "allow_disc_menu": true,
+    "audio_languages": [
+      "deu",
+      "eng"
+    ],
+    "subtitle_languages": []
+  }
+}

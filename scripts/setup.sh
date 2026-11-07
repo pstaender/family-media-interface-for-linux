@@ -22,6 +22,8 @@ APT_PACKAGES=(
     build-essential pkg-config libc6-dev libssl-dev libexpat1-dev libavcodec-dev zlib1g-dev
     # Players: mpv plays the main movie, VLC plays with disc menus
     mpv vlc libbluray2
+    # Disc eject fallback (SCSI eject for drives that stay locked)
+    eject
     # Blu-ray Java (BD-J) menus
     libbluray-bdj default-jre
 )

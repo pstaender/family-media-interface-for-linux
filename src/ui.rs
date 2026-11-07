@@ -10,6 +10,8 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Key, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
 };
 
+use crate::config::Config;
+use crate::control::SharedConfig;
 use crate::disc::{self, DriveReport, DriveState, MediaKind};
 use crate::makemkv::{self, DiscInfo, ScanProgress};
 use crate::player::{self, MovieOptions, PlayMode};
@@ -97,18 +99,18 @@ enum Choice {
     Back,
 }
 
-/// The options shown for a Blu-ray. "Resume" only appears if the movie was played before.
-fn choices(resume: Option<f64>) -> Vec<Choice> {
+/// The options shown for a Blu-ray. "Resume" only appears if the movie was played before,
+/// "Disc menu" only if the parents allow it.
+fn choices(resume: Option<f64>, allow_disc_menu: bool) -> Vec<Choice> {
     let mut list = Vec::new();
     if let Some(pos) = resume {
         list.push(Choice::Resume(pos));
     }
-    list.extend([
-        Choice::MainMovie,
-        Choice::DiscMenu,
-        Choice::Eject,
-        Choice::Back,
-    ]);
+    list.push(Choice::MainMovie);
+    if allow_disc_menu {
+        list.push(Choice::DiscMenu);
+    }
+    list.extend([Choice::Eject, Choice::Back]);
     list
 }
 
@@ -121,11 +123,12 @@ pub struct App {
     scans: HashMap<String, ScanState>,
     eject_tx: Sender<Result<(), String>>,
     eject_rx: Receiver<Result<(), String>>,
+    config: SharedConfig,
     screen: Screen,
 }
 
 impl App {
-    pub fn new(ctx: egui::Context) -> Self {
+    pub fn new(ctx: egui::Context, config: SharedConfig) -> Self {
         let (drives_tx, drives_rx) = mpsc::channel();
         let repaint = ctx.clone();
         disc::spawn_watcher(Duration::from_secs(2), drives_tx, move || {
@@ -142,8 +145,15 @@ impl App {
             scans: HashMap::new(),
             eject_tx,
             eject_rx,
+            config,
             screen: Screen::Home,
         }
+    }
+
+    /// The current config (may change at any time through a reload).
+    fn config(&self) -> (Config, Option<String>) {
+        let state = self.config.lock().unwrap_or_else(|p| p.into_inner());
+        (state.config.clone(), state.error.clone())
     }
 
     /// Pull updates from background threads.
@@ -244,6 +254,13 @@ impl App {
             disc_id: None,
             progress: None,
         };
+        let (config, error) = self.config();
+        if !config.discs.enabled {
+            return match error {
+                Some(_) => tile(false, "Blu-ray", "Settings could not be loaded"),
+                None => tile(false, "Blu-ray", "Discs are turned off"),
+            };
+        }
         if self.drives.is_empty() {
             return tile(false, "Blu-ray", "No disc drive found");
         }
@@ -303,6 +320,12 @@ impl App {
 
     fn start(&mut self, mode: PlayMode, tile: &BlurayTile, start_secs: Option<f64>) {
         let Some(device) = &tile.device else { return };
+        let (config, _) = self.config();
+        // Re-check the settings: they may have changed while the menu was open.
+        if !config.discs.enabled || (mode == PlayMode::DiscMenu && !config.discs.allow_disc_menu) {
+            self.screen = Screen::Home;
+            return;
+        }
         let info = match tile.disc_key.as_ref().and_then(|k| self.scans.get(k)) {
             Some(ScanState::Done(info)) => Some(info),
             _ => None,
@@ -318,6 +341,8 @@ impl App {
         let options = MovieOptions {
             start_secs,
             ipc_socket: track.is_some().then_some(socket.as_path()),
+            audio_languages: &config.discs.audio_languages,
+            subtitle_languages: &config.discs.subtitle_languages,
         };
         let mut cmd = player::command(mode, device, info, &options);
         log::info!("starting player: {cmd:?}");
@@ -409,7 +434,7 @@ impl eframe::App for App {
             }
             Screen::Choose { selected, resume } => {
                 let (mut selected, resume) = (*selected, *resume);
-                let list = choices(resume);
+                let list = choices(resume, self.config().0.discs.allow_disc_menu);
                 if up {
                     selected = selected.saturating_sub(1);
                 }

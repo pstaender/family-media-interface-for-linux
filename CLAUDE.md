@@ -33,11 +33,22 @@ It has two parts:
   user account (falls back to `~/.config/familynovice/`). Resolve the path with the standard
   XDG rules (e.g. the `directories`/`dirs` crate in Rust), never hardcode `~/.config`.
 - Usage data/statistics go into `$XDG_DATA_HOME/familynovice/` (default `~/.local/share/familynovice/`).
-- The config schema is the contract between the two parts. Document it in one place (e.g. JSON
-  Schema in `docs/`), version it, and update both sides together when it changes.
+- The config schema is the contract between the two parts: `docs/config.schema.json`, with
+  `docs/config.example.json` checked by the tests on both sides. Validation lives in
+  `src/config.rs` (Rust) and `admin/src/config.ts` (TypeScript) and must accept and reject the
+  same things (`rejects_bad_configs` / `rejects %p` test lists). Bump `version` for
+  incompatible changes and update both sides together.
+- Files in the config dir: `config.json` (media center settings, written by the admin
+  interface) and `admin.json` (admin password hash, mode 0600, never read by the media center).
+- `FAMILYNOVICE_CONFIG_DIR` overrides the config directory on both sides (tests, later the
+  hardened `/etc/familynovice/` setup).
+- Missing `config.json`: defaults. Invalid at startup: locked-down settings (discs off),
+  error reported via `status`. Invalid on reload: last valid config stays active.
 
 > Status: early stage. Implemented so far: the home screen with a Blu-ray tile, disc detection
-> and Blu-ray playback (main movie / disc menu). Update this file as more gets decided.
+> and Blu-ray playback (main movie / disc menu / resume / eject), the config file with live
+> reload over the control socket, and a first admin interface (password, disc settings).
+> Update this file as more gets decided.
 
 ## Features
 
@@ -103,8 +114,12 @@ It has two parts:
   `$XDG_DATA_HOME/familynovice/resume/<disc id>.json`. Resume is offered from 1 min on and
   dropped within the last 5 min (end credits). Resuming passes `--start=<secs>`.
   Unix socket paths are limited to 107 characters.
-- **Eject:** `CDROM_LOCKDOOR` + `CDROMEJECT` ioctls. If the disc is mounted (desktop
-  automount), it's unmounted with `udisksctl` first.
+- **Eject (`disc::eject`):** 1. `CDROM_LOCKDOOR` + `CDROMEJECT` ioctls. 2. If refused, unmount
+  with `udisksctl` (desktop automount) and retry. 3. If still refused, run util-linux `eject`,
+  which uses SCSI commands. Needed on the Pioneer BDR-UD04: after unmounting, the kernel
+  keeps the door locked (`EBUSY`, other processes have the device open). Note: `CDROMEJECT`
+  can return a **positive** SCSI status (e.g. 2 = CHECK CONDITION) instead of an error, so
+  treat any non-zero result as failure.
 - **Start options** (asked when the tile is activated, `src/player.rs`): "Resume from h:mm:ss"
   (only if played before), "Play movie" / "Play from beginning", "Disc menu", "Eject disc",
   "Back". In terms of the original wish list:
@@ -162,6 +177,28 @@ It has two parts:
   on localhost. Allow LAN access only when explicitly turned on. Never store the PIN or
   passwords in plaintext; store a slow hash (e.g. argon2) that both sides verify the same way.
 
+#### Implemented (v1)
+
+- **Server (`admin/src/app.ts`):** `Bun.serve` on `127.0.0.1:8787` (`FAMILYNOVICE_ADMIN_PORT`).
+  Serves the React app (`src/web/`, bundled by Bun via HTML import) and a JSON API:
+  `GET /api/state`, `POST /api/setup|login|logout|password`, `GET|PUT /api/config`,
+  `GET /api/status`.
+- **Security checks on every API call:** `Host` must be `127.0.0.1:<port>` or
+  `localhost:<port>` (DNS rebinding); changing requests need `X-Familynovice: 1` and, if
+  present, a same-origin `Origin` (CSRF); session cookie `HttpOnly; SameSite=Strict`, 8 h,
+  in memory (a server restart logs everyone out); request bodies ≤ 64 KB.
+- **Auth (`admin/src/auth.ts`):** first visit sets the admin password (≥ 8 characters),
+  stored as argon2id PHC string in `admin.json` (created with `O_EXCL`, so setup can't be
+  repeated). 5 wrong passwords within 15 min lock the login for 60 s.
+- **Apply:** `PUT /api/config` validates, writes `config.json` atomically, then sends
+  `{"command":"reload"}` to the media center's control socket (`src/control.rs`,
+  `$XDG_RUNTIME_DIR/familynovice.sock`, mode 0600). If the media center isn't running, the
+  config is still saved and applies at its next start.
+- **Settings so far:** discs on/off, offer "Disc menu", preferred audio and subtitle languages
+  (ISO 639-2/T codes; players also get the /B variant, e.g. `deu,ger`).
+- Not yet: PIN, profiles, time limits, websites, apps, LAN access, `restart`, file-watch
+  fallback, systemd user service.
+
 ## Repository layout
 
 ```
@@ -176,8 +213,20 @@ src/
   store.rs        JSON files in XDG dirs (disc cache, resume), atomic writes
 scripts/
   setup.sh        installs players, builds MakeMKV from source
-admin/            Bun + React admin web interface (planned)
-docs/             config JSON schema and documentation (planned)
+  config.rs       config.json: types, validation, load/reload (fail closed)
+  control.rs      control socket for the admin interface (reload/status)
+admin/            Bun + React admin web interface
+  src/server.ts   entry point
+  src/app.ts      HTTP server, API routes, security checks
+  src/auth.ts     admin password (argon2id), sessions, login rate limit
+  src/config.ts   config types + validation (mirror of src/config.rs)
+  src/control.ts  control socket client
+  src/files.ts    XDG paths, atomic JSON writes
+  src/web/        React app (index.html, main.tsx, styles.css)
+  test/           bun tests (config validation, API incl. security checks)
+docs/
+  config.schema.json   config format (contract between both parts)
+  config.example.json  example, validated by tests on both sides
 ```
 
 ## Development commands
@@ -209,10 +258,14 @@ Admin web interface (from `admin/`):
 
 ```sh
 bun install          # install dependencies
-bun run dev          # start the dev server
-bun run build        # production build
+bun run dev          # start the server with hot reload → http://127.0.0.1:8787/
+bun run start        # start in production mode
+bun run typecheck    # tsc --noEmit
 bun test             # run tests
 ```
+
+For experiments without touching the real config, run both parts with
+`FAMILYNOVICE_CONFIG_DIR=/some/tmp/dir` (and `FAMILYNOVICE_ADMIN_PORT` for a second server).
 
 Before you consider a change done, run the formatter, linter and tests for every part you touched.
 
@@ -312,6 +365,8 @@ Before you consider a change done, run the formatter, linter and tests for every
   with disc menus. Decryption comes from MakeMKV's `libmmbd`. The media center waits for the
   player to exit and then shows the home screen again.
 - **System packages (apt):** see `APT_PACKAGES` in `scripts/setup.sh`.
+- **Admin ↔ media center:** JSON lines over a Unix socket (`src/control.rs`); config as one
+  `config.json`, validated on both sides.
 
 ## Open decisions
 

@@ -35,6 +35,13 @@ pub fn mpv_socket_path() -> PathBuf {
         .join(format!("{APP}-mpv.sock"))
 }
 
+/// The media center's control socket (see `control.rs`), used by the admin interface.
+pub fn control_socket_path() -> PathBuf {
+    dirs::runtime_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("{APP}.sock"))
+}
+
 /// Turn an arbitrary key into a safe file name.
 fn file_name(key: &str) -> String {
     let safe: String = key
