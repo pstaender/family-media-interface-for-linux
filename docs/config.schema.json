@@ -73,6 +73,39 @@
       "items": {
         "$ref": "#/$defs/website"
       }
+    },
+    "parental": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "PIN and time limits (src/limits.rs). Missing fields take their defaults.",
+      "properties": {
+        "pin_hash": {
+          "type": "string",
+          "pattern": "^\\$argon2",
+          "maxLength": 512,
+          "description": "argon2 PHC hash of the 4-8 digit PIN, set via the admin interface (POST /api/pin). Never the PIN itself."
+        },
+        "pin_length": {
+          "type": "integer",
+          "minimum": 4,
+          "maximum": 8,
+          "description": "Number of PIN digits (only together with pin_hash), so the lock screen checks the PIN as soon as it is complete."
+        },
+        "pin_backoff_doubling": {
+          "type": "boolean",
+          "default": true,
+          "description": "After a wrong PIN wait 5 s; with this option the wait doubles after each further wrong PIN (max 1 h)."
+        },
+        "limits": {
+          "type": "array",
+          "maxItems": 50,
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/limit"
+          },
+          "description": "If several rules of the same kind match a day, the most specific wins: today > weekdays > this_week > every_day. A this_week budget counts the whole week."
+        }
+      }
     }
   },
   "$defs": {
@@ -162,6 +195,138 @@
           "description": "Allow the domain without leading www. and all its subdomains; otherwise only exactly the start host."
         }
       }
+    },
+    "scope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "date"
+          ],
+          "properties": {
+            "kind": {
+              "const": "today"
+            },
+            "date": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "days"
+          ],
+          "properties": {
+            "kind": {
+              "const": "weekdays"
+            },
+            "days": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "mon",
+                  "tue",
+                  "wed",
+                  "thu",
+                  "fri",
+                  "sat",
+                  "sun"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "week_of"
+          ],
+          "properties": {
+            "kind": {
+              "const": "this_week"
+            },
+            "week_of": {
+              "type": "string",
+              "format": "date",
+              "description": "The Monday of that week."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "every_day"
+            }
+          }
+        }
+      ]
+    },
+    "limit": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "minutes",
+            "scope"
+          ],
+          "properties": {
+            "type": {
+              "const": "budget"
+            },
+            "minutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10080,
+              "description": "Max 1440 except for this_week."
+            },
+            "scope": {
+              "$ref": "#/$defs/scope"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "until",
+            "scope"
+          ],
+          "properties": {
+            "type": {
+              "const": "window"
+            },
+            "from": {
+              "type": "string",
+              "pattern": "^[0-2][0-9]:[0-5][0-9]$"
+            },
+            "until": {
+              "type": "string",
+              "pattern": "^[0-2][0-9]:[0-5][0-9]$"
+            },
+            "scope": {
+              "$ref": "#/$defs/scope"
+            }
+          }
+        }
+      ]
     }
   }
 }

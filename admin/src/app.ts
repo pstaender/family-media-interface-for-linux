@@ -16,7 +16,7 @@ import {
   sessionCookie,
   sessionToken,
 } from "./auth";
-import { isNormalizedAbsolutePath, validateConfig, defaultConfig } from "./config";
+import { isNormalizedAbsolutePath, validateConfig, defaultConfig, type Config } from "./config";
 import { NOT_RUNNING, sendCommand } from "./control";
 import { readJson, writeJsonAtomic } from "./files";
 
@@ -59,6 +59,10 @@ function json(data: unknown, status = 200, headers: Record<string, string> = {})
   });
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 async function readBody(req: Request): Promise<Record<string, unknown> | null> {
   const length = Number(req.headers.get("content-length") ?? "0");
   if (length > MAX_BODY_BYTES) return null;
@@ -76,6 +80,25 @@ export function createAdminServer(options: AdminOptions) {
   const configPath = join(options.configDir, "config.json");
   const socketPath = join(options.runtimeDir, "familynovice.sock");
   const auth = new Auth(join(options.configDir, "admin.json"));
+
+  /** The stored config (defaults if missing; defaults plus an error text if invalid). */
+  const loadConfig = async (): Promise<{ config: Config; error?: string }> => {
+    let stored: unknown;
+    try {
+      stored = await readJson(configPath);
+    } catch (e) {
+      return { config: defaultConfig(), error: `config.json is not valid JSON: ${(e as Error).message}` };
+    }
+    if (stored === undefined) return { config: defaultConfig() };
+    const v = validateConfig(stored);
+    return v.ok ? { config: v.config } : { config: defaultConfig(), error: `config.json is invalid: ${v.error}` };
+  };
+
+  const saveAndApply = async (config: Config) => {
+    await writeJsonAtomic(configPath, config, 0o644);
+    const applied = await sendCommand(socketPath, "reload");
+    return { saved: true, applied };
+  };
 
   type Handler = (req: Request) => Promise<Response> | Response;
 
@@ -164,26 +187,84 @@ export function createAdminServer(options: AdminOptions) {
 
       "/api/config": {
         GET: api(async () => {
-          let stored: unknown;
-          try {
-            stored = await readJson(configPath);
-          } catch (e) {
-            return json({ config: defaultConfig(), error: `config.json is not valid JSON: ${(e as Error).message}` });
-          }
-          if (stored === undefined) return json({ config: defaultConfig() });
-          const v = validateConfig(stored);
-          return v.ok
-            ? json({ config: v.config })
-            : json({ config: defaultConfig(), error: `config.json is invalid: ${v.error}` });
+          const { config, error } = await loadConfig();
+          // The PIN hash never leaves the server; the browser only learns whether one is set.
+          const { pin_hash, pin_length: _length, ...parental } = config.parental;
+          const result: Record<string, unknown> = {
+            config: { ...config, parental },
+            pinSet: pin_hash !== undefined,
+          };
+          if (error) result.error = error;
+          return json(result);
         }),
         PUT: api(
           async (req) => {
             const body = await readBody(req);
+            if (isRecord(body?.parental) && ("pin_hash" in body.parental || "pin_length" in body.parental)) {
+              return json({ error: "The PIN can only be changed via /api/pin." }, 400);
+            }
             const v = validateConfig(body);
             if (!v.ok) return json({ error: v.error }, 400);
-            await writeJsonAtomic(configPath, v.config, 0o644);
-            const applied = await sendCommand(socketPath, "reload");
-            return json({ saved: true, applied });
+            // Keep the stored PIN.
+            const stored = (await loadConfig()).config.parental;
+            if (stored.pin_hash !== undefined) v.config.parental.pin_hash = stored.pin_hash;
+            if (stored.pin_length !== undefined) v.config.parental.pin_length = stored.pin_length;
+            return json(await saveAndApply(v.config));
+          },
+          { mutating: true },
+        ),
+      },
+
+      "/api/pin": {
+        POST: api(
+          async (req) => {
+            const body = await readBody(req);
+            const pin = body?.pin;
+            if (typeof pin !== "string" || !/^\d{4,8}$/.test(pin)) {
+              return json({ error: "The PIN must have 4 to 8 digits." }, 400);
+            }
+            const { config } = await loadConfig();
+            config.parental.pin_hash = await Bun.password.hash(pin, { algorithm: "argon2id" });
+            config.parental.pin_length = pin.length;
+            return json(await saveAndApply(config));
+          },
+          { mutating: true },
+        ),
+        DELETE: api(
+          async () => {
+            const { config } = await loadConfig();
+            delete config.parental.pin_hash;
+            delete config.parental.pin_length;
+            return json(await saveAndApply(config));
+          },
+          { mutating: true },
+        ),
+      },
+
+      "/api/unlock": {
+        POST: api(
+          async (req) => {
+            const body = await readBody(req);
+            const minutes = body?.minutes;
+            const command =
+              body?.rest_of_day === true
+                ? { command: "unlock", rest_of_day: true }
+                : typeof minutes === "number" && Number.isInteger(minutes) && minutes >= 1 && minutes <= 1440
+                  ? { command: "unlock", minutes }
+                  : null;
+            if (!command) return json({ error: "Choose minutes (1-1440) or the rest of today." }, 400);
+            const reply = await sendCommand(socketPath, command);
+            return reply.ok ? json({ ok: true }) : json({ error: reply.error }, 502);
+          },
+          { mutating: true },
+        ),
+      },
+
+      "/api/lock": {
+        POST: api(
+          async () => {
+            const reply = await sendCommand(socketPath, "lock");
+            return reply.ok ? json({ ok: true }) : json({ error: reply.error }, 502);
           },
           { mutating: true },
         ),
@@ -209,7 +290,17 @@ export function createAdminServer(options: AdminOptions) {
       "/api/status": {
         GET: api(async () => {
           const reply = await sendCommand(socketPath, "status", 2000);
-          if (reply.ok) return json({ running: true, configError: reply.config_error ?? null });
+          if (reply.ok) {
+            return json({
+              running: true,
+              configError: reply.config_error ?? null,
+              locked: reply.locked === true,
+              lockReason: reply.lock_reason ?? null,
+              remainingSecs: reply.remaining_secs ?? null,
+              usedTodaySecs: reply.used_today_secs ?? 0,
+              unlockedUntil: reply.unlocked_until ?? null,
+            });
+          }
           return json({ running: false, error: reply.error === NOT_RUNNING ? null : reply.error });
         }),
       },

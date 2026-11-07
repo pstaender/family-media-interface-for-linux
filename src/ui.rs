@@ -15,16 +15,19 @@ use crate::config::{Config, FolderSettings};
 use crate::control::SharedConfig;
 use crate::disc::{self, DriveReport, DriveState, MediaKind};
 use crate::library::{self, Entry, EntryKind, Filter};
+use crate::limits::{self, Status};
+use crate::lock::{LockAction, LockInfo, LockView};
 use crate::makemkv::{self, DiscInfo, ScanProgress};
 use crate::pictures::{self, Picture};
 use crate::player::{self, MovieOptions, PlayMode};
+use crate::usage::SharedTracker;
 use crate::{resume, sites, store};
 
 const BG: Color32 = Color32::from_rgb(0x12, 0x14, 0x1c);
 const TILE_BG: Color32 = Color32::from_rgb(0x22, 0x26, 0x34);
-const TEXT: Color32 = Color32::from_rgb(0xf2, 0xf4, 0xf8);
-const TEXT_DIM: Color32 = Color32::from_rgb(0x9a, 0xa1, 0xb3);
-const ACCENT: Color32 = Color32::from_rgb(0x3d, 0x8b, 0xff);
+pub const TEXT: Color32 = Color32::from_rgb(0xf2, 0xf4, 0xf8);
+pub const TEXT_DIM: Color32 = Color32::from_rgb(0x9a, 0xa1, 0xb3);
+pub const ACCENT: Color32 = Color32::from_rgb(0x3d, 0x8b, 0xff);
 /// Tile text: fixed sizes (never shrunk to fit; long text gets "…" instead), and their
 /// distance from the tile's bottom edge.
 const TILE_TITLE_FONT: f32 = 32.0;
@@ -285,6 +288,8 @@ pub struct App {
     screen: Screen,
     /// Focused tile on the home screen: (row, column). Row 0: discs, row 1: folders.
     focus: (usize, usize),
+    /// The lock button (top right) has the focus instead of a tile.
+    lock_button_focused: bool,
     /// Horizontal scroll per row kind, vertical scroll of the rows.
     row_scroll_x: [f32; 3],
     rows_scroll_y: f32,
@@ -297,10 +302,20 @@ pub struct App {
     picture_rx: Receiver<(PathBuf, Result<Picture, String>)>,
     /// Whether our window is currently pushed below a running player.
     window_below_player: bool,
+    /// Usage time and lock state (shared with the control socket).
+    tracker: SharedTracker,
+    /// The lock screen, while locked.
+    lock: Option<LockView>,
+    last_tick: Instant,
+    /// Fractions of a second not yet added to the usage.
+    usage_carry: f64,
+    last_input: Instant,
+    pin_tx: Sender<bool>,
+    pin_rx: Receiver<bool>,
 }
 
 impl App {
-    pub fn new(ctx: egui::Context, config: SharedConfig) -> Self {
+    pub fn new(ctx: egui::Context, config: SharedConfig, tracker: SharedTracker) -> Self {
         let (drives_tx, drives_rx) = mpsc::channel();
         let repaint = ctx.clone();
         disc::spawn_watcher(Duration::from_secs(2), drives_tx, move || {
@@ -309,6 +324,7 @@ impl App {
         let (scan_tx, scan_rx) = mpsc::channel();
         let (eject_tx, eject_rx) = mpsc::channel();
         let (picture_tx, picture_rx) = mpsc::channel();
+        let (pin_tx, pin_rx) = mpsc::channel();
         Self {
             ctx,
             drives_rx,
@@ -321,6 +337,7 @@ impl App {
             config,
             screen: Screen::Home,
             focus: (0, 0),
+            lock_button_focused: false,
             row_scroll_x: [0.0; 3],
             rows_scroll_y: 0.0,
             web_helper: find_web_helper(),
@@ -329,6 +346,13 @@ impl App {
             picture_tx,
             picture_rx,
             window_below_player: false,
+            tracker,
+            lock: None,
+            last_tick: Instant::now(),
+            usage_carry: 0.0,
+            last_input: Instant::now(),
+            pin_tx,
+            pin_rx,
         }
     }
 
@@ -505,7 +529,193 @@ impl App {
         if let Some(screen) = next {
             self.screen = screen;
         }
+        self.track_usage_and_limits();
         self.keep_player_in_front();
+    }
+
+    /// Count usage time and lock the media center when a limit is reached.
+    ///
+    /// Usage counts while something is open (not the home screen) or within 60 s after the
+    /// last key press / click, so a media center left alone on the home screen doesn't use
+    /// up the time.
+    fn track_usage_and_limits(&mut self) {
+        let now = chrono::Local::now();
+        let input = self.ctx.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::Key { pressed: true, .. }
+                        | egui::Event::PointerButton { pressed: true, .. }
+                        | egui::Event::MouseWheel { .. }
+                )
+            })
+        });
+        if input {
+            self.last_input = Instant::now();
+        }
+        // Long gaps (suspend, hung frame) don't count.
+        let dt = self.last_tick.elapsed().as_secs_f64().min(5.0);
+        self.last_tick = Instant::now();
+        let active = self.lock.is_none()
+            && (!matches!(self.screen, Screen::Home)
+                || self.last_input.elapsed() < Duration::from_secs(60));
+
+        let (config, _) = self.config();
+        let mut tracker = self.tracker.lock().unwrap_or_else(|p| p.into_inner());
+        if active {
+            self.usage_carry += dt;
+            let whole = self.usage_carry.floor();
+            if whole >= 1.0 {
+                tracker.add_usage(now.date_naive(), whole as u64);
+                self.usage_carry -= whole;
+            }
+        }
+        let status = limits::evaluate(
+            &config.parental.limits,
+            &tracker.situation(),
+            now.naive_local(),
+        );
+        tracker.status = status.clone();
+        tracker.save_if_due();
+        drop(tracker);
+
+        match status {
+            Status::Locked(reason) => match &mut self.lock {
+                Some(view) => view.reason = reason,
+                None => {
+                    log::info!("locking: {}", limits::reason_text(&reason));
+                    self.stop_everything();
+                    self.lock = Some(LockView::new(reason));
+                }
+            },
+            Status::Allowed { .. } => {
+                if self.lock.take().is_some() {
+                    log::info!("unlocked");
+                }
+            }
+        }
+        // Keep counting and checking even when nothing else repaints.
+        self.ctx.request_repaint_after(Duration::from_secs(1));
+    }
+
+    /// Time is up: stop players, music and websites, close viewers.
+    fn stop_everything(&mut self) {
+        match std::mem::replace(&mut self.screen, Screen::Home) {
+            Screen::Playing {
+                child,
+                started,
+                kind,
+                stopping,
+                ..
+            } => {
+                if stopping.is_none() {
+                    stop_player(child.id());
+                }
+                // Keep watching it until it has exited (killed after 2 s if needed).
+                self.screen = Screen::Playing {
+                    child,
+                    started,
+                    back: None,
+                    kind,
+                    stopping: Some(stopping.unwrap_or_else(Instant::now)),
+                };
+            }
+            Screen::Music(mut view) => view.player.stop(),
+            _ => {}
+        }
+    }
+
+    fn lock_screen(&mut self, ui: &egui::Ui, painter: &egui::Painter, screen_rect: Rect, s: f32) {
+        let (config, _) = self.config();
+        let now = chrono::Local::now();
+        let doubling = config.parental.pin_backoff_doubling;
+        while let Ok(ok) = self.pin_rx.try_recv() {
+            let mut tracker = self.tracker.lock().unwrap_or_else(|p| p.into_inner());
+            if ok {
+                tracker.pin_ok();
+            } else {
+                let wait = tracker.pin_wrong(now.timestamp(), doubling);
+                log::info!("wrong PIN, waiting {wait} s");
+            }
+            drop(tracker);
+            if let Some(view) = &mut self.lock {
+                view.pin_checked(ok);
+            }
+        }
+        let info = LockInfo {
+            has_pin: config.parental.pin_hash.is_some(),
+            pin_length: config.parental.pin_length.map(usize::from),
+            wait_secs: self
+                .tracker
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .pin_wait(now.timestamp()),
+        };
+        let Some(view) = &mut self.lock else { return };
+        match view.show(ui, painter, screen_rect, s, &info) {
+            LockAction::None => {}
+            LockAction::CheckPin(pin) => match config.parental.pin_hash.clone() {
+                Some(hash) => {
+                    let (tx, ctx) = (self.pin_tx.clone(), self.ctx.clone());
+                    std::thread::spawn(move || {
+                        let _ = tx.send(crate::pin::verify(&pin, &hash));
+                        ctx.request_repaint();
+                    });
+                }
+                None => view.pin_checked(false),
+            },
+            LockAction::Unlock(minutes) => {
+                log::info!("unlocked with the PIN ({minutes:?} minutes)");
+                self.tracker
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .unlock(now, minutes);
+                self.lock = None;
+            }
+        }
+    }
+
+    /// "5 min left" in the top-right corner during the last minutes.
+    fn paint_time_warning(&self, painter: &egui::Painter, screen_rect: Rect, s: f32) {
+        let status = self
+            .tracker
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .status
+            .clone();
+        let Status::Allowed {
+            remaining_secs: Some(left),
+        } = status
+        else {
+            return;
+        };
+        if left > 5 * 60 {
+            return;
+        }
+        let minutes = (left + 59) / 60;
+        let text = if minutes <= 1 {
+            "1 min left".to_string()
+        } else {
+            format!("{minutes} min left")
+        };
+        let font = FontId::proportional(28.0 * s);
+        let size = painter
+            .layout_no_wrap(text.clone(), font.clone(), TEXT)
+            .size();
+        let rect = Rect::from_min_size(
+            Pos2::new(
+                // Left of the lock button.
+                screen_rect.max.x - size.x - 220.0 * s,
+                screen_rect.min.y + 36.0 * s,
+            ),
+            size + Vec2::new(40.0 * s, 20.0 * s),
+        );
+        painter.rect_filled(
+            rect,
+            CornerRadius::same((rect.height() / 2.0) as u8),
+            Color32::from_rgb(0xd9, 0x7a, 0x1e),
+        );
+        painter.text(rect.center(), Align2::CENTER_CENTER, text, font, TEXT);
     }
 
     /// While an external player (mpv/VLC) runs, keep our window at the bottom so the player
@@ -795,6 +1005,11 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
+        if self.lock.is_some() {
+            self.lock_screen(ui, &painter, screen_rect, s);
+            return;
+        }
+
         match self.screen {
             Screen::Browse(_) => self.browse_screen(ui, &painter, screen_rect, s, &keys),
             Screen::Picture(_) => self.picture_screen(ui, &painter, screen_rect, s, &keys),
@@ -804,6 +1019,7 @@ impl eframe::App for App {
             }
             _ => self.home_screen(ui, &painter, screen_rect, s, &keys),
         }
+        self.paint_time_warning(&painter, screen_rect, s);
     }
 }
 
@@ -838,8 +1054,18 @@ impl App {
             RowKind::Websites => websites.len(),
         };
 
-        // Focus navigation between the rows and tiles.
-        if home {
+        // The lock button (only with a PIN, so nobody gets locked out): "up" from the top row.
+        let has_pin = config.parental.pin_hash.is_some();
+        if !has_pin {
+            self.lock_button_focused = false;
+        }
+        if home && self.lock_button_focused {
+            if keys.down {
+                self.lock_button_focused = false;
+            }
+        } else if home && keys.up && self.focus.0 == 0 && has_pin {
+            self.lock_button_focused = true;
+        } else if home {
             let (mut row, mut col) = self.focus;
             if keys.up && row > 0 {
                 row -= 1;
@@ -939,7 +1165,7 @@ impl App {
                 let response = ui.interact(rect, id, Sense::click());
                 let focus = ctx.animate_bool_with_time(
                     ui.make_persistent_id(("focus", kind as usize, i)),
-                    home && self.focus == (r, i),
+                    home && !self.lock_button_focused && self.focus == (r, i),
                     0.15,
                 );
                 match kind {
@@ -982,7 +1208,32 @@ impl App {
             }
         }
 
-        if home && keys.enter {
+        if has_pin {
+            let size = 76.0 * s;
+            let rect = Rect::from_min_size(
+                Pos2::new(
+                    screen_rect.max.x - margin - size,
+                    screen_rect.min.y + 34.0 * s,
+                ),
+                Vec2::splat(size),
+            );
+            let response = ui.interact(rect, ui.make_persistent_id("lock-button"), Sense::click());
+            let focused = home && (self.lock_button_focused || response.hovered());
+            paint_lock_button(ui.painter(), rect, focused, s);
+            let pressed = response.clicked() || (home && self.lock_button_focused && keys.enter);
+            if home && pressed {
+                log::info!("locked with the lock button");
+                self.lock_button_focused = false;
+                self.tracker
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .lock();
+                self.ctx.request_repaint();
+                return;
+            }
+        }
+
+        if home && keys.enter && !self.lock_button_focused {
             activate = Some(self.focus);
         }
         if let Some((row, col)) = activate {
@@ -1152,14 +1403,18 @@ impl App {
         // Header: folder name › subfolders
         let mut crumbs = vec![folder.name.as_str()];
         crumbs.extend(b.sub.iter().map(String::as_str));
+        let (back_rect, back_response) = back_button(ui, screen_rect, s);
+        paint_back_button(painter, back_rect, back_response.hovered(), s);
+        let go_back = keys.back || back_response.clicked();
+        let title_x = back_rect.max.x - screen_rect.min.x + 30.0 * s;
         painter.text(
-            screen_rect.min + Vec2::new(margin, 60.0 * s),
+            screen_rect.min + Vec2::new(title_x, 56.0 * s),
             Align2::LEFT_TOP,
             fit_text(
                 painter,
                 &crumbs.join("  ›  "),
                 &FontId::proportional(42.0 * s),
-                screen_rect.width() - 2.0 * margin - 160.0 * s, // room for "12 / 140"
+                screen_rect.width() - title_x - margin - 160.0 * s, // room for "12 / 140"
             ),
             FontId::proportional(42.0 * s),
             TEXT,
@@ -1247,7 +1502,7 @@ impl App {
             TEXT_DIM,
         );
 
-        if keys.back {
+        if go_back {
             match b.sub.pop() {
                 None => return, // leave the folder: home screen
                 Some(last) => b = Browse::open(folder, b.sub, Some(&last)),
@@ -1290,12 +1545,14 @@ impl App {
             )
             .interact_pointer_pos()
             .filter(|_| ui.ctx().input(|i| i.pointer.any_click()));
+        // On top of the click area above.
+        let (back_rect, back_response) = back_button(ui, screen_rect, s);
         let prev = keys.left || keys.up || click.is_some_and(|p| p.x < screen_rect.center().x);
         let next = keys.right
             || keys.down
             || keys.enter
             || click.is_some_and(|p| p.x >= screen_rect.center().x);
-        if keys.back {
+        if keys.back || back_response.clicked() {
             let path = view.files[view.index].path.clone();
             self.screen = Screen::Browse(select(view.back, &path));
             return;
@@ -1386,6 +1643,7 @@ impl App {
             FontId::proportional(22.0 * s),
             TEXT_DIM,
         );
+        paint_back_button(painter, back_rect, back_response.hovered(), s);
         self.screen = Screen::Picture(view);
     }
 
@@ -1410,7 +1668,9 @@ impl App {
                 None => browse,
             })
         };
-        if keys.back {
+        let (back_rect, back_response) = back_button(ui, screen_rect, s);
+        paint_back_button(painter, back_rect, back_response.hovered(), s);
+        if keys.back || back_response.clicked() {
             view.player.stop();
             self.screen = back_to_browser(view);
             return;
@@ -1674,6 +1934,62 @@ fn paint_globe_icon(painter: &egui::Painter, center: Pos2, r: f32, alpha: f32) {
     }
 }
 
+/// Round button with our own padlock icon.
+fn paint_lock_button(painter: &egui::Painter, rect: Rect, focused: bool, s: f32) {
+    let r = rect.width() / 2.0;
+    let c = rect.center();
+    painter.circle_filled(c, r, if focused { ACCENT } else { TILE_BG });
+    if focused {
+        painter.circle_stroke(c, r, Stroke::new(3.0 * s, TEXT));
+    }
+    // Body
+    let body = Rect::from_center_size(c + Vec2::new(0.0, r * 0.18), Vec2::new(r * 0.9, r * 0.7));
+    painter.rect_filled(body, CornerRadius::same((r * 0.12) as u8), TEXT);
+    // Shackle: half circle above the body
+    let sr = r * 0.28;
+    let sc = Pos2::new(c.x, body.min.y);
+    let points: Vec<Pos2> = (0..=20)
+        .map(|k| {
+            let t = std::f32::consts::PI * (1.0 + k as f32 / 20.0);
+            sc + Vec2::new(t.cos() * sr, t.sin() * sr * 1.25)
+        })
+        .collect();
+    painter.add(egui::Shape::line(points, Stroke::new(r * 0.13, TEXT)));
+    // Keyhole
+    painter.circle_filled(
+        body.center(),
+        r * 0.09,
+        if focused { ACCENT } else { TILE_BG },
+    );
+}
+
+/// A large "‹ Back" button for mouse/touch (no keyboard needed). Register it (`back_button`)
+/// after other click areas so it lies on top of them; paint it (`paint_back_button`) last.
+fn back_button(ui: &egui::Ui, screen_rect: Rect, s: f32) -> (Rect, egui::Response) {
+    let rect = Rect::from_min_size(
+        screen_rect.min + Vec2::new(60.0 * s, 44.0 * s),
+        Vec2::new(160.0 * s, 68.0 * s),
+    );
+    let response = ui.interact(rect, ui.make_persistent_id("back-button"), Sense::click());
+    (rect, response)
+}
+
+fn paint_back_button(painter: &egui::Painter, rect: Rect, hovered: bool, s: f32) {
+    let fill = if hovered {
+        ACCENT
+    } else {
+        Color32::from_rgba_unmultiplied(0x2e, 0x33, 0x45, 230)
+    };
+    painter.rect_filled(rect, CornerRadius::same((rect.height() / 2.0) as u8), fill);
+    painter.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        "‹  Back",
+        FontId::proportional(28.0 * s),
+        TEXT,
+    );
+}
+
 /// Ask a player to quit (SIGTERM): mpv/VLC exit cleanly, so mpv still reports its last
 /// position to the resume monitor. `poll_background` kills it if it doesn't exit in time.
 fn stop_player(pid: u32) {
@@ -1882,14 +2198,14 @@ fn paint_disc_icon(painter: &egui::Painter, center: Pos2, r: f32, alpha: f32) {
 }
 
 /// One row of a menu.
-struct MenuItem {
+pub struct MenuItem {
     label: String,
     hint: String,
     enabled: bool,
 }
 
 impl MenuItem {
-    fn new(label: impl Into<String>, hint: impl Into<String>) -> Self {
+    pub fn new(label: impl Into<String>, hint: impl Into<String>) -> Self {
         Self {
             label: label.into(),
             hint: hint.into(),
@@ -1946,7 +2262,7 @@ fn paint_chooser(
 }
 
 /// A centered menu panel. Returns the index of a clicked option.
-fn paint_menu(
+pub fn paint_menu(
     ui: &egui::Ui,
     painter: &egui::Painter,
     screen: Rect,

@@ -34,6 +34,24 @@ test("website domains like src/sites.rs", () => {
   }
 });
 
+test("parental settings", () => {
+  const v = validateConfig(example);
+  expect(v.ok && v.config.parental.limits.length).toBe(4);
+  expect(v.ok && v.config.parental.limits[1]).toEqual({
+    type: "window",
+    from: "07:00",
+    until: "19:30",
+    scope: { kind: "weekdays", days: ["mon", "tue", "wed", "thu", "fri"] },
+  });
+  const week = validateConfig({
+    version: 1,
+    parental: { limits: [{ type: "budget", minutes: 2000, scope: { kind: "this_week", week_of: "2026-11-02" } }] },
+  });
+  expect(week.ok).toBe(true);
+  const def = validateConfig({ version: 1 });
+  expect(def.ok && def.config.parental).toEqual({ pin_backoff_doubling: true, limits: [] });
+});
+
 test("home title", () => {
   const v = validateConfig(example);
   expect(v.ok && v.config.home).toEqual({ title: "Family Cinema", show_title: true });
@@ -92,6 +110,23 @@ const BAD: unknown[] = [
   { version: 1, home: { title: "a\u0007b" } },
   { version: 1, home: { show_title: "no" } },
   { version: 1, home: { logo: "x" } },
+  { version: 1, parental: { pin_hash: "1234" } },
+  { version: 1, parental: { pin_hash: "$argon2id$x", pin_length: 3 } },
+  { version: 1, parental: { pin_hash: "$argon2id$x", pin_length: 9 } },
+  { version: 1, parental: { pin_length: 4 } },
+  { version: 1, parental: { limits: [{ type: "budget", minutes: 0, scope: { kind: "every_day" } }] } },
+  { version: 1, parental: { limits: [{ type: "budget", minutes: 1441, scope: { kind: "every_day" } }] } },
+  { version: 1, parental: { limits: [{ type: "budget", minutes: 60 }] } },
+  { version: 1, parental: { limits: [{ type: "budget", minutes: 60, scope: { kind: "today", date: "2026-13-01" } }] } },
+  { version: 1, parental: { limits: [{ type: "budget", minutes: 60, scope: { kind: "weekdays", days: [] } }] } },
+  { version: 1, parental: { limits: [{ type: "budget", minutes: 60, scope: { kind: "weekdays", days: ["mon", "mon"] } }] } },
+  { version: 1, parental: { limits: [{ type: "budget", minutes: 60, scope: { kind: "weekdays", days: ["monday"] } }] } },
+  { version: 1, parental: { limits: [{ type: "budget", minutes: 60, scope: { kind: "this_week", week_of: "2026-11-03" } }] } },
+  { version: 1, parental: { limits: [{ type: "window", until: "7pm", scope: { kind: "every_day" } }] } },
+  { version: 1, parental: { limits: [{ type: "window", from: "19:00", until: "18:00", scope: { kind: "every_day" } }] } },
+  { version: 1, parental: { limits: [{ type: "window", until: "24:00", scope: { kind: "every_day" } }] } },
+  { version: 1, parental: { limits: [{ type: "nap", scope: { kind: "every_day" } }] } },
+  { version: 1, parental: { limits: [{ type: "budget", minutes: 60, scope: { kind: "every_day", x: 1 } }] } },
   "not an object",
   null,
   [],

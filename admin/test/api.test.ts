@@ -8,6 +8,7 @@ import { createAdminServer } from "../src/app";
 const configDir = mkdtempSync("/tmp/fn-admin-cfg-");
 const runtimeDir = mkdtempSync("/tmp/fn-admin-run-");
 const received: string[] = [];
+const requests: Record<string, unknown>[] = [];
 let fakeMediaCenter: NetServer;
 let server: ReturnType<typeof createAdminServer>;
 let base: string;
@@ -17,9 +18,12 @@ beforeAll(async () => {
   fakeMediaCenter = createServer((socket) => {
     socket.on("data", (data) => {
       for (const line of data.toString().split("\n").filter(Boolean)) {
-        const { command } = JSON.parse(line);
+        const request = JSON.parse(line);
+        const { command } = request;
         received.push(command);
-        socket.write(`${JSON.stringify(command === "status" ? { ok: true, config_version: 1, config_error: null } : { ok: true })}\n`);
+        requests.push(request);
+        const status = { ok: true, config_version: 1, config_error: null, locked: false, lock_reason: null, remaining_secs: 600, used_today_secs: 1200, unlocked_until: null };
+        socket.write(`${JSON.stringify(command === "status" ? status : { ok: true })}\n`);
       }
     });
   });
@@ -113,6 +117,7 @@ test("reads default config, rejects invalid, saves and applies valid config", as
   expect(written).toEqual({
     version: 1,
     home: { title: "familynovice", show_title: true },
+    parental: { pin_backoff_doubling: true, limits: [] },
     discs: { enabled: true, allow_disc_menu: false, audio_languages: ["deu"], subtitle_languages: [] },
     folders: [],
     websites: [],
@@ -141,7 +146,62 @@ test("saves folders", async () => {
 });
 
 test("status comes from the media center", async () => {
-  expect((await call("GET", "/api/status")).data).toEqual({ running: true, configError: null });
+  expect((await call("GET", "/api/status")).data).toEqual({
+    running: true,
+    configError: null,
+    locked: false,
+    lockReason: null,
+    remainingSecs: 600,
+    usedTodaySecs: 1200,
+    unlockedUntil: null,
+  });
+});
+
+test("PIN: 4-8 digits, stored only as hash, never sent to the browser, kept on save", async () => {
+  for (const bad of ["123", "123456789", "12a4", 1234]) {
+    expect((await call("POST", "/api/pin", { pin: bad })).status).toBe(400);
+  }
+  expect((await call("POST", "/api/pin", { pin: "2468" })).data.saved).toBe(true);
+  const file = readFileSync(join(configDir, "config.json"), "utf8");
+  expect(file).toContain("$argon2id$");
+  expect(file).not.toContain("2468");
+  expect(JSON.parse(file).parental.pin_length).toBe(4);
+
+  const got = await call("GET", "/api/config");
+  expect(got.data.pinSet).toBe(true);
+  expect(JSON.stringify(got.data)).not.toContain("argon2");
+
+  // A normal save keeps the PIN; the browser can't set the hash directly.
+  const limits = [{ type: "budget", minutes: 60, scope: { kind: "every_day" } }];
+  await call("PUT", "/api/config", { ...got.data.config, parental: { pin_backoff_doubling: false, limits } });
+  const after = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+  expect(after.parental.pin_hash).toStartWith("$argon2id$");
+  expect(after.parental.pin_length).toBe(4);
+  expect(after.parental.limits).toEqual(limits);
+  expect(after.parental.pin_backoff_doubling).toBe(false);
+  const sneaky = await call("PUT", "/api/config", { version: 1, parental: { pin_hash: "$argon2id$x" } });
+  expect(sneaky.status).toBe(400);
+
+  await call("DELETE", "/api/pin");
+  expect((await call("GET", "/api/config")).data.pinSet).toBe(false);
+  const removed = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8")).parental;
+  expect(removed.pin_hash).toBeUndefined();
+  expect(removed.pin_length).toBeUndefined();
+});
+
+test("unlock and lock are forwarded to the media center", async () => {
+  requests.length = 0;
+  expect((await call("POST", "/api/unlock", { minutes: 30 })).data).toEqual({ ok: true });
+  expect((await call("POST", "/api/unlock", { rest_of_day: true })).data).toEqual({ ok: true });
+  expect((await call("POST", "/api/lock")).data).toEqual({ ok: true });
+  expect(requests).toEqual([
+    { command: "unlock", minutes: 30 },
+    { command: "unlock", rest_of_day: true },
+    { command: "lock" },
+  ]);
+  for (const bad of [{}, { minutes: 0 }, { minutes: 2000 }, { minutes: "30" }]) {
+    expect((await call("POST", "/api/unlock", bad)).status).toBe(400);
+  }
 });
 
 test("logout ends the session", async () => {

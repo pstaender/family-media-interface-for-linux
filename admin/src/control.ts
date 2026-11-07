@@ -11,7 +11,13 @@ export interface Reply {
 
 export const NOT_RUNNING = "The media center is not running.";
 
-export function sendCommand(socketPath: string, command: string, timeoutMs = 5000): Promise<Reply> {
+/** Send a command (`"reload"`, or an object like `{ command: "unlock", minutes: 30 }`). */
+export function sendCommand(
+  socketPath: string,
+  command: string | Record<string, unknown>,
+  timeoutMs = 5000,
+): Promise<Reply> {
+  const request = typeof command === "string" ? { command } : command;
   return new Promise((resolve) => {
     let buffer = "";
     let done = false;
@@ -27,7 +33,7 @@ export function sendCommand(socketPath: string, command: string, timeoutMs = 500
       () => finish({ ok: false, error: "The media center did not answer in time." }),
       timeoutMs,
     );
-    socket.on("connect", () => socket.write(`${JSON.stringify({ command })}\n`));
+    socket.on("connect", () => socket.write(`${JSON.stringify(request)}\n`));
     socket.on("data", (chunk) => {
       buffer += chunk.toString();
       const newline = buffer.indexOf("\n");

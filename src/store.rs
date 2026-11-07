@@ -28,6 +28,11 @@ pub fn resume_path(key: &str) -> Option<PathBuf> {
     )
 }
 
+/// `$XDG_DATA_HOME/familynovice/usage.json`: usage time, unlocks, PIN tries.
+pub fn usage_path() -> Option<PathBuf> {
+    Some(dirs::data_dir()?.join(APP).join("usage.json"))
+}
+
 /// `$XDG_CACHE_HOME/familynovice/player`: where players may write (screenshots, …),
 /// so they never write next to the media.
 pub fn player_cache_dir() -> Option<PathBuf> {

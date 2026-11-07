@@ -45,9 +45,34 @@ export interface HomeSettings {
   show_title: boolean;
 }
 
+export const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+export type Weekday = (typeof WEEKDAYS)[number];
+
+/** Which days a limit applies to (src/config.rs `Scope`). */
+export type Scope =
+  | { kind: "today"; date: string }
+  | { kind: "weekdays"; days: Weekday[] }
+  | { kind: "this_week"; week_of: string }
+  | { kind: "every_day" };
+
+/** A time limit (src/config.rs `LimitRule`). */
+export type LimitRule =
+  | { type: "budget"; minutes: number; scope: Scope }
+  | { type: "window"; from?: string; until: string; scope: Scope };
+
+export interface ParentalSettings {
+  /** argon2 hash; never sent to the browser (see app.ts). */
+  pin_hash?: string;
+  /** Number of PIN digits (4-8), only together with pin_hash. Also never sent to the browser. */
+  pin_length?: number;
+  pin_backoff_doubling: boolean;
+  limits: LimitRule[];
+}
+
 export interface Config {
   version: number;
   home: HomeSettings;
+  parental: ParentalSettings;
   discs: DiscSettings;
   folders: FolderSettings[];
   websites: WebsiteSettings[];
@@ -57,6 +82,7 @@ export function defaultConfig(): Config {
   return {
     version: CONFIG_VERSION,
     home: { title: "familynovice", show_title: true },
+    parental: { pin_backoff_doubling: true, limits: [] },
     discs: {
       enabled: true,
       allow_disc_menu: true,
@@ -106,6 +132,129 @@ function validateWebsite(input: unknown): WebsiteSettings | string {
   const domain = websiteDomain(url, allow_subdomains);
   if (typeof domain === "string") return `url "${url}": ${domain}`;
   return { id: input.id as string, name: input.name as string, url, allow_subdomains };
+}
+
+const MAX_LIMITS = 50;
+
+/** `YYYY-MM-DD` → a valid date (UTC noon, only used for weekday/date checks). */
+export function parseDate(text: unknown): Date | null {
+  if (typeof text !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const date = new Date(`${text}T12:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === text ? date : null;
+}
+
+/** `HH:MM` → minutes since midnight. */
+export function parseTime(text: unknown): number | null {
+  if (typeof text !== "string" || !/^\d{2}:\d{2}$/.test(text)) return null;
+  const [h, m] = text.split(":").map(Number) as [number, number];
+  return h < 24 && m < 60 ? h * 60 + m : null;
+}
+
+function validateScope(input: unknown): Scope | string {
+  if (!isObject(input)) return "scope: must be an object";
+  switch (input.kind) {
+    case "today": {
+      const extra = unknownKey(input, ["kind", "date"], "scope");
+      if (extra) return extra;
+      if (!parseDate(input.date)) return `date "${String(input.date)}" must be YYYY-MM-DD`;
+      return { kind: "today", date: input.date as string };
+    }
+    case "weekdays": {
+      const extra = unknownKey(input, ["kind", "days"], "scope");
+      if (extra) return extra;
+      const days = input.days;
+      if (!Array.isArray(days) || days.length === 0) return "choose at least one weekday";
+      const seen = new Set<string>();
+      for (const d of days) {
+        if (!WEEKDAYS.includes(d)) return `"${String(d)}" is not a weekday (mon … sun)`;
+        if (seen.has(d)) return `"${d}" is listed twice`;
+        seen.add(d);
+      }
+      return { kind: "weekdays", days: days as Weekday[] };
+    }
+    case "this_week": {
+      const extra = unknownKey(input, ["kind", "week_of"], "scope");
+      if (extra) return extra;
+      const monday = parseDate(input.week_of);
+      if (!monday) return `week_of "${String(input.week_of)}" must be YYYY-MM-DD`;
+      if (monday.getUTCDay() !== 1) return `week_of "${String(input.week_of)}" must be a Monday`;
+      return { kind: "this_week", week_of: input.week_of as string };
+    }
+    case "every_day": {
+      const extra = unknownKey(input, ["kind"], "scope");
+      return extra ?? { kind: "every_day" };
+    }
+    default:
+      return `scope: unknown kind "${String(input.kind)}"`;
+  }
+}
+
+function validateLimit(input: unknown): LimitRule | string {
+  if (!isObject(input)) return "must be an object";
+  if (input.type === "budget") {
+    const extra = unknownKey(input, ["type", "minutes", "scope"], "limit");
+    if (extra) return extra;
+    const scope = validateScope(input.scope);
+    if (typeof scope === "string") return scope;
+    const max = scope.kind === "this_week" ? 7 * 24 * 60 : 24 * 60;
+    const minutes = input.minutes;
+    if (typeof minutes !== "number" || !Number.isInteger(minutes) || minutes < 1 || minutes > max) {
+      return `minutes must be 1 to ${max}`;
+    }
+    return { type: "budget", minutes, scope };
+  }
+  if (input.type === "window") {
+    const extra = unknownKey(input, ["type", "from", "until", "scope"], "limit");
+    if (extra) return extra;
+    const until = parseTime(input.until);
+    if (until === null) return `until "${String(input.until)}" must be HH:MM`;
+    let from: number | null = null;
+    if (input.from !== undefined) {
+      from = parseTime(input.from);
+      if (from === null) return `from "${String(input.from)}" must be HH:MM`;
+      if (from >= until) return "from must be earlier than until";
+    }
+    const scope = validateScope(input.scope);
+    if (typeof scope === "string") return scope;
+    const rule: LimitRule = { type: "window", until: input.until as string, scope };
+    if (input.from !== undefined) rule.from = input.from as string;
+    return rule;
+  }
+  return `unknown type "${String(input.type)}"`;
+}
+
+function validateParental(input: unknown): ParentalSettings | string {
+  if (!isObject(input)) return "parental: must be an object";
+  const extra = unknownKey(input, ["pin_hash", "pin_length", "pin_backoff_doubling", "limits"], "parental");
+  if (extra) return extra;
+  const parental: ParentalSettings = { pin_backoff_doubling: true, limits: [] };
+  if (input.pin_hash !== undefined) {
+    const h = input.pin_hash;
+    if (typeof h !== "string" || !h.startsWith("$argon2") || h.length > 512) {
+      return "parental.pin_hash must be an argon2 hash";
+    }
+    parental.pin_hash = h;
+  }
+  if (input.pin_length !== undefined) {
+    const len = input.pin_length;
+    if (typeof len !== "number" || !Number.isInteger(len) || len < 4 || len > 8) return "parental.pin_length must be 4 to 8";
+    if (parental.pin_hash === undefined) return "parental.pin_length needs a pin_hash";
+    parental.pin_length = len;
+  }
+  if (input.pin_backoff_doubling !== undefined) {
+    if (typeof input.pin_backoff_doubling !== "boolean") return "parental.pin_backoff_doubling: must be true or false";
+    parental.pin_backoff_doubling = input.pin_backoff_doubling;
+  }
+  if (input.limits !== undefined) {
+    if (!Array.isArray(input.limits)) return "parental.limits: must be a list";
+    if (input.limits.length > MAX_LIMITS) return `parental.limits: at most ${MAX_LIMITS} rules`;
+    for (const [i, raw] of input.limits.entries()) {
+      const rule = validateLimit(raw);
+      if (typeof rule === "string") return `parental.limits[${i}]: ${rule}`;
+      parental.limits.push(rule);
+    }
+  }
+  return parental;
 }
 
 /** Same rules as `validate_id_and_name` in src/config.rs. */
@@ -194,7 +343,7 @@ function languages(value: unknown, field: string): string[] | string {
 /** Validate untrusted input and fill in defaults. */
 export function validateConfig(input: unknown): Validation {
   if (!isObject(input)) return { ok: false, error: "config must be an object" };
-  const top = unknownKey(input, ["version", "home", "discs", "folders", "websites"], "config");
+  const top = unknownKey(input, ["version", "home", "parental", "discs", "folders", "websites"], "config");
   if (top) return { ok: false, error: top };
   if (input.version !== CONFIG_VERSION) {
     return {
@@ -249,6 +398,11 @@ export function validateConfig(input: unknown): Validation {
       ids.add(folder.id);
       config.folders.push(folder);
     }
+  }
+  if (input.parental !== undefined) {
+    const parental = validateParental(input.parental);
+    if (typeof parental === "string") return { ok: false, error: parental };
+    config.parental = parental;
   }
   if (input.websites !== undefined) {
     if (!Array.isArray(input.websites)) return { ok: false, error: "websites: must be a list" };

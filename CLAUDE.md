@@ -80,11 +80,35 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
 - **Smart search:** one search field covering everything the current profile may use (apps,
   websites, discs, media). Make it typo-tolerant (fuzzy matching) and never let it show
   items the profile isn't allowed to see.
-- **PIN protection:** a general PIN protects settings, leaving the media center, restricted
-  items and extending time limits.
-- **Timer / usage monitor:** track usage time per profile and per app/site/disc. Enforce daily
-  limits and allowed time windows, warn before time runs out, and stop or lock cleanly when it
-  does. Usage data stays on the machine and the admin interface can show it.
+- **PIN and time limits (implemented, v1):**
+  - PIN: 4–8 digits, set/changed/removed in the admin panel (`POST`/`DELETE /api/pin`), stored
+    only as argon2id hash (`parental.pin_hash`, Bun.password); the hash never goes to the
+    browser (`GET /api/config` returns `pinSet`), a normal `PUT /api/config` keeps it and may
+    not set it. The media center verifies with the `argon2` crate (`src/pin.rs`, tested
+    against a real Bun hash) in a thread.
+  - `parental.pin_length` (4–8, set with the PIN, also never sent to the browser): the lock
+    screen shows that many dots and checks the PIN as soon as the last digit is entered (no
+    OK needed). Every check counts as a try, so there is no checking of partial PINs.
+  - Wrong PIN: wait 5 s; with `pin_backoff_doubling` (default on) 5, 10, 20, 40 s … (max 1 h).
+    Failures and the waiting time are persisted, so a restart doesn't reset them.
+  - Limits (`parental.limits`, `src/limits.rs`, pure + tested): time **budget** (minutes) or
+    time **window** (`from` optional, `until`), each for **today** (stores the date),
+    **weekdays**, **this week** (stores the Monday; a week budget counts the whole week) or
+    **every day**. Most specific wins: today > weekdays > this week > every day; a week budget
+    applies in addition to a day budget.
+  - Usage (`src/usage.rs`, `$XDG_DATA_HOME/familynovice/usage.json`, last 60 days) counts only
+    while something is open or within 60 s after the last input (an idle home screen doesn't
+    use up time). The UI evaluates the limits every second.
+  - Time up / outside the window / locked by a parent: players, music and websites are stopped
+    and the lock screen appears (`src/lock.rs`): number pad (remote arrows + OK, digit keys,
+    mouse); after the right PIN: 30 more minutes, 1 more hour or rest of today. Without a PIN:
+    "A parent can unlock it in the admin panel". A "N min left" notice shows in the last 5 min.
+  - Lock button (padlock, top right of the home screen, only when a PIN is set): locks at
+    once; reachable with "up" from the top row.
+  - Admin panel → Parental control → Status: locked/unlocked, used today, time left, unlock
+    (30 min / 1 h / rest of today) and "Lock now" (control socket `unlock` / `lock`).
+- **Touch/mouse:** folder browser, picture viewer and music player have a "‹ Back" button
+  (no keyboard needed); the lock screen's number pad is clickable.
 - **10-foot UI:** usable from the couch with a remote, gamepad or keyboard (mouse optional).
   Large targets, clear focus highlight, few choices per screen.
 
@@ -236,6 +260,12 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   front when it exits or crashes.
 
 ### Admin web interface (Bun + React)
+
+- Layout: left menu with three pages, each with tabs (URL `#/page/tab`):
+  **Home screen & media** (Home screen, Discs, Folders, Websites), **Parental control**
+  (Status, Time limits), **Password & PIN** (PIN, Admin password). One "Save and apply" for all
+  config tabs. Icons: Tabler via Iconify's offline data, extracted into `src/web/icons.ts` by
+  `bun run icons` (no requests to iconify.design at runtime).
 
 - Built with **Bun** (runtime, package manager, bundler, test runner) and **React**
   (TypeScript preferred).

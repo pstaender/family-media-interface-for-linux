@@ -30,6 +30,145 @@ pub struct Config {
     pub folders: Vec<FolderSettings>,
     #[serde(default)]
     pub websites: Vec<WebsiteSettings>,
+    #[serde(default)]
+    pub parental: ParentalSettings,
+}
+
+/// PIN and time limits (evaluated in `src/limits.rs`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ParentalSettings {
+    /// argon2 PHC string of the PIN (set by the admin interface, never the PIN itself).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pin_hash: Option<String>,
+    /// Number of digits of the PIN (4–8), so the lock screen can check it as soon as the last
+    /// digit is entered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pin_length: Option<u8>,
+    /// Wrong PIN: wait 5 s, and with this option double the wait after each further try.
+    pub pin_backoff_doubling: bool,
+    pub limits: Vec<LimitRule>,
+}
+
+impl Default for ParentalSettings {
+    fn default() -> Self {
+        Self {
+            pin_hash: None,
+            pin_length: None,
+            pin_backoff_doubling: true,
+            limits: Vec::new(),
+        }
+    }
+}
+
+/// One time limit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LimitRule {
+    /// A time budget in minutes (per day; for `this_week` for the whole week).
+    Budget { minutes: u32, scope: Scope },
+    /// Usable only from … until (`HH:MM`, `from` optional = from midnight).
+    Window {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<String>,
+        until: String,
+        scope: Scope,
+    },
+}
+
+/// Which days a limit applies to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Scope {
+    /// Only on this date (`YYYY-MM-DD`).
+    Today {
+        date: String,
+    },
+    /// On these weekdays (`mon` … `sun`).
+    Weekdays {
+        days: Vec<String>,
+    },
+    /// The week starting on this Monday (`YYYY-MM-DD`).
+    ThisWeek {
+        week_of: String,
+    },
+    EveryDay {},
+}
+
+pub const WEEKDAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const MAX_LIMITS: usize = 50;
+
+/// `HH:MM` → time of day.
+pub fn parse_time(text: &str) -> Option<chrono::NaiveTime> {
+    let (h, m) = text.split_once(':')?;
+    if h.len() != 2 || m.len() != 2 {
+        return None;
+    }
+    chrono::NaiveTime::from_hms_opt(h.parse().ok()?, m.parse().ok()?, 0)
+}
+
+/// `YYYY-MM-DD` → date.
+pub fn parse_date(text: &str) -> Option<chrono::NaiveDate> {
+    (text.len() == 10)
+        .then(|| chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d").ok())
+        .flatten()
+}
+
+fn validate_scope(scope: &Scope) -> Result<(), String> {
+    use chrono::Datelike;
+    match scope {
+        Scope::Today { date } => {
+            parse_date(date).ok_or(format!("date \"{date}\" must be YYYY-MM-DD"))?;
+        }
+        Scope::Weekdays { days } => {
+            if days.is_empty() {
+                return Err("choose at least one weekday".into());
+            }
+            for (i, d) in days.iter().enumerate() {
+                if !WEEKDAYS.contains(&d.as_str()) {
+                    return Err(format!("\"{d}\" is not a weekday (mon … sun)"));
+                }
+                if days[..i].contains(d) {
+                    return Err(format!("\"{d}\" is listed twice"));
+                }
+            }
+        }
+        Scope::ThisWeek { week_of } => {
+            let monday =
+                parse_date(week_of).ok_or(format!("week_of \"{week_of}\" must be YYYY-MM-DD"))?;
+            if monday.weekday() != chrono::Weekday::Mon {
+                return Err(format!("week_of \"{week_of}\" must be a Monday"));
+            }
+        }
+        Scope::EveryDay {} => {}
+    }
+    Ok(())
+}
+
+fn validate_limit(rule: &LimitRule) -> Result<(), String> {
+    match rule {
+        LimitRule::Budget { minutes, scope } => {
+            let max = if matches!(scope, Scope::ThisWeek { .. }) {
+                7 * 24 * 60
+            } else {
+                24 * 60
+            };
+            if *minutes == 0 || *minutes > max {
+                return Err(format!("minutes must be 1 to {max}"));
+            }
+            validate_scope(scope)
+        }
+        LimitRule::Window { from, until, scope } => {
+            let until_t = parse_time(until).ok_or(format!("until \"{until}\" must be HH:MM"))?;
+            if let Some(from) = from {
+                let from_t = parse_time(from).ok_or(format!("from \"{from}\" must be HH:MM"))?;
+                if from_t >= until_t {
+                    return Err("from must be earlier than until".into());
+                }
+            }
+            validate_scope(scope)
+        }
+    }
 }
 
 /// The home screen.
@@ -115,6 +254,7 @@ impl Default for Config {
             discs: DiscSettings::default(),
             folders: Vec::new(),
             websites: Vec::new(),
+            parental: ParentalSettings::default(),
         }
     }
 }
@@ -132,6 +272,7 @@ impl Config {
             },
             folders: Vec::new(),
             websites: Vec::new(),
+            parental: ParentalSettings::default(),
         }
     }
 }
@@ -170,6 +311,25 @@ fn validate(config: &Config) -> Result<(), String> {
         ));
     }
     check_text(&config.home.title).map_err(|e| format!("home.title: {e}"))?;
+    if let Some(hash) = &config.parental.pin_hash
+        && (!hash.starts_with("$argon2") || hash.len() > 512)
+    {
+        return Err("parental.pin_hash must be an argon2 hash".into());
+    }
+    if let Some(len) = config.parental.pin_length {
+        if !(4..=8).contains(&len) {
+            return Err("parental.pin_length must be 4 to 8".into());
+        }
+        if config.parental.pin_hash.is_none() {
+            return Err("parental.pin_length needs a pin_hash".into());
+        }
+    }
+    if config.parental.limits.len() > MAX_LIMITS {
+        return Err(format!("parental.limits: at most {MAX_LIMITS} rules"));
+    }
+    for (i, rule) in config.parental.limits.iter().enumerate() {
+        validate_limit(rule).map_err(|e| format!("parental.limits[{i}]: {e}"))?;
+    }
     for (field, list) in [
         ("discs.audio_languages", &config.discs.audio_languages),
         ("discs.subtitle_languages", &config.discs.subtitle_languages),
@@ -391,6 +551,30 @@ mod tests {
     }
 
     #[test]
+    fn example_parental() {
+        let config = parse(include_str!("../docs/config.example.json")).unwrap();
+        assert!(config.parental.pin_backoff_doubling);
+        assert_eq!(config.parental.limits.len(), 4);
+        assert_eq!(
+            config.parental.limits[1],
+            LimitRule::Window {
+                from: Some("07:00".into()),
+                until: "19:30".into(),
+                scope: Scope::Weekdays {
+                    days: ["mon", "tue", "wed", "thu", "fri"]
+                        .map(String::from)
+                        .to_vec()
+                }
+            }
+        );
+        // Week budgets may be larger than a day.
+        assert!(parse(r#"{"version":1,"parental":{"limits":[{"type":"budget","minutes":2000,"scope":{"kind":"this_week","week_of":"2026-11-02"}}]}}"#).is_ok());
+        // The PIN hash is never written back out when absent.
+        let written = serde_json::to_string(&Config::default()).unwrap();
+        assert!(!written.contains("pin_hash"));
+    }
+
+    #[test]
     fn paths() {
         for ok in ["/", "/a", "/srv/media movies/x.y", "/a/.hidden"] {
             assert!(is_normalized_absolute_path(ok), "{ok}");
@@ -446,6 +630,23 @@ mod tests {
             r#"{"version":1,"home":{"title":"a\u0007b"}}"#,
             r#"{"version":1,"home":{"show_title":"no"}}"#,
             r#"{"version":1,"home":{"logo":"x"}}"#,
+            r#"{"version":1,"parental":{"pin_hash":"1234"}}"#,
+            r#"{"version":1,"parental":{"pin_hash":"$argon2id$x","pin_length":3}}"#,
+            r#"{"version":1,"parental":{"pin_hash":"$argon2id$x","pin_length":9}}"#,
+            r#"{"version":1,"parental":{"pin_length":4}}"#,
+            r#"{"version":1,"parental":{"limits":[{"type":"budget","minutes":0,"scope":{"kind":"every_day"}}]}}"#,
+            r#"{"version":1,"parental":{"limits":[{"type":"budget","minutes":1441,"scope":{"kind":"every_day"}}]}}"#,
+            r#"{"version":1,"parental":{"limits":[{"type":"budget","minutes":60}]}}"#,
+            r#"{"version":1,"parental":{"limits":[{"type":"budget","minutes":60,"scope":{"kind":"today","date":"2026-13-01"}}]}}"#,
+            r#"{"version":1,"parental":{"limits":[{"type":"budget","minutes":60,"scope":{"kind":"weekdays","days":[]}}]}}"#,
+            r#"{"version":1,"parental":{"limits":[{"type":"budget","minutes":60,"scope":{"kind":"weekdays","days":["mon","mon"]}}]}}"#,
+            r#"{"version":1,"parental":{"limits":[{"type":"budget","minutes":60,"scope":{"kind":"weekdays","days":["monday"]}}]}}"#,
+            r#"{"version":1,"parental":{"limits":[{"type":"budget","minutes":60,"scope":{"kind":"this_week","week_of":"2026-11-03"}}]}}"#,
+            r#"{"version":1,"parental":{"limits":[{"type":"window","until":"7pm","scope":{"kind":"every_day"}}]}}"#,
+            r#"{"version":1,"parental":{"limits":[{"type":"window","from":"19:00","until":"18:00","scope":{"kind":"every_day"}}]}}"#,
+            r#"{"version":1,"parental":{"limits":[{"type":"window","until":"24:00","scope":{"kind":"every_day"}}]}}"#,
+            r#"{"version":1,"parental":{"limits":[{"type":"nap","scope":{"kind":"every_day"}}]}}"#,
+            r#"{"version":1,"parental":{"limits":[{"type":"budget","minutes":60,"scope":{"kind":"every_day","x":1}}]}}"#,
             "not json",
         ] {
             assert!(parse(bad).is_err(), "should reject {bad}");

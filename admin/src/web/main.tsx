@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
-import { websiteDomain, type Config, type FolderSettings, type WebsiteSettings } from "../config";
+import {
+  WEEKDAYS,
+  websiteDomain,
+  type Config,
+  type FolderSettings,
+  type LimitRule,
+  type Scope,
+  type WebsiteSettings,
+  type Weekday,
+} from "../config";
+import { ICONS } from "./icons";
 
 // ---------------------------------------------------------------------------
 // API
@@ -160,40 +170,122 @@ function LoginPage({ onDone }: { onDone: () => void }) {
 }
 
 // ---------------------------------------------------------------------------
-// Settings
+// Layout: left menu, pages with tabs
 
 type Notice = { kind: "ok" | "warn" | "error"; text: string } | null;
-type Status = { running: boolean; configError?: string | null; error?: string | null };
+type Status = {
+  running: boolean;
+  configError?: string | null;
+  error?: string | null;
+  locked?: boolean;
+  lockReason?: string | null;
+  remainingSecs?: number | null;
+  usedTodaySecs?: number;
+  unlockedUntil?: number | null;
+};
+
+function Icon({ name, size = 20 }: { name: string; size?: number }) {
+  const icon = ICONS[name];
+  if (!icon) return null;
+  // Trusted, generated SVG data (src/web/icons.ts).
+  return (
+    <svg
+      className="icon"
+      width={size}
+      height={size}
+      viewBox={icon.viewBox}
+      aria-hidden="true"
+      dangerouslySetInnerHTML={{ __html: icon.body }}
+    />
+  );
+}
+
+type TabDef = { id: string; label: string; icon: string; saves?: boolean };
+const PAGES: { id: string; label: string; icon: string; tabs: TabDef[] }[] = [
+  {
+    id: "media",
+    label: "Home screen & media",
+    icon: "device-tv",
+    tabs: [
+      { id: "home", label: "Home screen", icon: "home", saves: true },
+      { id: "discs", label: "Discs", icon: "disc", saves: true },
+      { id: "folders", label: "Folders", icon: "folder", saves: true },
+      { id: "websites", label: "Websites", icon: "world", saves: true },
+    ],
+  },
+  {
+    id: "parental",
+    label: "Parental control",
+    icon: "shield-lock",
+    tabs: [
+      { id: "status", label: "Status", icon: "chart-bar" },
+      { id: "limits", label: "Time limits", icon: "hourglass", saves: true },
+    ],
+  },
+  {
+    id: "security",
+    label: "Password & PIN",
+    icon: "key",
+    tabs: [
+      { id: "pin", label: "PIN", icon: "lock", saves: true },
+      { id: "password", label: "Admin password", icon: "password" },
+    ],
+  },
+];
+
+/** `#/page/tab` → known page and tab. */
+function route(hash: string): { page: (typeof PAGES)[number]; tab: TabDef } {
+  const [pageId, tabId] = hash.replace(/^#\/?/, "").split("/");
+  const page = PAGES.find((p) => p.id === pageId) ?? PAGES[0]!;
+  const tab = page.tabs.find((t) => t.id === tabId) ?? page.tabs[0]!;
+  return { page, tab };
+}
 
 function SettingsPage({ onLogout }: { onLogout: () => void }) {
   const [config, setConfig] = useState<Config | null>(null);
   const [saved, setSaved] = useState<string>("");
+  const [pinSet, setPinSet] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [status, setStatus] = useState<Status | null>(null);
   const [busy, setBusy] = useState(false);
+  const [hash, setHash] = useState(location.hash);
+
+  useEffect(() => {
+    const onHash = () => {
+      setHash(location.hash);
+      setNotice(null);
+    };
+    addEventListener("hashchange", onHash);
+    return () => removeEventListener("hashchange", onHash);
+  }, []);
 
   const loadStatus = useCallback(() => {
     api<Status>("GET", "/api/status").then(setStatus).catch(() => setStatus(null));
   }, []);
 
+  const loadConfig = useCallback(async () => {
+    try {
+      const r = await api<{ config: Config; pinSet: boolean; error?: string }>("GET", "/api/config");
+      setConfig(r.config);
+      setSaved(JSON.stringify(r.config));
+      setPinSet(r.pinSet);
+      if (r.error) setNotice({ kind: "error", text: `${r.error} Saving will replace it.` });
+    } catch (e) {
+      setNotice({ kind: "error", text: (e as Error).message });
+    }
+  }, []);
+
   useEffect(() => {
-    api<{ config: Config; error?: string }>("GET", "/api/config")
-      .then((r) => {
-        setConfig(r.config);
-        setSaved(JSON.stringify(r.config));
-        if (r.error) setNotice({ kind: "error", text: `${r.error} Saving will replace it.` });
-      })
-      .catch((e) => setNotice({ kind: "error", text: (e as Error).message }));
+    loadConfig();
     loadStatus();
     const timer = setInterval(loadStatus, 5000);
     return () => clearInterval(timer);
-  }, [loadStatus]);
+  }, [loadConfig, loadStatus]);
 
   if (!config) return <main>{notice && <div className={`banner ${notice.kind}`}>{notice.text}</div>}</main>;
 
+  const { page, tab } = route(hash);
   const dirty = JSON.stringify(config) !== saved;
-  const setDiscs = (patch: Partial<Config["discs"]>) =>
-    setConfig({ ...config, discs: { ...config.discs, ...patch } });
 
   const save = async () => {
     setBusy(true);
@@ -216,99 +308,94 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
     onLogout();
   };
 
+  let content: React.ReactNode;
+  switch (`${page.id}/${tab.id}`) {
+    case "media/home":
+      content = <HomeTab config={config} setConfig={setConfig} />;
+      break;
+    case "media/discs":
+      content = <DiscsTab config={config} setConfig={setConfig} />;
+      break;
+    case "media/folders":
+      content = <FoldersSection folders={config.folders} onChange={(folders) => setConfig({ ...config, folders })} />;
+      break;
+    case "media/websites":
+      content = <WebsitesSection websites={config.websites} onChange={(websites) => setConfig({ ...config, websites })} />;
+      break;
+    case "parental/status":
+      content = <StatusTab status={status} reload={loadStatus} setNotice={setNotice} pinSet={pinSet} />;
+      break;
+    case "parental/limits":
+      content = (
+        <LimitsTab
+          limits={config.parental.limits}
+          onChange={(limits) => setConfig({ ...config, parental: { ...config.parental, limits } })}
+        />
+      );
+      break;
+    case "security/pin":
+      content = (
+        <PinTab
+          pinSet={pinSet}
+          doubling={config.parental.pin_backoff_doubling}
+          onDoubling={(pin_backoff_doubling) => setConfig({ ...config, parental: { ...config.parental, pin_backoff_doubling } })}
+          onPinChanged={async (text) => {
+            await loadConfig();
+            setNotice({ kind: "ok", text });
+          }}
+          setNotice={setNotice}
+        />
+      );
+      break;
+    default:
+      content = <ChangePassword />;
+  }
+
   return (
-    <main>
-      <header>
-        <div>
-          <h1>familynovice</h1>
-          <StatusLine status={status} />
+    <div className="layout">
+      <nav className="sidebar">
+        <div className="brand">
+          <strong>{config.home.title}</strong>
+          <span>Admin</span>
         </div>
-        <button onClick={logout}>Log out</button>
-      </header>
-
-      {notice && <div className={`banner ${notice.kind}`}>{notice.text}</div>}
-
-      <section className="card">
-        <h2>Home screen</h2>
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={config.home.show_title}
-            onChange={(e) => setConfig({ ...config, home: { ...config.home, show_title: e.target.checked } })}
-          />
-          <span>
-            Show a title
-            <small>Shown in the top-left corner of the media center.</small>
-          </span>
-        </label>
-        <label className="field" style={{ marginTop: 6 }}>
-          <span>Title</span>
-          <input
-            type="text"
-            maxLength={60}
-            value={config.home.title}
-            disabled={!config.home.show_title}
-            placeholder="familynovice"
-            onChange={(e) => setConfig({ ...config, home: { ...config.home, title: e.target.value } })}
-            onBlur={() => {
-              const title = config.home.title.trim().replace(/\p{Cc}/gu, "") || "familynovice";
-              setConfig({ ...config, home: { ...config.home, title } });
-            }}
-          />
-        </label>
-      </section>
-
-      <section className="card">
-        <h2>Discs</h2>
-        <p className="hint">DVDs and Blu-rays from the disc drive.</p>
-        <label className="toggle">
-          <input type="checkbox" checked={config.discs.enabled} onChange={(e) => setDiscs({ enabled: e.target.checked })} />
-          <span>
-            Allow discs
-            <small>When off, the disc tile is shown greyed out and can't be started.</small>
-          </span>
-        </label>
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={config.discs.allow_disc_menu}
-            disabled={!config.discs.enabled}
-            onChange={(e) => setDiscs({ allow_disc_menu: e.target.checked })}
-          />
-          <span>
-            Offer "Disc menu"
-            <small>Starts a disc like a normal player, with its own menus, trailers and extras. When off, only the main movie can be played.</small>
-          </span>
-        </label>
-        <LanguageList
-          title="Audio language"
-          hint="The first language the disc has is used."
-          value={config.discs.audio_languages}
-          onChange={(audio_languages) => setDiscs({ audio_languages })}
-          emptyText="Disc default"
-        />
-        <LanguageList
-          title="Subtitles"
-          hint="Leave empty for no subtitles."
-          value={config.discs.subtitle_languages}
-          onChange={(subtitle_languages) => setDiscs({ subtitle_languages })}
-          emptyText="No subtitles"
-        />
-      </section>
-
-      <FoldersSection folders={config.folders} onChange={(folders) => setConfig({ ...config, folders })} />
-
-      <WebsitesSection websites={config.websites} onChange={(websites) => setConfig({ ...config, websites })} />
-
-      <div className="row" style={{ marginBottom: 24 }}>
-        <button className="primary" onClick={save} disabled={busy || !dirty}>
-          {busy ? "Saving…" : "Save and apply"}
+        <StatusLine status={status} />
+        <ul>
+          {PAGES.map((p) => (
+            <li key={p.id}>
+              <a href={`#/${p.id}`} className={p.id === page.id ? "active" : ""}>
+                <Icon name={p.icon} /> {p.label}
+              </a>
+            </li>
+          ))}
+        </ul>
+        <button className="logout" onClick={logout}>
+          <Icon name="logout" /> Log out
         </button>
-        {dirty && <span className="hint" style={{ margin: 0 }}>Unsaved changes</span>}
-      </div>
+      </nav>
 
-      <ChangePassword />
-    </main>
+      <main className="content">
+        <h1>{page.label}</h1>
+        {page.tabs.length > 1 && (
+          <div className="tabs" role="tablist">
+            {page.tabs.map((t) => (
+              <a key={t.id} role="tab" href={`#/${page.id}/${t.id}`} className={t.id === tab.id ? "active" : ""}>
+                <Icon name={t.icon} size={18} /> {t.label}
+              </a>
+            ))}
+          </div>
+        )}
+        {notice && <div className={`banner ${notice.kind}`}>{notice.text}</div>}
+        {content}
+        {tab.saves && (
+          <div className="savebar">
+            <button className="primary" onClick={save} disabled={busy || !dirty}>
+              {busy ? "Saving…" : "Save and apply"}
+            </button>
+            {dirty && <span className="hint" style={{ margin: 0 }}>Unsaved changes (all tabs)</span>}
+          </div>
+        )}
+      </main>
+    </div>
   );
 }
 
@@ -323,9 +410,425 @@ function StatusLine({ status }: { status: Status | null }) {
   }
   return (
     <span className="status">
-      <span className="dot on" /> Media center is running
+      <span className={`dot ${status.locked ? "locked" : "on"}`} /> {status.locked ? "Locked" : "Media center is running"}
       {status.configError ? ` — settings problem: ${status.configError}` : ""}
     </span>
+  );
+}
+
+type ConfigProps = { config: Config; setConfig: (c: Config) => void };
+
+function HomeTab({ config, setConfig }: ConfigProps) {
+  return (
+    <section className="card">
+      <label className="toggle">
+        <input
+          type="checkbox"
+          checked={config.home.show_title}
+          onChange={(e) => setConfig({ ...config, home: { ...config.home, show_title: e.target.checked } })}
+        />
+        <span>
+          Show a title
+          <small>Shown in the top-left corner of the media center.</small>
+        </span>
+      </label>
+      <label className="field" style={{ marginTop: 6 }}>
+        <span>Title</span>
+        <input
+          type="text"
+          maxLength={60}
+          value={config.home.title}
+          disabled={!config.home.show_title}
+          placeholder="familynovice"
+          onChange={(e) => setConfig({ ...config, home: { ...config.home, title: e.target.value } })}
+          onBlur={() => {
+            const title = config.home.title.trim().replace(/\p{Cc}/gu, "") || "familynovice";
+            setConfig({ ...config, home: { ...config.home, title } });
+          }}
+        />
+      </label>
+    </section>
+  );
+}
+
+function DiscsTab({ config, setConfig }: ConfigProps) {
+  const setDiscs = (patch: Partial<Config["discs"]>) => setConfig({ ...config, discs: { ...config.discs, ...patch } });
+  return (
+    <section className="card">
+      <p className="hint">DVDs and Blu-rays from the disc drive.</p>
+      <label className="toggle">
+        <input type="checkbox" checked={config.discs.enabled} onChange={(e) => setDiscs({ enabled: e.target.checked })} />
+        <span>
+          Allow discs
+          <small>When off, the disc tile is shown greyed out and can't be started.</small>
+        </span>
+      </label>
+      <label className="toggle">
+        <input
+          type="checkbox"
+          checked={config.discs.allow_disc_menu}
+          disabled={!config.discs.enabled}
+          onChange={(e) => setDiscs({ allow_disc_menu: e.target.checked })}
+        />
+        <span>
+          Offer "Disc menu"
+          <small>Starts a disc like a normal player, with its own menus, trailers and extras. When off, only the main movie can be played.</small>
+        </span>
+      </label>
+      <LanguageList
+        title="Audio language"
+        hint="The first language the disc or video has is used."
+        value={config.discs.audio_languages}
+        onChange={(audio_languages) => setDiscs({ audio_languages })}
+        emptyText="Disc default"
+      />
+      <LanguageList
+        title="Subtitles"
+        hint="Leave empty for no subtitles."
+        value={config.discs.subtitle_languages}
+        onChange={(subtitle_languages) => setDiscs({ subtitle_languages })}
+        emptyText="No subtitles"
+      />
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Parental control
+
+const minutesText = (secs: number) => {
+  const m = Math.max(0, Math.round(secs / 60));
+  return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
+};
+
+function StatusTab(props: { status: Status | null; reload: () => void; setNotice: (n: Notice) => void; pinSet: boolean }) {
+  const { status } = props;
+  const [busy, setBusy] = useState(false);
+  const act = async (path: string, body?: unknown, text = "Done.") => {
+    setBusy(true);
+    try {
+      await api("POST", path, body);
+      props.setNotice({ kind: "ok", text });
+      props.reload();
+    } catch (e) {
+      props.setNotice({ kind: "error", text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!status) return <section className="card">Loading…</section>;
+  if (!status.running) {
+    return (
+      <section className="card">
+        <p>The media center is not running, so its state can't be shown or changed right now.</p>
+      </section>
+    );
+  }
+  const unlockedUntil = status.unlockedUntil ? new Date(status.unlockedUntil * 1000) : null;
+  return (
+    <>
+      <section className={`card state ${status.locked ? "is-locked" : "is-open"}`}>
+        <div className="state-head">
+          <Icon name={status.locked ? "lock" : "lock-open"} size={32} />
+          <div>
+            <h2>{status.locked ? "Locked" : "Unlocked"}</h2>
+            <p className="hint" style={{ margin: 0 }}>
+              {status.locked
+                ? status.lockReason
+                : status.remainingSecs != null
+                  ? `${minutesText(status.remainingSecs)} left`
+                  : "No limit right now"}
+              {!status.locked && unlockedUntil && unlockedUntil > new Date()
+                ? ` · unlocked until ${unlockedUntil.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}`
+                : ""}
+            </p>
+          </div>
+        </div>
+        <p style={{ margin: "14px 0 0" }}>
+          <Icon name="clock" size={16} /> Used today: <strong>{minutesText(status.usedTodaySecs ?? 0)}</strong>
+        </p>
+      </section>
+      <section className="card">
+        <h2>Unlock</h2>
+        <p className="hint">Lifts all time limits (and a lock) for this time.</p>
+        <div className="row">
+          <button disabled={busy} onClick={() => act("/api/unlock", { minutes: 30 }, "Unlocked for 30 minutes.")}>30 minutes</button>
+          <button disabled={busy} onClick={() => act("/api/unlock", { minutes: 60 }, "Unlocked for 1 hour.")}>1 hour</button>
+          <button disabled={busy} onClick={() => act("/api/unlock", { rest_of_day: true }, "Unlocked for the rest of today.")}>Rest of today</button>
+        </div>
+      </section>
+      <section className="card">
+        <h2>Lock now</h2>
+        <p className="hint">
+          Stops what's playing and shows the lock screen.{" "}
+          {props.pinSet ? "It can be unlocked with the PIN or here." : "Without a PIN it can only be unlocked here."}
+        </p>
+        <button disabled={busy} onClick={() => act("/api/lock", undefined, "Locked.")}>
+          <Icon name="lock" size={16} /> Lock now
+        </button>
+      </section>
+    </>
+  );
+}
+
+const DAY_NAMES: Record<Weekday, string> = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
+
+const isoDate = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const todayIso = () => isoDate(new Date());
+const mondayIso = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return isoDate(d);
+};
+const formatDate = (iso: string) =>
+  new Date(`${iso}T12:00:00`).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+
+/** Expired "today" / "this week" rules don't apply any more. */
+function expired(scope: Scope): boolean {
+  if (scope.kind === "today") return scope.date < todayIso();
+  if (scope.kind === "this_week") return scope.week_of < mondayIso();
+  return false;
+}
+
+function scopeFor(kind: Scope["kind"]): Scope {
+  switch (kind) {
+    case "today":
+      return { kind, date: todayIso() };
+    case "this_week":
+      return { kind, week_of: mondayIso() };
+    case "weekdays":
+      return { kind, days: ["mon", "tue", "wed", "thu", "fri"] };
+    default:
+      return { kind: "every_day" };
+  }
+}
+
+function LimitsTab({ limits, onChange }: { limits: LimitRule[]; onChange: (l: LimitRule[]) => void }) {
+  const update = (i: number, rule: LimitRule) => onChange(limits.map((r, j) => (j === i ? rule : r)));
+  return (
+    <>
+      <section className="card">
+        <p className="hint" style={{ margin: 0 }}>
+          When a limit is reached, the media center stops what's playing and locks. It can be unlocked with the
+          PIN or on the Status tab. Time only counts while something is used. If several rules apply to a day, the
+          most specific wins: <em>today</em> before <em>weekdays</em> before <em>this week</em> before{" "}
+          <em>every day</em>. A <em>this week</em> time budget counts the whole week.
+        </p>
+      </section>
+      {limits.length === 0 && (
+        <section className="card">
+          <p style={{ margin: 0 }}>No limits: the media center can be used any time.</p>
+        </section>
+      )}
+      {limits.map((rule, i) => (
+        <LimitEditor
+          key={i}
+          rule={rule}
+          onChange={(r) => update(i, r)}
+          onRemove={() => onChange(limits.filter((_, j) => j !== i))}
+        />
+      ))}
+      <div className="row" style={{ marginBottom: 16 }}>
+        <button onClick={() => onChange([...limits, { type: "budget", minutes: 60, scope: { kind: "every_day" } }])}>
+          <Icon name="hourglass" size={16} /> Add time budget
+        </button>
+        <button onClick={() => onChange([...limits, { type: "window", from: "14:00", until: "19:00", scope: { kind: "every_day" } }])}>
+          <Icon name="clock" size={16} /> Add time window
+        </button>
+      </div>
+    </>
+  );
+}
+
+function LimitEditor(props: { rule: LimitRule; onChange: (r: LimitRule) => void; onRemove: () => void }) {
+  const { rule, onChange } = props;
+  const scope = rule.scope;
+  const setScope = (s: Scope) => onChange({ ...rule, scope: s });
+  const old = expired(scope);
+  return (
+    <section className={`card limit ${old ? "expired" : ""}`}>
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <strong>
+          <Icon name={rule.type === "budget" ? "hourglass" : "clock"} size={18} />{" "}
+          {rule.type === "budget" ? "Time budget" : "Time window"}
+          {old && <span className="badge">expired</span>}
+        </strong>
+        <button className="small" onClick={props.onRemove} aria-label="Remove rule">
+          <Icon name="trash" size={16} /> Remove
+        </button>
+      </div>
+
+      {rule.type === "budget" ? (
+        <label className="field inline">
+          <span>Minutes</span>
+          <input
+            type="number"
+            min={1}
+            max={scope.kind === "this_week" ? 10080 : 1440}
+            value={rule.minutes}
+            onChange={(e) => onChange({ ...rule, minutes: Math.max(1, Math.round(Number(e.target.value) || 1)) })}
+          />
+          <small className="hint">{scope.kind === "this_week" ? "for the whole week" : "per day"}</small>
+        </label>
+      ) : (
+        <div className="row">
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={rule.from !== undefined}
+              onChange={(e) => {
+                const { from: _from, ...rest } = rule;
+                onChange(e.target.checked ? { ...rest, from: "14:00" } : rest);
+              }}
+            />{" "}
+            From
+          </label>
+          <input
+            type="time"
+            value={rule.from ?? ""}
+            disabled={rule.from === undefined}
+            onChange={(e) => e.target.value && onChange({ ...rule, from: e.target.value })}
+          />
+          <span>until</span>
+          <input type="time" value={rule.until} onChange={(e) => e.target.value && onChange({ ...rule, until: e.target.value })} />
+        </div>
+      )}
+
+      <div className="row" style={{ marginTop: 10 }}>
+        <span>Applies</span>
+        <select value={scope.kind} onChange={(e) => setScope(scopeFor(e.target.value as Scope["kind"]))}>
+          <option value="today">today</option>
+          <option value="weekdays">on specific weekdays</option>
+          <option value="this_week">this week</option>
+          <option value="every_day">every day</option>
+        </select>
+        {scope.kind === "today" && <span className="hint" style={{ margin: 0 }}>({formatDate(scope.date)})</span>}
+        {scope.kind === "this_week" && (
+          <span className="hint" style={{ margin: 0 }}>(week from {formatDate(scope.week_of)})</span>
+        )}
+        {old && (
+          <button className="small" onClick={() => setScope(scopeFor(scope.kind))}>
+            Use for {scope.kind === "today" ? "today" : "this week"}
+          </button>
+        )}
+      </div>
+      {scope.kind === "weekdays" && (
+        <div className="row days">
+          {WEEKDAYS.map((d) => (
+            <label key={d} className={`day ${scope.days.includes(d) ? "on" : ""}`}>
+              <input
+                type="checkbox"
+                checked={scope.days.includes(d)}
+                onChange={(e) => {
+                  const days = e.target.checked
+                    ? WEEKDAYS.filter((x) => x === d || scope.days.includes(x))
+                    : scope.days.filter((x) => x !== d);
+                  setScope({ kind: "weekdays", days });
+                }}
+              />
+              {DAY_NAMES[d]}
+            </label>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PIN
+
+function PinTab(props: {
+  pinSet: boolean;
+  doubling: boolean;
+  onDoubling: (v: boolean) => void;
+  onPinChanged: (text: string) => Promise<void>;
+  setNotice: (n: Notice) => void;
+}) {
+  const [pin, setPin] = useState("");
+  const [repeat, setRepeat] = useState("");
+  const [busy, setBusy] = useState(false);
+  const valid = /^\d{4,8}$/.test(pin);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (pin !== repeat) return props.setNotice({ kind: "error", text: "The PINs don't match." });
+    setBusy(true);
+    try {
+      await api("POST", "/api/pin", { pin });
+      setPin("");
+      setRepeat("");
+      await props.onPinChanged(props.pinSet ? "PIN changed." : "PIN set.");
+    } catch (err) {
+      props.setNotice({ kind: "error", text: (err as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    setBusy(true);
+    try {
+      await api("DELETE", "/api/pin");
+      await props.onPinChanged("PIN removed.");
+    } catch (err) {
+      props.setNotice({ kind: "error", text: (err as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const digits = (v: string) => v.replace(/\D/g, "").slice(0, 8);
+  return (
+    <>
+      <section className="card">
+        <h2>{props.pinSet ? "Change the PIN" : "Set a PIN"}</h2>
+        <p className="hint">
+          {props.pinSet ? (
+            <>
+              <Icon name="circle-check" size={16} /> A PIN is set. It unlocks the media center when the time is up, and
+              enables the lock button on the home screen.
+            </>
+          ) : (
+            "With a PIN, the media center can be unlocked on the TV when the time is up, and the lock button appears on the home screen."
+          )}
+        </p>
+        <form onSubmit={submit}>
+          <div className="row">
+            <label className="field" style={{ flex: 1 }}>
+              <span>New PIN (4 to 8 digits)</span>
+              <input type="password" inputMode="numeric" autoComplete="new-password" value={pin} onChange={(e) => setPin(digits(e.target.value))} />
+            </label>
+            <label className="field" style={{ flex: 1 }}>
+              <span>Repeat PIN</span>
+              <input type="password" inputMode="numeric" autoComplete="new-password" value={repeat} onChange={(e) => setRepeat(digits(e.target.value))} />
+            </label>
+          </div>
+          <div className="row">
+            <button className="primary" disabled={busy || !valid || !repeat}>{props.pinSet ? "Change PIN" : "Set PIN"}</button>
+            {props.pinSet && (
+              <button type="button" disabled={busy} onClick={remove}>
+                <Icon name="trash" size={16} /> Remove PIN
+              </button>
+            )}
+          </div>
+        </form>
+      </section>
+      <section className="card">
+        <h2>Wrong PIN</h2>
+        <label className="toggle">
+          <input type="checkbox" checked={props.doubling} onChange={(e) => props.onDoubling(e.target.checked)} />
+          <span>
+            Double the waiting time after each wrong PIN
+            <small>
+              After a wrong PIN the next try is possible after 5 seconds. With this option the waiting time doubles
+              each time: 5 s, 10 s, 20 s, 40 s … (at most 1 hour).
+            </small>
+          </span>
+        </label>
+      </section>
+    </>
   );
 }
 
@@ -421,7 +924,6 @@ function FoldersSection(props: { folders: FolderSettings[]; onChange: (folders: 
 
   return (
     <section className="card">
-      <h2>Folders</h2>
       <p className="hint">
         Folders appear as tiles on the media center and can be browsed there. Only videos, music and
         pictures are shown. familynovice only reads them — it never changes, moves or deletes files.
@@ -555,7 +1057,6 @@ function WebsitesSection(props: { websites: WebsiteSettings[]; onChange: (websit
 
   return (
     <section className="card">
-      <h2>Websites</h2>
       <p className="hint">
         Websites open full screen without an address bar. Children can only open pages of the website's
         domain; pictures, videos and players from other addresses (e.g. CDNs) still load. Closing: the ✕
@@ -654,9 +1155,8 @@ function ChangePassword() {
   };
 
   return (
-    <details className="card">
-      <summary>Change admin password</summary>
-      <form onSubmit={submit} style={{ marginTop: 16 }}>
+    <section className="card">
+      <form onSubmit={submit}>
         {notice && <div className={`banner ${notice.kind}`}>{notice.text}</div>}
         <label className="field">
           <span>Current password</span>
@@ -666,9 +1166,9 @@ function ChangePassword() {
           <span>New password (at least 8 characters)</span>
           <input type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
         </label>
-        <button disabled={!current || !next}>Change password</button>
+        <button className="primary" disabled={!current || !next}>Change password</button>
       </form>
-    </details>
+    </section>
   );
 }
 
