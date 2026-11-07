@@ -7,6 +7,9 @@ mod makemkv;
 mod pictures;
 mod player;
 mod resume;
+// Parts of it are only used by the browser window (web/, includes this file).
+#[allow(dead_code)]
+mod sites;
 mod store;
 mod ui;
 

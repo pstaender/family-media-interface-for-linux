@@ -15,6 +15,8 @@ const MAX_LANGUAGES: usize = 10;
 const MAX_FOLDERS: usize = 50;
 const MAX_NAME_CHARS: usize = 60;
 const MAX_PATH_BYTES: usize = 4096;
+const MAX_WEBSITES: usize = 50;
+const MAX_URL_BYTES: usize = 2048;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,6 +26,24 @@ pub struct Config {
     pub discs: DiscSettings,
     #[serde(default)]
     pub folders: Vec<FolderSettings>,
+    #[serde(default)]
+    pub websites: Vec<WebsiteSettings>,
+}
+
+/// A website shown in the "Websites" row (rules: `src/sites.rs`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebsiteSettings {
+    pub id: String,
+    pub name: String,
+    /// Start page.
+    pub url: String,
+    #[serde(default = "yes")]
+    pub allow_subdomains: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A folder shown in the "Folders" row. Always accessed read-only.
@@ -73,6 +93,7 @@ impl Default for Config {
             version: VERSION,
             discs: DiscSettings::default(),
             folders: Vec::new(),
+            websites: Vec::new(),
         }
     }
 }
@@ -88,6 +109,7 @@ impl Config {
                 ..DiscSettings::default()
             },
             folders: Vec::new(),
+            websites: Vec::new(),
         }
     }
 }
@@ -146,6 +168,15 @@ fn validate(config: &Config) -> Result<(), String> {
     if config.folders.len() > MAX_FOLDERS {
         return Err(format!("folders: at most {MAX_FOLDERS} folders"));
     }
+    if config.websites.len() > MAX_WEBSITES {
+        return Err(format!("websites: at most {MAX_WEBSITES} websites"));
+    }
+    for (i, site) in config.websites.iter().enumerate() {
+        validate_website(site).map_err(|e| format!("websites[{i}]: {e}"))?;
+        if config.websites[..i].iter().any(|w| w.id == site.id) {
+            return Err(format!("websites[{i}]: id \"{}\" is used twice", site.id));
+        }
+    }
     for (i, folder) in config.folders.iter().enumerate() {
         validate_folder(folder).map_err(|e| format!("folders[{i}]: {e}"))?;
         if config.folders[..i].iter().any(|f| f.id == folder.id) {
@@ -155,25 +186,43 @@ fn validate(config: &Config) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_folder(f: &FolderSettings) -> Result<(), String> {
-    let id_ok = (1..=40).contains(&f.id.len())
-        && f.id
+fn validate_id_and_name(id: &str, name: &str) -> Result<(), String> {
+    let id_ok = (1..=40).contains(&id.len())
+        && id
             .bytes()
             .enumerate()
             .all(|(i, b)| b.is_ascii_lowercase() || b.is_ascii_digit() || (b == b'-' && i > 0));
     if !id_ok {
         return Err(format!(
-            "id \"{}\" must be lowercase letters, digits and -",
-            f.id
+            "id \"{id}\" must be lowercase letters, digits and -"
         ));
     }
-    let name_chars = f.name.chars().count();
+    let name_chars = name.chars().count();
     if name_chars == 0 || name_chars > MAX_NAME_CHARS {
         return Err(format!("name must have 1 to {MAX_NAME_CHARS} characters"));
     }
-    if f.name.trim() != f.name || f.name.chars().any(char::is_control) {
+    if name.trim() != name || name.chars().any(char::is_control) {
         return Err("name must not start/end with spaces or contain control characters".into());
     }
+    Ok(())
+}
+
+fn validate_website(w: &WebsiteSettings) -> Result<(), String> {
+    validate_id_and_name(&w.id, &w.name)?;
+    if w.url.len() > MAX_URL_BYTES {
+        return Err(format!("url: at most {MAX_URL_BYTES} characters"));
+    }
+    let url = url::Url::parse(&w.url).map_err(|e| format!("url \"{}\": {e}", w.url))?;
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("url must not contain a user name or password".into());
+    }
+    crate::sites::rules_for(&w.url, w.allow_subdomains)
+        .map_err(|e| format!("url \"{}\": {e}", w.url))?;
+    Ok(())
+}
+
+fn validate_folder(f: &FolderSettings) -> Result<(), String> {
+    validate_id_and_name(&f.id, &f.name)?;
     if !is_normalized_absolute_path(&f.path) {
         return Err(format!(
             "path \"{}\" must be an absolute path without '.', '..' or empty parts",
@@ -291,6 +340,19 @@ mod tests {
     }
 
     #[test]
+    fn example_websites() {
+        let config = parse(include_str!("../docs/config.example.json")).unwrap();
+        assert_eq!(config.websites.len(), 2);
+        assert!(config.websites[0].allow_subdomains);
+        assert!(!config.websites[1].allow_subdomains);
+        // Missing toggle: subdomains allowed.
+        let c =
+            parse(r#"{"version":1,"websites":[{"id":"k","name":"K","url":"https://kika.de/"}]}"#)
+                .unwrap();
+        assert!(c.websites[0].allow_subdomains);
+    }
+
+    #[test]
     fn paths() {
         for ok in ["/", "/a", "/srv/media movies/x.y", "/a/.hidden"] {
             assert!(is_normalized_absolute_path(ok), "{ok}");
@@ -331,6 +393,16 @@ mod tests {
             r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x//y","video":true}]}"#,
             r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x","video":true,"write":true}]}"#,
             r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x","video":true},{"id":"a","name":"B","path":"/y","audio":true}]}"#,
+            r#"{"version":1,"websites":[{"id":"a","name":"A"}]}"#,
+            r#"{"version":1,"websites":[{"id":"a","name":"A","url":"http://localhost:8787/"}]}"#,
+            r#"{"version":1,"websites":[{"id":"a","name":"A","url":"https://192.168.1.1/"}]}"#,
+            r#"{"version":1,"websites":[{"id":"a","name":"A","url":"https://box.local/"}]}"#,
+            r#"{"version":1,"websites":[{"id":"a","name":"A","url":"file:///etc/passwd"}]}"#,
+            r#"{"version":1,"websites":[{"id":"a","name":"A","url":"kika.de"}]}"#,
+            r#"{"version":1,"websites":[{"id":"a","name":"A","url":"https://user:pw@kika.de/"}]}"#,
+            r#"{"version":1,"websites":[{"id":"a","name":"A","url":"https://kika.de/","allow_subdomains":"yes"}]}"#,
+            r#"{"version":1,"websites":[{"id":"a","name":"A","url":"https://kika.de/","extra":1}]}"#,
+            r#"{"version":1,"websites":[{"id":"a","name":"A","url":"https://a.de/"},{"id":"a","name":"B","url":"https://b.de/"}]}"#,
             "not json",
         ] {
             assert!(parse(bad).is_err(), "should reject {bad}");

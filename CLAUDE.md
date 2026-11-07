@@ -190,20 +190,38 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   admin interface has a folder picker (`GET /api/browse`, lists directories only, read-only).
   The removed `extensions` field is still accepted from older files but ignored.
 
-### Allowed websites (domain allowlist with wildcards)
+### Websites (implemented, v1)
 
-- The admin sets up which websites each profile may visit. Entries are domains with optional
-  wildcards, e.g. `example.org`, `*.example.org`.
-- Default deny: anything not on the allowlist is blocked, including redirects, popups, new
-  windows and embedded frames to other domains.
-- Matching rules must be exact and tested. Specify (and test) whether `*.example.org` also
-  matches the apex `example.org`. Compare against the normalized host (lowercase,
-  punycode/IDN, trailing dot removed), never against a substring of the URL, so
-  `example.org.evil.com` or `evil.com/?example.org` don't match.
-- Always block `localhost`, loopback (`127.0.0.0/8`, `::1`) and private network addresses,
-  whatever the allowlist says, so the child's browser can never reach the admin interface.
-- Websites open in a locked-down browser view controlled by the media center (no address bar,
-  no way to get to other sites or the desktop) and come back to the home screen on exit.
+- The admin adds websites: name, start page (`https://…`, public domain name only: no IP
+  address, `localhost`, `*.local`, user/password) and **"Allow all subdomains"** (default on).
+- Rules (`src/sites.rs`, shared with the browser window, heavily tested):
+  - **Pages (main frame):** with subdomains: the start host without a leading `www.` and all
+    its subdomains (`www.kika.de` → `kika.de`, `*.kika.de`); without: exactly the start host.
+    Hosts are compared after WHATWG URL normalization (lowercase, IDN → punycode, trailing dot
+    removed), never as substrings (`kika.de.evil.com`, `evil.com/?kika.de`, `kika.de@evil.com`
+    don't match).
+  - **Media, scripts, styles, embedded players/frames:** from anywhere (websites use CDNs) …
+  - … **except** local addresses and non-web schemes, blocked for every frame: `localhost`,
+    `*.localhost`, `*.local`, loopback/private/link-local/CGNAT IPs (also IPv4-mapped IPv6),
+    `file:` and other schemes. So a website can't reach the admin interface or devices at home.
+- **Browser window `familynovice-web`** (`web/`, WebKitGTK via `wry` + `tao`): fullscreen,
+  no address bar, only a ✕ close button (GTK overlay, page can't hide it). Holding **Esc**
+  (or the remote's back key) for **3 s** closes it; short Esc presses still reach the page.
+  **Every visited address is checked** (main frame, via WebKit's `load-changed`, which only
+  concerns the main frame; on start, redirect and commit): a page outside the rules is
+  stopped before it's committed and a dialog ("This page is not part of <name>", showing the
+  blocked host) offers **"Go back"** (stay on the last allowed page; Enter) or **"Close
+  website"**. Frames: wry's navigation handler (fires for all
+  frames) only blocks local addresses. Pop-ups never open a new window: allowed ones load in
+  the same window, others show the same dialog. **Downloads are blocked** (non-destructive). Cookies/cache live in
+  `$XDG_CACHE_HOME/familynovice/web`.
+- The media center starts it like a player (`--url`, `--allow` rules, `--title`,
+  `--data-dir`), keeps it in front and can stop it (Esc on the "Playing…" screen). It looks
+  for `familynovice-web` next to its own binary, then in `PATH`; if missing, website tiles are
+  semi-transparent ("Not installed").
+- Known limits: sub-resource requests (images, `fetch`) to local IPs aren't filtered (only
+  navigations); a public domain that resolves to a local IP (DNS rebinding) isn't detected.
+  The admin interface is still protected by its Host check and login.
 
 ### Allowed software and scripts (set up by the admin)
 
@@ -264,6 +282,7 @@ src/
                   folder browser, overlays
   disc.rs         optical drive + disc detection (ioctl + udev)
   library.rs      read-only folder browsing (media filters, confinement to the folder)
+  sites.rs        website rules (allowed pages, always-blocked addresses); also used by web/
   pictures.rs     picture decoding for the built-in viewer
   audio.rs        built-in music player (windowless mpv controlled over IPC)
   makemkv.rs      makemkvcon robot-output parser, main title selection
@@ -274,6 +293,8 @@ scripts/
   setup.sh        installs players, builds MakeMKV from source
   config.rs       config.json: types, validation, load/reload (fail closed)
   control.rs      control socket for the admin interface (reload/status)
+web/              familynovice-web: locked-down fullscreen browser window (WebKitGTK via wry),
+                  workspace member; includes src/sites.rs via #[path]
 admin/            Bun + React admin web interface
   src/server.ts   entry point
   src/app.ts      HTTP server, API routes, security checks
@@ -301,7 +322,11 @@ cargo test                                   # run all tests
 cargo test <name>                            # run tests matching a name
 cargo fmt                                    # format code
 cargo clippy --all-targets -- -D warnings    # lint (treat warnings as errors)
+cargo build -p familynovice-web              # website window (needs libwebkit2gtk-4.1-dev, libdbus-1-dev)
+cargo clippy --workspace --all-targets -- -D warnings   # lint both, once the WebKit dev files exist
 ```
+
+`cargo build` alone builds only the media center, so it works without the WebKit dev files.
 
 System setup (players, MakeMKV built from source into `/usr/local`; needs sudo, asks to accept
 the MakeMKV license):
@@ -426,6 +451,8 @@ Before you consider a change done, run the formatter, linter and tests for every
   with disc menus. Decryption comes from MakeMKV's `libmmbd`. The media center waits for the
   player to exit and then shows the home screen again.
 - **System packages (apt):** see `APT_PACKAGES` in `scripts/setup.sh`.
+- **Website engine:** WebKitGTK via `wry`/`tao` in a separate process (`web/`), so the media
+  center itself doesn't depend on GTK/WebKit. Blocking: see "Websites".
 - **Admin ↔ media center:** JSON lines over a Unix socket (`src/control.rs`); config as one
   `config.json`, validated on both sides.
 
@@ -433,7 +460,6 @@ Before you consider a change done, run the formatter, linter and tests for every
 
 Record each choice here once it is made:
 
-- embedded browser engine for the website allowlist (e.g. WebKitGTK, CEF) and how blocking is enforced
 - whether to offer HTTPS when LAN access to the admin interface is turned on
 - when to move to the hardened config setup (see "Admin interface: user, permissions, authentication")
 - support for non-apt distributions in `scripts/setup.sh`

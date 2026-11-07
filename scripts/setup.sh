@@ -26,6 +26,8 @@ APT_PACKAGES=(
     eject
     # Blu-ray Java (BD-J) menus
     libbluray-bdj default-jre
+    # Website window (familynovice-web: WebKitGTK via wry/tao)
+    libwebkit2gtk-4.1-dev libdbus-1-dev
 )
 
 info() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
-import type { Config, FolderSettings } from "../config";
+import { websiteDomain, type Config, type FolderSettings, type WebsiteSettings } from "../config";
 
 // ---------------------------------------------------------------------------
 // API
@@ -268,6 +268,8 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
 
       <FoldersSection folders={config.folders} onChange={(folders) => setConfig({ ...config, folders })} />
 
+      <WebsitesSection websites={config.websites} onChange={(websites) => setConfig({ ...config, websites })} />
+
       <div className="row" style={{ marginBottom: 24 }}>
         <button className="primary" onClick={save} disabled={busy || !dirty}>
           {busy ? "Saving…" : "Save and apply"}
@@ -502,6 +504,104 @@ function FolderPicker(props: { start?: string; onPick: (path: string) => void; o
         </button>
         <button onClick={props.onCancel}>Cancel</button>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Websites
+
+function WebsitesSection(props: { websites: WebsiteSettings[]; onChange: (websites: WebsiteSettings[]) => void }) {
+  const { websites, onChange } = props;
+  const update = (i: number, patch: Partial<WebsiteSettings>) =>
+    onChange(websites.map((w, j) => (j === i ? { ...w, ...patch } : w)));
+
+  const add = () => {
+    const taken = websites.map((w) => w.id);
+    let id = "website";
+    for (let n = 2; taken.includes(id); n++) id = `website-${n}`;
+    onChange([...websites, { id, name: "", url: "https://", allow_subdomains: true }]);
+  };
+
+  return (
+    <section className="card">
+      <h2>Websites</h2>
+      <p className="hint">
+        Websites open full screen without an address bar. Children can only open pages of the website's
+        domain; pictures, videos and players from other addresses (e.g. CDNs) still load. Closing: the ✕
+        button, or holding Esc for 3 seconds.
+      </p>
+      {websites.length === 0 && <p>No websites yet.</p>}
+      {websites.map((site, i) => (
+        <WebsiteEditor
+          key={site.id}
+          site={site}
+          onChange={(patch) => update(i, patch)}
+          onRemove={() => onChange(websites.filter((_, j) => j !== i))}
+        />
+      ))}
+      {websites.length < 50 && <button onClick={add}>Add website</button>}
+    </section>
+  );
+}
+
+function WebsiteEditor(props: {
+  site: WebsiteSettings;
+  onChange: (patch: Partial<WebsiteSettings>) => void;
+  onRemove: () => void;
+}) {
+  const { site, onChange } = props;
+  const domain = site.url === "https://" ? null : websiteDomain(site.url, site.allow_subdomains);
+
+  return (
+    <div className="folder">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <label className="field" style={{ flex: 1, marginBottom: 8 }}>
+          <span>Name on the tile</span>
+          <input
+            type="text"
+            maxLength={60}
+            value={site.name}
+            placeholder="e.g. KiKA"
+            onChange={(e) => onChange({ name: e.target.value })}
+            onBlur={() => onChange({ name: site.name.trim().replace(/\p{Cc}/gu, "") })}
+          />
+        </label>
+        <button onClick={props.onRemove} aria-label={`Remove ${site.name || "website"}`}>Remove</button>
+      </div>
+      <label className="field">
+        <span>Start page</span>
+        <input
+          type="text"
+          inputMode="url"
+          value={site.url}
+          placeholder="https://www.example.com/"
+          onChange={(e) => onChange({ url: e.target.value.trim() })}
+        />
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={site.allow_subdomains}
+          onChange={(e) => onChange({ allow_subdomains: e.target.checked })}
+        />{" "}
+        Allow all subdomains
+      </label>
+      {domain !== null && (
+        <p className="hint" style={{ margin: "8px 0 0" }}>
+          {typeof domain === "string" ? (
+            <span style={{ color: "var(--err-text)" }}>{domain}</span>
+          ) : domain.subdomains ? (
+            <>
+              Pages allowed on <strong>{domain.host}</strong> and all its subdomains (e.g. www.{domain.host}).
+            </>
+          ) : (
+            <>
+              Pages allowed only on <strong>{domain.host}</strong>.
+            </>
+          )}
+        </p>
+      )}
     </div>
   );
 }

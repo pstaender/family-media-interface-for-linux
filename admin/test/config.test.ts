@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import example from "../../docs/config.example.json";
-import { defaultConfig, isNormalizedAbsolutePath, validateConfig } from "../src/config";
+import { defaultConfig, isNormalizedAbsolutePath, validateConfig, websiteDomain } from "../src/config";
 
 test("the example config is valid", () => {
   const v = validateConfig(example);
@@ -16,6 +16,22 @@ test("the example folders are valid", () => {
 test("the removed extensions option is ignored", () => {
   const v = validateConfig({ version: 1, folders: [{ id: "a", name: "A", path: "/x", video: true, extensions: ["pdf"] }] });
   expect(v.ok && v.config.folders[0]).toEqual({ id: "a", name: "A", path: "/x", video: true, audio: false, images: false });
+});
+
+test("the example websites are valid", () => {
+  const v = validateConfig(example);
+  expect(v.ok && v.config.websites.map((w) => [w.id, w.allow_subdomains])).toEqual([["kika", true], ["wiki", false]]);
+  const w = validateConfig({ version: 1, websites: [{ id: "k", name: "K", url: "https://kika.de/" }] });
+  expect(w.ok && w.config.websites[0]!.allow_subdomains).toBe(true);
+});
+
+test("website domains like src/sites.rs", () => {
+  expect(websiteDomain("https://www.kika.de/start", true)).toEqual({ host: "kika.de", subdomains: true });
+  expect(websiteDomain("https://www.kika.de/", false)).toEqual({ host: "www.kika.de", subdomains: false });
+  expect(websiteDomain("https://www.Müller.de/", true)).toEqual({ host: "xn--mller-kva.de", subdomains: true });
+  for (const bad of ["http://127.1/", "https://[::1]/", "https://intranet/", "https://app.localhost/", "ftp://kika.de/"]) {
+    expect(typeof websiteDomain(bad, true)).toBe("string");
+  }
 });
 
 test("paths are checked like on the Rust side", () => {
@@ -54,6 +70,16 @@ const BAD: unknown[] = [
   { version: 1, folders: [{ id: "a", name: "A", path: "/x", video: true, write: true }] },
   { version: 1, folders: [{ id: "a", name: "A", path: "/x", extensions: ["pdf"] }] },
   { version: 1, folders: [{ id: "a", name: "A", path: "/x", video: true }, { id: "a", name: "B", path: "/y", audio: true }] },
+  { version: 1, websites: [{ id: "a", name: "A" }] },
+  { version: 1, websites: [{ id: "a", name: "A", url: "http://localhost:8787/" }] },
+  { version: 1, websites: [{ id: "a", name: "A", url: "https://192.168.1.1/" }] },
+  { version: 1, websites: [{ id: "a", name: "A", url: "https://box.local/" }] },
+  { version: 1, websites: [{ id: "a", name: "A", url: "file:///etc/passwd" }] },
+  { version: 1, websites: [{ id: "a", name: "A", url: "kika.de" }] },
+  { version: 1, websites: [{ id: "a", name: "A", url: "https://user:pw@kika.de/" }] },
+  { version: 1, websites: [{ id: "a", name: "A", url: "https://kika.de/", allow_subdomains: "yes" }] },
+  { version: 1, websites: [{ id: "a", name: "A", url: "https://kika.de/", extra: 1 }] },
+  { version: 1, websites: [{ id: "a", name: "A", url: "https://a.de/" }, { id: "a", name: "B", url: "https://b.de/" }] },
   "not an object",
   null,
   [],

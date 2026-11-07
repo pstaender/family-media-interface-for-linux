@@ -114,6 +114,7 @@ test("reads default config, rejects invalid, saves and applies valid config", as
     version: 1,
     discs: { enabled: true, allow_disc_menu: false, audio_languages: ["deu"], subtitle_languages: [] },
     folders: [],
+    websites: [],
   });
 });
 

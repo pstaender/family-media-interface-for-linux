@@ -34,5 +34,19 @@
       "audio": true,
       "images": false
     }
+  ],
+  "websites": [
+    {
+      "id": "kika",
+      "name": "KiKA",
+      "url": "https://www.kika.de/",
+      "allow_subdomains": true
+    },
+    {
+      "id": "wiki",
+      "name": "Klexikon",
+      "url": "https://klexikon.zum.de/",
+      "allow_subdomains": false
+    }
   ]
 }

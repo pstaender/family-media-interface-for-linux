@@ -45,6 +45,15 @@
       "items": {
         "$ref": "#/$defs/folder"
       }
+    },
+    "websites": {
+      "type": "array",
+      "maxItems": 50,
+      "default": [],
+      "description": "Websites shown in the \"Websites\" row, each opened in a locked-down fullscreen browser window.",
+      "items": {
+        "$ref": "#/$defs/website"
+      }
     }
   },
   "$defs": {
@@ -100,6 +109,38 @@
           "type": "boolean",
           "default": false,
           "description": "Show pictures."
+        }
+      }
+    },
+    "website": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "url"
+      ],
+      "description": "Pages are limited to the website's domain (see src/sites.rs); media, scripts and embedded players may come from anywhere except local addresses. ids are unique (shared with nothing else).",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,39}$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Shown on the tile. No control characters, no leading/trailing spaces."
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Start page: http(s):// with a public domain name (no IP address, no localhost/.local), no user name or password."
+        },
+        "allow_subdomains": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow the domain without leading www. and all its subdomains; otherwise only exactly the start host."
         }
       }
     }

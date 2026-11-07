@@ -50,6 +50,11 @@ pub fn prepare_player_cache() -> Option<PathBuf> {
     Some(dir)
 }
 
+/// `$XDG_CACHE_HOME/familynovice/web`: cookies, local storage and cache of the website window.
+pub fn web_data_dir() -> Option<PathBuf> {
+    Some(dirs::cache_dir()?.join(APP).join("web"))
+}
+
 /// Socket for talking to the running mpv (`$XDG_RUNTIME_DIR`, falls back to the temp dir).
 pub fn mpv_socket_path() -> PathBuf {
     dirs::runtime_dir()

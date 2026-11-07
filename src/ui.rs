@@ -18,13 +18,20 @@ use crate::library::{self, Entry, EntryKind, Filter};
 use crate::makemkv::{self, DiscInfo, ScanProgress};
 use crate::pictures::{self, Picture};
 use crate::player::{self, MovieOptions, PlayMode};
-use crate::{resume, store};
+use crate::{resume, sites, store};
 
 const BG: Color32 = Color32::from_rgb(0x12, 0x14, 0x1c);
 const TILE_BG: Color32 = Color32::from_rgb(0x22, 0x26, 0x34);
 const TEXT: Color32 = Color32::from_rgb(0xf2, 0xf4, 0xf8);
 const TEXT_DIM: Color32 = Color32::from_rgb(0x9a, 0xa1, 0xb3);
 const ACCENT: Color32 = Color32::from_rgb(0x3d, 0x8b, 0xff);
+/// Tile text: fixed sizes (never shrunk to fit; long text gets "…" instead), and their
+/// distance from the tile's bottom edge.
+const TILE_TITLE_FONT: f32 = 32.0;
+const TILE_SUBTITLE_FONT: f32 = 24.0;
+const TILE_TITLE_Y: f32 = 122.0;
+const TILE_SUBTITLE_Y: f32 = 76.0;
+
 /// Opacity of tiles that can't be used right now.
 const UNAVAILABLE_ALPHA: f32 = 0.35;
 
@@ -90,8 +97,8 @@ enum Screen {
         started: Instant,
         /// Where to return when the player exits (`None`: home screen).
         back: Option<Browse>,
-        /// Started from a disc (for the error hint).
-        disc: bool,
+        /// What is playing (for the error hint).
+        kind: PlayKind,
         /// When the user asked to stop it (Esc / back): SIGTERM sent, SIGKILL after 2 s.
         stopping: Option<Instant>,
     },
@@ -99,6 +106,21 @@ enum Screen {
         text: String,
         back: Option<Browse>,
     },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PlayKind {
+    Disc,
+    File,
+    Website,
+}
+
+/// The rows of the home screen (only rows with content are shown, except discs).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RowKind {
+    Discs = 0,
+    Folders = 1,
+    Websites = 2,
 }
 
 fn message(text: impl Into<String>) -> Screen {
@@ -263,8 +285,11 @@ pub struct App {
     screen: Screen,
     /// Focused tile on the home screen: (row, column). Row 0: discs, row 1: folders.
     focus: (usize, usize),
-    /// Horizontal scroll of the folders row.
-    folder_scroll: f32,
+    /// Horizontal scroll per row kind, vertical scroll of the rows.
+    row_scroll_x: [f32; 3],
+    rows_scroll_y: f32,
+    /// The browser window program (`familynovice-web`), if installed.
+    web_helper: Option<PathBuf>,
     /// Whether each folder (by id) can be read; refreshed every few seconds.
     folder_ok: HashMap<String, bool>,
     folder_checked: Option<Instant>,
@@ -296,7 +321,9 @@ impl App {
             config,
             screen: Screen::Home,
             focus: (0, 0),
-            folder_scroll: 0.0,
+            row_scroll_x: [0.0; 3],
+            rows_scroll_y: 0.0,
+            web_helper: find_web_helper(),
             folder_ok: HashMap::new(),
             folder_checked: None,
             picture_tx,
@@ -432,7 +459,7 @@ impl App {
             child,
             started,
             back,
-            disc,
+            kind,
             stopping,
         } = &mut self.screen
         {
@@ -451,13 +478,15 @@ impl App {
                 Ok(Some(status))
                     if !status.success() && started.elapsed() < Duration::from_secs(10) =>
                 {
-                    let text = if *disc {
-                        format!(
+                    let text = match kind {
+                        PlayKind::Disc => format!(
                             "The player stopped right away ({status}).\n\
                              Is MakeMKV installed and registered? See scripts/setup.sh."
-                        )
-                    } else {
-                        format!("This file could not be played ({status}).")
+                        ),
+                        PlayKind::File => format!("This file could not be played ({status})."),
+                        PlayKind::Website => {
+                            format!("The website could not be opened ({status}).")
+                        }
                     };
                     next = Some(Screen::Message {
                         text,
@@ -538,7 +567,7 @@ impl App {
                 (Some(ScanState::Done(info)), _) => {
                     (info.name.clone().unwrap_or(fallback), "Blu-ray".to_string())
                 }
-                (_, Some((label, f))) => (fallback, progress_text(label, f)),
+                (_, Some((label, _))) => (fallback, format!("{label}…")),
                 _ => (fallback, "Blu-ray".to_string()),
             };
             return BlurayTile {
@@ -613,7 +642,7 @@ impl App {
                     child,
                     started: Instant::now(),
                     back: None,
-                    disc: true,
+                    kind: PlayKind::Disc,
                     stopping: None,
                 }
             }
@@ -679,6 +708,44 @@ impl App {
         };
     }
 
+    /// Open a website in the locked-down browser window (`familynovice-web`).
+    fn open_website(&mut self, site: &crate::config::WebsiteSettings) {
+        let Some(helper) = self.web_helper.clone() else {
+            return;
+        };
+        let rules = match sites::rules_for(&site.url, site.allow_subdomains) {
+            Ok(rules) => rules,
+            Err(e) => {
+                self.screen = message(format!("This website can't be opened: {e}"));
+                return;
+            }
+        };
+        let mut cmd = std::process::Command::new(helper);
+        cmd.arg("--url")
+            .arg(&site.url)
+            .arg("--title")
+            .arg(&site.name);
+        for rule in &rules {
+            cmd.arg("--allow").arg(rule.to_arg());
+        }
+        if let Some(dir) = store::web_data_dir() {
+            cmd.arg("--data-dir").arg(dir);
+        }
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null());
+        log::info!("opening website {}: {cmd:?}", site.id);
+        self.screen = match cmd.spawn() {
+            Ok(child) => Screen::Playing {
+                child,
+                started: Instant::now(),
+                back: None,
+                kind: PlayKind::Website,
+                stopping: None,
+            },
+            Err(e) => message(format!("Could not open the website: {e}")),
+        };
+    }
+
     /// Play a video file like the disc's main movie: languages, resume tracking, no writes.
     fn start_video(&mut self, browse: Browse, entry: Entry, start_secs: Option<f64>) {
         let (config, _) = self.config();
@@ -701,7 +768,7 @@ impl App {
                     child,
                     started: Instant::now(),
                     back: Some(select(browse, &entry.path)),
-                    disc: false,
+                    kind: PlayKind::File,
                     stopping: None,
                 }
             }
@@ -753,33 +820,66 @@ impl App {
         let (config, _) = self.config();
         let folders = &config.folders;
         let margin = 80.0 * s;
-        let tile_size = Vec2::new(300.0 * s, 340.0 * s);
+        let tile_size = Vec2::new(340.0 * s, 380.0 * s);
         let gap = 40.0 * s;
         let home = matches!(self.screen, Screen::Home);
 
+        let websites = &config.websites;
+        let mut rows = vec![RowKind::Discs];
+        if !folders.is_empty() {
+            rows.push(RowKind::Folders);
+        }
+        if !websites.is_empty() {
+            rows.push(RowKind::Websites);
+        }
+        let row_len = |kind: RowKind| match kind {
+            RowKind::Discs => 1,
+            RowKind::Folders => folders.len(),
+            RowKind::Websites => websites.len(),
+        };
+
         // Focus navigation between the rows and tiles.
-        let row_lens = [1, folders.len()];
-        let rows = if folders.is_empty() { 1 } else { 2 };
         if home {
             let (mut row, mut col) = self.focus;
             if keys.up && row > 0 {
                 row -= 1;
             }
-            if keys.down && row + 1 < rows {
+            if keys.down && row + 1 < rows.len() {
                 row += 1;
             }
-            row = row.min(rows - 1);
+            row = row.min(rows.len() - 1);
             if keys.left {
                 col = col.saturating_sub(1);
             }
             if keys.right {
                 col += 1;
             }
-            col = col.min(row_lens[row] - 1);
+            col = col.min(row_len(rows[row]) - 1);
             self.focus = (row, col);
         }
 
-        painter.text(
+        // Vertical layout: rows scroll so that the focused row is fully visible.
+        let top = 115.0 * s;
+        let row_h = 65.0 * s + tile_size.y + 30.0 * s;
+        let focused_y = self.focus.0 as f32 * row_h;
+        let visible_h = screen_rect.height() - top;
+        if focused_y < self.rows_scroll_y {
+            self.rows_scroll_y = focused_y;
+        } else if focused_y + row_h > self.rows_scroll_y + visible_h {
+            self.rows_scroll_y = focused_y + row_h - visible_h;
+        }
+        let scroll_y = ctx.animate_value_with_time(
+            ui.make_persistent_id("rows-scroll"),
+            self.rows_scroll_y,
+            0.2,
+        );
+        let painter = &painter.with_clip_rect(Rect::from_min_max(
+            Pos2::new(screen_rect.min.x, screen_rect.min.y + top - 10.0 * s),
+            screen_rect.max,
+        ));
+
+        // Header (above the scrolling rows)
+        ui.painter().text(
             screen_rect.min + Vec2::new(margin, 50.0 * s),
             Align2::LEFT_TOP,
             "familynovice",
@@ -787,80 +887,89 @@ impl App {
             TEXT_DIM,
         );
 
-        // Row 0: discs
-        let row_label = |y: f32, text: &str| {
+        let tile = self.bluray_tile();
+        let mut activate = None;
+        let step = tile_size.x + gap;
+        let visible_w = screen_rect.width() - 2.0 * margin;
+        for (r, &kind) in rows.iter().enumerate() {
+            let y = top + r as f32 * row_h - scroll_y;
+            if y > screen_rect.height() || y + row_h < 0.0 {
+                continue;
+            }
+            let label = match kind {
+                RowKind::Discs => "Discs",
+                RowKind::Folders => "Folders",
+                RowKind::Websites => "Websites",
+            };
             painter.text(
                 screen_rect.min + Vec2::new(margin, y),
                 Align2::LEFT_TOP,
-                text,
+                label,
                 FontId::proportional(38.0 * s),
                 TEXT,
             );
-        };
-        let mut activate = None;
-        let discs_y = 130.0 * s;
-        row_label(discs_y, "Discs");
-        let tile = self.bluray_tile();
-        let tile_rect = Rect::from_min_size(
-            screen_rect.min + Vec2::new(margin, discs_y + 65.0 * s),
-            tile_size,
-        );
-        let response = ui.interact(
-            tile_rect,
-            ui.make_persistent_id("tile-disc"),
-            Sense::click(),
-        );
-        let focus = ctx.animate_bool_with_time(
-            ui.make_persistent_id("focus-disc"),
-            home && self.focus == (0, 0),
-            0.15,
-        );
-        paint_bluray_tile(painter, tile_rect, s, &tile, focus);
-        if home && response.clicked() {
-            self.focus = (0, 0);
-            activate = Some((0, 0));
-        }
-
-        // Row 1: folders
-        if !folders.is_empty() {
-            let y = discs_y + 65.0 * s + tile_size.y + 45.0 * s;
-            row_label(y, "Folders");
-            let step = tile_size.x + gap;
-            let visible = screen_rect.width() - 2.0 * margin;
-            if self.focus.0 == 1 {
-                // Keep the focused tile on screen.
+            // Horizontal scroll: keep the focused tile on screen.
+            let sx = &mut self.row_scroll_x[kind as usize];
+            if self.focus.0 == r {
                 let left = self.focus.1 as f32 * step;
                 let right = left + tile_size.x;
-                if left < self.folder_scroll {
-                    self.folder_scroll = left;
-                } else if right > self.folder_scroll + visible {
-                    self.folder_scroll = right - visible;
+                if left < *sx {
+                    *sx = left;
+                } else if right > *sx + visible_w {
+                    *sx = right - visible_w;
                 }
             }
-            for (i, folder) in folders.iter().enumerate() {
-                let x = margin + i as f32 * step - self.folder_scroll;
+            let sx = *sx;
+            for i in 0..row_len(kind) {
+                let x = margin + i as f32 * step - sx;
                 if x + tile_size.x < 0.0 || x > screen_rect.width() {
                     continue;
                 }
                 let rect =
                     Rect::from_min_size(screen_rect.min + Vec2::new(x, y + 65.0 * s), tile_size);
-                let available = self.folder_ok.get(&folder.id).copied().unwrap_or(false);
-                let id = ui.make_persistent_id(("tile-folder", &folder.id));
+                let id = ui.make_persistent_id(("tile", kind as usize, i));
                 let response = ui.interact(rect, id, Sense::click());
                 let focus = ctx.animate_bool_with_time(
-                    ui.make_persistent_id(("focus-folder", &folder.id)),
-                    home && self.focus == (1, i),
+                    ui.make_persistent_id(("focus", kind as usize, i)),
+                    home && self.focus == (r, i),
                     0.15,
                 );
-                let subtitle = if available {
-                    folder_kinds(folder)
-                } else {
-                    "Not available".into()
-                };
-                paint_folder_tile(painter, rect, s, &folder.name, &subtitle, available, focus);
+                match kind {
+                    RowKind::Discs => paint_bluray_tile(painter, rect, s, &tile, focus),
+                    RowKind::Folders => {
+                        let folder = &folders[i];
+                        let available = self.folder_ok.get(&folder.id).copied().unwrap_or(false);
+                        let subtitle = if available {
+                            folder_kinds(folder)
+                        } else {
+                            "Not available".into()
+                        };
+                        paint_folder_tile(
+                            painter,
+                            rect,
+                            s,
+                            &folder.name,
+                            &subtitle,
+                            available,
+                            focus,
+                        );
+                    }
+                    RowKind::Websites => {
+                        let site = &websites[i];
+                        let available = self.web_helper.is_some();
+                        let subtitle = if available {
+                            website_domain(site)
+                        } else {
+                            "Not installed".into()
+                        };
+                        paint_website_tile(
+                            painter, rect, s, &site.name, &subtitle, available, focus,
+                        );
+                    }
+                }
                 if home && response.clicked() {
-                    self.focus = (1, i);
-                    activate = Some((1, i));
+                    self.focus = (r, i);
+                    activate = Some((r, i));
                 }
             }
         }
@@ -869,18 +978,23 @@ impl App {
             activate = Some(self.focus);
         }
         if let Some((row, col)) = activate {
-            match row {
-                0 if tile.available => {
+            match rows.get(row) {
+                Some(RowKind::Discs) if tile.available => {
                     self.screen = Screen::Choose {
                         selected: 0,
                         resume: tile.disc_id.as_deref().and_then(resume::load),
                     };
                 }
-                1 => {
+                Some(RowKind::Folders) => {
                     if let Some(folder) = folders.get(col)
                         && self.folder_ok.get(&folder.id).copied().unwrap_or(false)
                     {
                         self.screen = Screen::Browse(Browse::open(folder, Vec::new(), None));
+                    }
+                }
+                Some(RowKind::Websites) => {
+                    if let Some(site) = websites.get(col) {
+                        self.open_website(site);
                     }
                 }
                 _ => {}
@@ -1461,6 +1575,97 @@ impl App {
     }
 }
 
+/// `familynovice-web` next to our own binary (development and installed layout), else in PATH.
+fn find_web_helper() -> Option<PathBuf> {
+    let name = "familynovice-web";
+    let next_to_us = std::env::current_exe()
+        .ok()
+        .map(|exe| exe.with_file_name(name))
+        .filter(|p| p.is_file());
+    let found = next_to_us.or_else(|| {
+        std::env::var_os("PATH")?
+            .to_str()?
+            .split(':')
+            .map(|dir| PathBuf::from(dir).join(name))
+            .find(|p| p.is_file())
+    });
+    if found.is_none() {
+        log::warn!("{name} not found: websites can't be opened (cargo build -p familynovice-web)");
+    }
+    found
+}
+
+/// "kika.de" for a website tile.
+fn website_domain(site: &crate::config::WebsiteSettings) -> String {
+    match sites::rules_for(&site.url, site.allow_subdomains) {
+        Ok(rules) => rules
+            .first()
+            .map(|r| r.to_arg().trim_start_matches("*.").to_string())
+            .unwrap_or_default(),
+        Err(_) => "Invalid address".into(),
+    }
+}
+
+fn paint_website_tile(
+    painter: &egui::Painter,
+    rect: Rect,
+    s: f32,
+    title: &str,
+    subtitle: &str,
+    available: bool,
+    focus: f32,
+) {
+    let alpha = if available { 1.0 } else { UNAVAILABLE_ALPHA };
+    let rect = rect.expand(focus * 12.0 * s);
+    let radius = CornerRadius::same((18.0 * s) as u8);
+    painter.rect_filled(rect, radius, TILE_BG.gamma_multiply(alpha));
+    if focus > 0.0 {
+        painter.rect_stroke(
+            rect,
+            radius,
+            Stroke::new(4.0 * s, ACCENT.gamma_multiply(focus)),
+            StrokeKind::Outside,
+        );
+    }
+    let center = Pos2::new(rect.center().x, rect.min.y + rect.height() * 0.36);
+    paint_globe_icon(painter, center, rect.width() * 0.27, alpha);
+    paint_tile_texts(painter, rect, s, title, subtitle, alpha);
+}
+
+/// Our own globe icon: a circle with meridians and parallels.
+fn paint_globe_icon(painter: &egui::Painter, center: Pos2, r: f32, alpha: f32) {
+    let fill = Color32::from_rgb(0x2f, 0xa3, 0x8a).gamma_multiply(alpha);
+    let line = Stroke::new(
+        r * 0.06,
+        Color32::from_rgb(0xd8, 0xf5, 0xee).gamma_multiply(alpha),
+    );
+    painter.circle_filled(center, r, fill);
+    painter.circle_stroke(center, r, line);
+    // Meridians: ellipses of decreasing width.
+    for w in [0.35, 0.75] {
+        let points: Vec<Pos2> = (0..=48)
+            .map(|k| {
+                let t = k as f32 / 48.0 * std::f32::consts::TAU;
+                center + Vec2::new(t.cos() * r * w, t.sin() * r)
+            })
+            .collect();
+        painter.add(egui::Shape::line(points, line));
+    }
+    painter.line_segment(
+        [center - Vec2::new(0.0, r), center + Vec2::new(0.0, r)],
+        line,
+    );
+    // Parallels
+    for dy in [-0.5f32, 0.0, 0.5] {
+        let half = r * (1.0 - dy * dy).sqrt();
+        let y = center.y + dy * r;
+        painter.line_segment(
+            [Pos2::new(center.x - half, y), Pos2::new(center.x + half, y)],
+            line,
+        );
+    }
+}
+
 /// Ask a player to quit (SIGTERM): mpv/VLC exit cleanly, so mpv still reports its last
 /// position to the resume monitor. `poll_background` kills it if it doesn't exit in time.
 fn stop_player(pid: u32) {
@@ -1510,32 +1715,9 @@ fn paint_folder_tile(
             StrokeKind::Outside,
         );
     }
-    let center = Pos2::new(rect.center().x, rect.min.y + rect.height() * 0.38);
-    paint_folder_icon(painter, center, rect.width() * 0.62, alpha);
-    painter.text(
-        Pos2::new(rect.center().x, rect.max.y - 110.0 * s),
-        Align2::CENTER_TOP,
-        fit_text(
-            painter,
-            title,
-            &FontId::proportional(30.0 * s),
-            rect.width() - 30.0 * s,
-        ),
-        FontId::proportional(30.0 * s),
-        c(TEXT),
-    );
-    painter.text(
-        Pos2::new(rect.center().x, rect.max.y - 65.0 * s),
-        Align2::CENTER_TOP,
-        fit_text(
-            painter,
-            subtitle,
-            &FontId::proportional(20.0 * s),
-            rect.width() - 30.0 * s,
-        ),
-        FontId::proportional(20.0 * s),
-        c(TEXT_DIM),
-    );
+    let center = Pos2::new(rect.center().x, rect.min.y + rect.height() * 0.36);
+    paint_folder_icon(painter, center, rect.width() * 0.58, alpha);
+    paint_tile_texts(painter, rect, s, title, subtitle, alpha);
 }
 
 /// A folder: tab plus body, `width` wide, centered on `center`.
@@ -1623,52 +1805,58 @@ fn paint_bluray_tile(painter: &egui::Painter, rect: Rect, s: f32, tile: &BlurayT
             StrokeKind::Outside,
         );
     }
-    let center = Pos2::new(rect.center().x, rect.min.y + rect.height() * 0.38);
-    paint_disc_icon(painter, center, rect.width() * 0.32, alpha);
-    painter.text(
-        Pos2::new(rect.center().x, rect.max.y - 110.0 * s),
-        Align2::CENTER_TOP,
-        fit_text(
-            painter,
-            &tile.title,
-            &FontId::proportional(30.0 * s),
-            rect.width() - 30.0 * s,
-        ),
-        FontId::proportional(30.0 * s),
-        c(TEXT),
-    );
-    // Shrink long subtitles (e.g. "Unlocking copy protection… 56%") to fit the tile.
-    let max_width = rect.width() - 40.0 * s;
-    let mut size = 22.0 * s;
-    let width = painter
-        .layout_no_wrap(tile.subtitle.clone(), FontId::proportional(size), TEXT_DIM)
-        .size()
-        .x;
-    if width > max_width {
-        size *= max_width / width;
-    }
-    painter.text(
-        Pos2::new(rect.center().x, rect.max.y - 65.0 * s),
-        Align2::CENTER_TOP,
-        &tile.subtitle,
-        FontId::proportional(size),
-        c(TEXT_DIM),
-    );
+    let center = Pos2::new(rect.center().x, rect.min.y + rect.height() * 0.36);
+    paint_disc_icon(painter, center, rect.width() * 0.30, alpha);
+    paint_tile_texts(painter, rect, s, &tile.title, &tile.subtitle, alpha);
     if let Some(f) = tile.progress {
+        // Bar plus a fixed spot for the percentage, so the text above never moves.
+        let pct_width = 62.0 * s;
         let track = Rect::from_min_size(
-            Pos2::new(rect.min.x + 40.0 * s, rect.max.y - 26.0 * s),
-            Vec2::new(rect.width() - 80.0 * s, 8.0 * s),
+            Pos2::new(rect.min.x + 30.0 * s, rect.max.y - 32.0 * s),
+            Vec2::new(rect.width() - 60.0 * s - pct_width, 8.0 * s),
         );
         let radius = CornerRadius::same((4.0 * s) as u8);
         painter.rect_filled(track, radius, c(Color32::from_rgb(0x3a, 0x40, 0x55)));
         let mut bar = track;
         bar.set_width(track.width() * f.clamp(0.0, 1.0));
         painter.rect_filled(bar, radius, c(ACCENT));
+        painter.text(
+            Pos2::new(rect.max.x - 30.0 * s, track.center().y),
+            Align2::RIGHT_CENTER,
+            percent(f),
+            FontId::proportional(20.0 * s),
+            c(TEXT_DIM),
+        );
     }
 }
 
-fn progress_text(label: &str, fraction: f32) -> String {
-    format!("{label}… {}%", (fraction * 100.0).round() as u32)
+/// Title and subtitle of a tile, in fixed sizes; too long text ends with "…".
+fn paint_tile_texts(
+    painter: &egui::Painter,
+    rect: Rect,
+    s: f32,
+    title: &str,
+    subtitle: &str,
+    alpha: f32,
+) {
+    let max_width = rect.width() - 30.0 * s;
+    for (text, size, y, color) in [
+        (title, TILE_TITLE_FONT, TILE_TITLE_Y, TEXT),
+        (subtitle, TILE_SUBTITLE_FONT, TILE_SUBTITLE_Y, TEXT_DIM),
+    ] {
+        let font = FontId::proportional(size * s);
+        painter.text(
+            Pos2::new(rect.center().x, rect.max.y - y * s),
+            Align2::CENTER_TOP,
+            fit_text(painter, text, &font, max_width),
+            font,
+            color.gamma_multiply(alpha),
+        );
+    }
+}
+
+fn percent(fraction: f32) -> String {
+    format!("{}%", (fraction.clamp(0.0, 1.0) * 100.0).round() as u32)
 }
 
 /// Our own optical disc icon (not the Blu-ray logo): a shiny disc with a blue tint.
@@ -1737,7 +1925,10 @@ fn paint_chooser(
                 Choice::Back => MenuItem::new("Back", ""),
             };
             if waiting {
-                item.hint = tile.subtitle.clone();
+                item.hint = match tile.progress {
+                    Some(f) => format!("{} {}", tile.subtitle, percent(f)),
+                    None => tile.subtitle.clone(),
+                };
                 item.enabled = false;
             }
             item

@@ -1,0 +1,12 @@
+[package]
+name = "familynovice-web"
+version = "0.1.0"
+edition = "2024"
+description = "Locked-down fullscreen browser window for familynovice (WebKitGTK via wry)"
+
+[dependencies]
+gtk = "0.18"
+tao = "0.37.2"
+url = "2.5.8"
+webkit2gtk = "2.0"
+wry = "0.57.1"
