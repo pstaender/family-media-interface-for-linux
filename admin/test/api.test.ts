@@ -22,7 +22,7 @@ beforeAll(async () => {
         const { command } = request;
         received.push(command);
         requests.push(request);
-        const status = { ok: true, config_version: 1, config_error: null, locked: false, lock_reason: null, remaining_secs: 600, used_today_secs: 1200, unlocked_until: null };
+        const status = { ok: true, config_version: 1, config_error: null, locked: false, lock_reason: null, remaining_secs: 600, used_today_secs: 1200, used_week_secs: 5400, unlocked_until: null };
         socket.write(`${JSON.stringify(command === "status" ? status : { ok: true })}\n`);
       }
     });
@@ -153,6 +153,7 @@ test("status comes from the media center", async () => {
     lockReason: null,
     remainingSecs: 600,
     usedTodaySecs: 1200,
+    usedWeekSecs: 5400,
     unlockedUntil: null,
   });
 });

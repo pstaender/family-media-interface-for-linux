@@ -310,6 +310,7 @@ export function createAdminServer(options: AdminOptions) {
               lockReason: reply.lock_reason ?? null,
               remainingSecs: reply.remaining_secs ?? null,
               usedTodaySecs: reply.used_today_secs ?? 0,
+              usedWeekSecs: reply.used_week_secs ?? 0,
               unlockedUntil: reply.unlocked_until ?? null,
             });
           }

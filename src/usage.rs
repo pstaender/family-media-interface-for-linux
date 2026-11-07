@@ -118,6 +118,16 @@ impl Tracker {
             .unwrap_or(0)
     }
 
+    /// Seconds of use from this week's Monday up to and including `date`.
+    pub fn used_this_week(&self, date: NaiveDate) -> u64 {
+        let monday = crate::limits::monday_of(date);
+        monday
+            .iter_days()
+            .take_while(|d| *d <= date)
+            .map(|d| self.used_on(d))
+            .sum()
+    }
+
     /// Input for `limits::evaluate`.
     pub fn situation(&self) -> Situation {
         Situation {
@@ -233,6 +243,10 @@ mod tests {
         t.add_usage(day, 30);
         t.add_usage(day, 45);
         assert_eq!(t.used_on(day), 75);
+        // 2026-11-07 is a Saturday; Monday 2026-11-02 counts, Sunday 2026-11-01 doesn't.
+        t.add_usage(crate::config::parse_date("2026-11-02").unwrap(), 100);
+        t.add_usage(crate::config::parse_date("2026-11-01").unwrap(), 1000);
+        assert_eq!(t.used_this_week(day), 175);
         assert_eq!(t.situation().usage.get(&day), Some(&75));
 
         let now = Local::now();

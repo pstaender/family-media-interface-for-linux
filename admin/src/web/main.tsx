@@ -181,6 +181,7 @@ type Status = {
   lockReason?: string | null;
   remainingSecs?: number | null;
   usedTodaySecs?: number;
+  usedWeekSecs?: number;
   unlockedUntil?: number | null;
 };
 
@@ -330,6 +331,7 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
     case "parental/limits":
       content = (
         <LimitsTab
+          status={status}
           limits={config.parental.limits}
           onChange={(limits) => setConfig({ ...config, parental: { ...config.parental, limits } })}
         />
@@ -620,10 +622,79 @@ function scopeFor(kind: Scope["kind"]): Scope {
   }
 }
 
-function LimitsTab({ limits, onChange }: { limits: LimitRule[]; onChange: (l: LimitRule[]) => void }) {
+/** Does a scope apply to today? */
+function appliesToday(scope: Scope): boolean {
+  switch (scope.kind) {
+    case "today":
+      return scope.date === todayIso();
+    case "weekdays":
+      return scope.days.includes(WEEKDAYS[(new Date().getDay() + 6) % 7]!);
+    case "this_week":
+      return scope.week_of === mondayIso();
+    default:
+      return true;
+  }
+}
+
+function UsageSummary({ status }: { status: Status | null }) {
+  if (!status?.running) {
+    return (
+      <section className="card">
+        <p className="hint" style={{ margin: 0 }}>Usage is shown while the media center is running.</p>
+      </section>
+    );
+  }
+  return (
+    <section className="card usage">
+      <div>
+        <span className="hint">Used today</span>
+        <strong>{minutesText(status.usedTodaySecs ?? 0)}</strong>
+      </div>
+      <div>
+        <span className="hint">Used this week</span>
+        <strong>{minutesText(status.usedWeekSecs ?? 0)}</strong>
+      </div>
+      <div>
+        <span className="hint">{status.locked ? "Status" : "Left right now"}</span>
+        <strong>
+          {status.locked ? "Locked" : status.remainingSecs != null ? minutesText(status.remainingSecs) : "No limit"}
+        </strong>
+      </div>
+    </section>
+  );
+}
+
+/** "35 of 60 min used" with a bar, for a budget that applies today / this week. */
+function BudgetUsage({ rule, status }: { rule: Extract<LimitRule, { type: "budget" }>; status: Status | null }) {
+  if (!status?.running || !appliesToday(rule.scope)) return null;
+  const week = rule.scope.kind === "this_week";
+  const used = (week ? status.usedWeekSecs : status.usedTodaySecs) ?? 0;
+  const share = Math.min(1, used / (rule.minutes * 60));
+  return (
+    <div className="budget-usage">
+      <div className="bar">
+        <div className={share >= 1 ? "full" : ""} style={{ width: `${share * 100}%` }} />
+      </div>
+      <span className="hint" style={{ margin: 0 }}>
+        {week ? "This week" : "Today"}: {minutesText(used)} of {minutesText(rule.minutes * 60)} used
+      </span>
+    </div>
+  );
+}
+
+function LimitsTab({
+  limits,
+  onChange,
+  status,
+}: {
+  limits: LimitRule[];
+  onChange: (l: LimitRule[]) => void;
+  status: Status | null;
+}) {
   const update = (i: number, rule: LimitRule) => onChange(limits.map((r, j) => (j === i ? rule : r)));
   return (
     <>
+      <UsageSummary status={status} />
       <section className="card">
         <p className="hint" style={{ margin: 0 }}>
           When a limit is reached, the media center stops what's playing and locks. It can be unlocked with the
@@ -641,6 +712,7 @@ function LimitsTab({ limits, onChange }: { limits: LimitRule[]; onChange: (l: Li
         <LimitEditor
           key={i}
           rule={rule}
+          status={status}
           onChange={(r) => update(i, r)}
           onRemove={() => onChange(limits.filter((_, j) => j !== i))}
         />
@@ -657,7 +729,12 @@ function LimitsTab({ limits, onChange }: { limits: LimitRule[]; onChange: (l: Li
   );
 }
 
-function LimitEditor(props: { rule: LimitRule; onChange: (r: LimitRule) => void; onRemove: () => void }) {
+function LimitEditor(props: {
+  rule: LimitRule;
+  status: Status | null;
+  onChange: (r: LimitRule) => void;
+  onRemove: () => void;
+}) {
   const { rule, onChange } = props;
   const scope = rule.scope;
   const setScope = (s: Scope) => onChange({ ...rule, scope: s });
@@ -729,6 +806,7 @@ function LimitEditor(props: { rule: LimitRule; onChange: (r: LimitRule) => void;
           </button>
         )}
       </div>
+      {rule.type === "budget" && <BudgetUsage rule={rule} status={props.status} />}
       {scope.kind === "weekdays" && (
         <div className="row days">
           {WEEKDAYS.map((d) => (

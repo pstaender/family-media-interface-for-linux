@@ -4,7 +4,7 @@
 //! - `{"command":"reload"}` → `{"ok":true}` or `{"ok":false,"error":"…"}`
 //! - `{"command":"status"}` → `{"ok":true,"config_version":1,"config_error":null,
 //!   "locked":false,"lock_reason":null,"remaining_secs":1200,"used_today_secs":2400,
-//!   "unlocked_until":null}`
+//!   "used_week_secs":5400,"unlocked_until":null}`
 //! - `{"command":"unlock","minutes":30}` / `{"command":"unlock","rest_of_day":true}`:
 //!   lifts the limits (and a parent's lock) for that time
 //! - `{"command":"end_unlock"}`: ends an unlock early; the time limits apply again
@@ -62,6 +62,7 @@ pub fn handle(line: &str, control: &Control) -> Value {
                 "lock_reason": reason,
                 "remaining_secs": remaining,
                 "used_today_secs": tracker.used_on(Local::now().date_naive()),
+                "used_week_secs": tracker.used_this_week(Local::now().date_naive()),
                 "unlocked_until": tracker.stored.unlocked_until,
             })
         }
