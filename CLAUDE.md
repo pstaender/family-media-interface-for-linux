@@ -102,11 +102,13 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   - Time up / outside the window / locked by a parent: players, music and websites are stopped
     and the lock screen appears (`src/lock.rs`): number pad (remote arrows + OK, digit keys,
     mouse); after the right PIN: 30 more minutes, 1 more hour or rest of today. Without a PIN:
-    "A parent can unlock it in the admin panel". A "N min left" notice shows in the last 5 min.
+    "A parent can unlock it in the admin panel". In the last 5 minutes a countdown ("Time left 4:32",
+    red in the last minute) shows in the top-right corner.
   - Lock button (padlock, top right of the home screen, only when a PIN is set): locks at
     once; reachable with "up" from the top row.
   - Admin panel → Parental control → Status: locked/unlocked, used today, time left, unlock
-    (30 min / 1 h / rest of today) and "Lock now" (control socket `unlock` / `lock`).
+    (30 min / 1 h / rest of today), "End unlock" (back to the time limits; locks only if the
+    time is used up) and "Lock now" (control socket `unlock` / `end_unlock` / `lock`).
 - **Touch/mouse:** folder browser, picture viewer and music player have a "‹ Back" button
   (no keyboard needed); the lock screen's number pad is clickable.
 - **10-foot UI:** usable from the couch with a remote, gamepad or keyboard (mouse optional).

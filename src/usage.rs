@@ -143,6 +143,12 @@ impl Tracker {
         self.save_now();
     }
 
+    /// End an unlock early: the normal limits apply again (doesn't lock by itself).
+    pub fn end_unlock(&mut self) {
+        self.stored.unlocked_until = None;
+        self.save_now();
+    }
+
     /// Lock now (admin panel). Ends any unlock.
     pub fn lock(&mut self) {
         self.stored.locked_by_parent = true;

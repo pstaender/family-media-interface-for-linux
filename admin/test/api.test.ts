@@ -193,10 +193,12 @@ test("unlock and lock are forwarded to the media center", async () => {
   requests.length = 0;
   expect((await call("POST", "/api/unlock", { minutes: 30 })).data).toEqual({ ok: true });
   expect((await call("POST", "/api/unlock", { rest_of_day: true })).data).toEqual({ ok: true });
+  expect((await call("POST", "/api/unlock/end")).data).toEqual({ ok: true });
   expect((await call("POST", "/api/lock")).data).toEqual({ ok: true });
   expect(requests).toEqual([
     { command: "unlock", minutes: 30 },
     { command: "unlock", rest_of_day: true },
+    { command: "end_unlock" },
     { command: "lock" },
   ]);
   for (const bad of [{}, { minutes: 0 }, { minutes: 2000 }, { minutes: "30" }]) {

@@ -675,7 +675,7 @@ impl App {
         }
     }
 
-    /// "5 min left" in the top-right corner during the last minutes.
+    /// Countdown in the top-right corner during the last 5 minutes.
     fn paint_time_warning(&self, painter: &egui::Painter, screen_rect: Rect, s: f32) {
         let status = self
             .tracker
@@ -692,29 +692,31 @@ impl App {
         if left > 5 * 60 {
             return;
         }
-        let minutes = (left + 59) / 60;
-        let text = if minutes <= 1 {
-            "1 min left".to_string()
-        } else {
-            format!("{minutes} min left")
-        };
-        let font = FontId::proportional(28.0 * s);
+        // Countdown m:ss; refreshed several times a second so no second is skipped.
+        self.ctx.request_repaint_after(Duration::from_millis(250));
+        let left = left.max(0);
+        let text = format!("Time left {}:{:02}", left / 60, left % 60);
+        let font = FontId::proportional(30.0 * s);
+        // Width from a fixed template, so the box doesn't change size every second.
         let size = painter
-            .layout_no_wrap(text.clone(), font.clone(), TEXT)
+            .layout_no_wrap("Time left 0:00".to_string(), font.clone(), TEXT)
             .size();
+        let box_size = size + Vec2::new(44.0 * s, 22.0 * s);
         let rect = Rect::from_min_size(
             Pos2::new(
                 // Left of the lock button.
-                screen_rect.max.x - size.x - 220.0 * s,
-                screen_rect.min.y + 36.0 * s,
+                screen_rect.max.x - 190.0 * s - box_size.x,
+                screen_rect.min.y + 38.0 * s,
             ),
-            size + Vec2::new(40.0 * s, 20.0 * s),
+            box_size,
         );
-        painter.rect_filled(
-            rect,
-            CornerRadius::same((rect.height() / 2.0) as u8),
-            Color32::from_rgb(0xd9, 0x7a, 0x1e),
-        );
+        // Orange, red in the last minute.
+        let color = if left <= 60 {
+            Color32::from_rgb(0xd6, 0x3a, 0x3a)
+        } else {
+            Color32::from_rgb(0xd9, 0x7a, 0x1e)
+        };
+        painter.rect_filled(rect, CornerRadius::same((rect.height() / 2.0) as u8), color);
         painter.text(rect.center(), Align2::CENTER_CENTER, text, font, TEXT);
     }
 

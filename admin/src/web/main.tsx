@@ -525,6 +525,7 @@ function StatusTab(props: { status: Status | null; reload: () => void; setNotice
     );
   }
   const unlockedUntil = status.unlockedUntil ? new Date(status.unlockedUntil * 1000) : null;
+  const unlockActive = !status.locked && unlockedUntil !== null && unlockedUntil > new Date();
   return (
     <>
       <section className={`card state ${status.locked ? "is-locked" : "is-open"}`}>
@@ -538,7 +539,7 @@ function StatusTab(props: { status: Status | null; reload: () => void; setNotice
                 : status.remainingSecs != null
                   ? `${minutesText(status.remainingSecs)} left`
                   : "No limit right now"}
-              {!status.locked && unlockedUntil && unlockedUntil > new Date()
+              {unlockActive
                 ? ` · unlocked until ${unlockedUntil.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}`
                 : ""}
             </p>
@@ -557,6 +558,18 @@ function StatusTab(props: { status: Status | null; reload: () => void; setNotice
           <button disabled={busy} onClick={() => act("/api/unlock", { rest_of_day: true }, "Unlocked for the rest of today.")}>Rest of today</button>
         </div>
       </section>
+      {unlockActive && (
+        <section className="card">
+          <h2>End unlock</h2>
+          <p className="hint">
+            Removes the remaining unlock time: the time limits apply again right away. If today's time is already
+            used up, the media center locks.
+          </p>
+          <button disabled={busy} onClick={() => act("/api/unlock/end", undefined, "Unlock ended. The time limits apply again.")}>
+            <Icon name="hourglass" size={16} /> End unlock
+          </button>
+        </section>
+      )}
       <section className="card">
         <h2>Lock now</h2>
         <p className="hint">

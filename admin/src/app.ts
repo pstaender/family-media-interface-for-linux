@@ -260,6 +260,16 @@ export function createAdminServer(options: AdminOptions) {
         ),
       },
 
+      "/api/unlock/end": {
+        POST: api(
+          async () => {
+            const reply = await sendCommand(socketPath, "end_unlock");
+            return reply.ok ? json({ ok: true }) : json({ error: reply.error }, 502);
+          },
+          { mutating: true },
+        ),
+      },
+
       "/api/lock": {
         POST: api(
           async () => {

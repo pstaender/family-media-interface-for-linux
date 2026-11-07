@@ -7,6 +7,7 @@
 //!   "unlocked_until":null}`
 //! - `{"command":"unlock","minutes":30}` / `{"command":"unlock","rest_of_day":true}`:
 //!   lifts the limits (and a parent's lock) for that time
+//! - `{"command":"end_unlock"}`: ends an unlock early; the time limits apply again
 //! - `{"command":"lock"}`: locks the media center until it is unlocked
 //! - `{"command":"restart"}` → not supported yet (`ok: false`)
 
@@ -77,6 +78,15 @@ pub fn handle(line: &str, control: &Control) -> Value {
             let mut tracker = control.tracker.lock().unwrap_or_else(|p| p.into_inner());
             tracker.unlock(Local::now(), minutes);
             log::info!("unlocked from the admin panel ({minutes:?} minutes)");
+            json!({"ok": true})
+        }
+        Some("end_unlock") => {
+            control
+                .tracker
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .end_unlock();
+            log::info!("unlock ended from the admin panel");
             json!({"ok": true})
         }
         Some("lock") => {
@@ -205,6 +215,14 @@ mod tests {
             handle(r#"{"command":"unlock","rest_of_day":true}"#, &control),
             json!({"ok": true})
         );
+        assert_eq!(
+            handle(r#"{"command":"end_unlock"}"#, &control),
+            json!({"ok": true})
+        );
+        let tracker = control.tracker.lock().unwrap();
+        assert_eq!(tracker.stored.unlocked_until, None);
+        assert!(!tracker.stored.locked_by_parent);
+        drop(tracker);
         for bad in [
             r#"{"command":"unlock"}"#,
             r#"{"command":"unlock","minutes":0}"#,
