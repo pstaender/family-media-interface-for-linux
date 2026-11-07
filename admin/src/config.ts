@@ -4,7 +4,6 @@
 export const CONFIG_VERSION = 1;
 const MAX_LANGUAGES = 10;
 const MAX_FOLDERS = 50;
-const MAX_EXTENSIONS = 20;
 const MAX_NAME_CHARS = 60;
 const MAX_PATH_BYTES = 4096;
 
@@ -26,8 +25,6 @@ export interface FolderSettings {
   video: boolean;
   audio: boolean;
   images: boolean;
-  /** Extra extensions, lowercase without dot. */
-  extensions: string[];
 }
 
 export interface Config {
@@ -65,6 +62,7 @@ export function isNormalizedAbsolutePath(path: string): boolean {
 
 function validateFolder(input: unknown): FolderSettings | string {
   if (!isObject(input)) return "must be an object";
+  // "extensions" (removed option) is still accepted from older config files, but ignored.
   const extra = unknownKey(input, ["id", "name", "path", "video", "audio", "images", "extensions"], "folder");
   if (extra) return extra;
   const { id, name, path } = input;
@@ -81,27 +79,13 @@ function validateFolder(input: unknown): FolderSettings | string {
   if (typeof path !== "string" || !isNormalizedAbsolutePath(path)) {
     return `path "${String(path)}" must be an absolute path without '.', '..' or empty parts`;
   }
-  const folder: FolderSettings = { id, name, path, video: false, audio: false, images: false, extensions: [] };
+  const folder: FolderSettings = { id, name, path, video: false, audio: false, images: false };
   for (const key of ["video", "audio", "images"] as const) {
     if (input[key] === undefined) continue;
     if (typeof input[key] !== "boolean") return `${key}: must be true or false`;
     folder[key] = input[key];
   }
-  if (input.extensions !== undefined) {
-    const exts = input.extensions;
-    if (!Array.isArray(exts)) return "extensions: must be a list";
-    if (exts.length > MAX_EXTENSIONS) return `at most ${MAX_EXTENSIONS} extensions`;
-    const seen = new Set<string>();
-    for (const ext of exts) {
-      if (typeof ext !== "string" || !/^[a-z0-9]{1,10}$/.test(ext)) {
-        return `extension "${String(ext)}" must be 1-10 lowercase letters/digits, without dot`;
-      }
-      if (seen.has(ext)) return `extension "${ext}" is listed twice`;
-      seen.add(ext);
-    }
-    folder.extensions = exts as string[];
-  }
-  if (!(folder.video || folder.audio || folder.images || folder.extensions.length > 0)) {
+  if (!(folder.video || folder.audio || folder.images)) {
     return "choose at least one kind of file to show";
   }
   return folder;

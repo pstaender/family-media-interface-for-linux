@@ -10,11 +10,13 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Key, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
 };
 
+use crate::audio::AudioPlayer;
 use crate::config::{Config, FolderSettings};
 use crate::control::SharedConfig;
 use crate::disc::{self, DriveReport, DriveState, MediaKind};
 use crate::library::{self, Entry, EntryKind, Filter};
 use crate::makemkv::{self, DiscInfo, ScanProgress};
+use crate::pictures::{self, Picture};
 use crate::player::{self, MovieOptions, PlayMode};
 use crate::{resume, store};
 
@@ -72,6 +74,17 @@ enum Screen {
     Ejecting,
     /// Browsing a configured folder.
     Browse(Browse),
+    /// Built-in picture viewer.
+    Picture(PictureView),
+    /// Built-in music player.
+    Music(MusicView),
+    /// A video that was played before: resume or start over?
+    VideoChoose {
+        back: Browse,
+        entry: Entry,
+        position: f64,
+        selected: usize,
+    },
     Playing {
         child: Child,
         started: Instant,
@@ -79,6 +92,8 @@ enum Screen {
         back: Option<Browse>,
         /// Started from a disc (for the error hint).
         disc: bool,
+        /// When the user asked to stop it (Esc / back): SIGTERM sent, SIGKILL after 2 s.
+        stopping: Option<Instant>,
     },
     Message {
         text: String,
@@ -129,6 +144,35 @@ impl Browse {
     }
 }
 
+struct PictureView {
+    back: Browse,
+    /// The folder's pictures.
+    files: Vec<Entry>,
+    index: usize,
+    texture: Option<egui::TextureHandle>,
+    /// Index of the picture in `texture`.
+    shown: Option<usize>,
+    /// Index of the picture being loaded.
+    requested: Option<usize>,
+    error: Option<String>,
+}
+
+struct MusicView {
+    back: Browse,
+    player: AudioPlayer,
+    /// The folder's music files; playback started at `start`.
+    tracks: Vec<Entry>,
+    start: usize,
+}
+
+/// Select the entry with this path (when coming back to the browser).
+fn select(mut browse: Browse, path: &std::path::Path) -> Browse {
+    if let Some(i) = browse.entries.iter().position(|e| e.path == path) {
+        browse.selected = i;
+    }
+    browse
+}
+
 /// Keys pressed this frame.
 struct Keys {
     enter: bool,
@@ -146,7 +190,9 @@ impl Keys {
     fn read(ctx: &egui::Context) -> Self {
         ctx.input(|i| Keys {
             enter: i.key_pressed(Key::Enter) || i.key_pressed(Key::Space),
-            back: i.key_pressed(Key::Escape) || i.key_pressed(Key::Backspace),
+            back: i.key_pressed(Key::Escape)
+                || i.key_pressed(Key::Backspace)
+                || i.key_pressed(Key::BrowserBack),
             up: i.key_pressed(Key::ArrowUp),
             down: i.key_pressed(Key::ArrowDown),
             left: i.key_pressed(Key::ArrowLeft),
@@ -222,6 +268,8 @@ pub struct App {
     /// Whether each folder (by id) can be read; refreshed every few seconds.
     folder_ok: HashMap<String, bool>,
     folder_checked: Option<Instant>,
+    picture_tx: Sender<(PathBuf, Result<Picture, String>)>,
+    picture_rx: Receiver<(PathBuf, Result<Picture, String>)>,
 }
 
 impl App {
@@ -233,6 +281,7 @@ impl App {
         });
         let (scan_tx, scan_rx) = mpsc::channel();
         let (eject_tx, eject_rx) = mpsc::channel();
+        let (picture_tx, picture_rx) = mpsc::channel();
         Self {
             ctx,
             drives_rx,
@@ -248,6 +297,8 @@ impl App {
             folder_scroll: 0.0,
             folder_ok: HashMap::new(),
             folder_checked: None,
+            picture_tx,
+            picture_rx,
         }
     }
 
@@ -282,6 +333,33 @@ impl App {
                 ScanEvent::Done(key, Err(e)) => {
                     log::warn!("disc scan failed: {e}");
                     self.scans.insert(key, ScanState::Failed);
+                }
+            }
+        }
+        while let Ok((path, result)) = self.picture_rx.try_recv() {
+            if let Screen::Picture(view) = &mut self.screen
+                && let Some(index) = view.files.iter().position(|e| e.path == path)
+                && view.requested == Some(index)
+            {
+                match result {
+                    Ok(pic) => {
+                        let image = egui::ColorImage::from_rgba_unmultiplied(
+                            [pic.width, pic.height],
+                            &pic.rgba,
+                        );
+                        view.texture = Some(self.ctx.load_texture(
+                            "picture",
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        ));
+                        view.shown = Some(index);
+                        view.error = None;
+                    }
+                    Err(e) => {
+                        log::warn!("cannot show {}: {e}", path.display());
+                        view.error = Some(e);
+                        view.shown = None;
+                    }
                 }
             }
         }
@@ -352,10 +430,21 @@ impl App {
             started,
             back,
             disc,
+            stopping,
         } = &mut self.screen
         {
             match child.try_wait() {
-                Ok(None) => self.ctx.request_repaint_after(Duration::from_millis(500)),
+                Ok(None) => {
+                    if stopping.is_some_and(|t| t.elapsed() > Duration::from_secs(2)) {
+                        log::warn!("player did not quit, killing it");
+                        let _ = child.kill();
+                    }
+                    self.ctx.request_repaint_after(Duration::from_millis(250));
+                }
+                // Stopped by the user: back without an error message.
+                Ok(Some(_)) if stopping.is_some() => {
+                    next = Some(back.take().map_or(Screen::Home, Screen::Browse))
+                }
                 Ok(Some(status))
                     if !status.success() && started.elapsed() < Duration::from_secs(10) =>
                 {
@@ -500,6 +589,7 @@ impl App {
                     started: Instant::now(),
                     back: None,
                     disc: true,
+                    stopping: None,
                 }
             }
             Err(e) => message(format!(
@@ -509,42 +599,89 @@ impl App {
         };
     }
 
-    /// Open a file from the folder browser with the matching player/viewer.
+    /// Open a file from the folder browser: pictures and music inside familynovice, videos
+    /// with the same mpv setup as the disc's main movie.
     fn open_file(&mut self, browse: Browse, entry: Entry) {
-        let files: Vec<PathBuf> = browse
+        let same_kind: Vec<Entry> = browse
             .entries
             .iter()
             .filter(|e| e.kind == entry.kind)
-            .map(|e| e.path.clone())
+            .cloned()
             .collect();
-        let start = files.iter().position(|p| *p == entry.path).unwrap_or(0);
-        let cache = store::prepare_player_cache();
-        let conf = match (entry.kind, &cache) {
-            (EntryKind::Image, Some(dir)) => {
-                store::write_cache_file(dir, "image-input.conf", player::IMAGE_INPUT_CONF)
+        let index = same_kind
+            .iter()
+            .position(|e| e.path == entry.path)
+            .unwrap_or(0);
+        self.screen = match entry.kind {
+            EntryKind::Folder => Screen::Browse(browse),
+            EntryKind::Image => Screen::Picture(PictureView {
+                back: browse,
+                files: same_kind,
+                index,
+                texture: None,
+                shown: None,
+                requested: None,
+                error: None,
+            }),
+            EntryKind::Audio => {
+                let paths: Vec<PathBuf> = same_kind.iter().map(|e| e.path.clone()).collect();
+                let ctx = self.ctx.clone();
+                match AudioPlayer::start(&paths, index, move || ctx.request_repaint()) {
+                    Ok(player) => Screen::Music(MusicView {
+                        back: browse,
+                        player,
+                        tracks: same_kind,
+                        start: index,
+                    }),
+                    Err(e) => Screen::Message {
+                        text: e,
+                        back: Some(browse),
+                    },
+                }
             }
-            _ => None,
-        };
-        let Some(mut cmd) =
-            player::file_command(entry.kind, &files, start, cache.as_deref(), conf.as_deref())
-        else {
-            self.screen = Screen::Browse(browse);
-            return;
-        };
-        log::info!("opening {}: {cmd:?}", entry.path.display());
-        self.screen = match cmd.spawn() {
-            Ok(child) => Screen::Playing {
-                child,
-                started: Instant::now(),
-                back: Some(browse),
-                disc: false,
+            EntryKind::Video => match resume::load(&resume::file_key(&entry.path)) {
+                Some(position) => Screen::VideoChoose {
+                    back: browse,
+                    entry,
+                    position,
+                    selected: 0,
+                },
+                None => {
+                    self.start_video(browse, entry, None);
+                    return;
+                }
             },
+        };
+    }
+
+    /// Play a video file like the disc's main movie: languages, resume tracking, no writes.
+    fn start_video(&mut self, browse: Browse, entry: Entry, start_secs: Option<f64>) {
+        let (config, _) = self.config();
+        let cache = store::prepare_player_cache();
+        let socket = store::mpv_socket_path();
+        store::remove(&socket); // stale socket from an earlier run
+        let options = MovieOptions {
+            start_secs,
+            ipc_socket: Some(&socket),
+            audio_languages: &config.discs.audio_languages,
+            subtitle_languages: &config.discs.subtitle_languages,
+            cache_dir: cache.as_deref(),
+        };
+        let mut cmd = player::video_file_command(&entry.path, &options);
+        log::info!("playing {}: {cmd:?}", entry.path.display());
+        self.screen = match cmd.spawn() {
+            Ok(child) => {
+                resume::spawn_monitor(socket.clone(), resume::file_key(&entry.path));
+                Screen::Playing {
+                    child,
+                    started: Instant::now(),
+                    back: Some(select(browse, &entry.path)),
+                    disc: false,
+                    stopping: None,
+                }
+            }
             Err(e) => Screen::Message {
-                text: format!(
-                    "Could not open \"{}\" ({:?}): {e}",
-                    entry.name,
-                    cmd.get_program()
-                ),
+                text: format!("Could not start the player (mpv): {e}"),
                 back: Some(browse),
             },
         };
@@ -566,10 +703,14 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
-        if matches!(self.screen, Screen::Browse(_)) {
-            self.browse_screen(ui, &painter, screen_rect, s, &keys);
-        } else {
-            self.home_screen(ui, &painter, screen_rect, s, &keys);
+        match self.screen {
+            Screen::Browse(_) => self.browse_screen(ui, &painter, screen_rect, s, &keys),
+            Screen::Picture(_) => self.picture_screen(ui, &painter, screen_rect, s, &keys),
+            Screen::Music(_) => self.music_screen(ui, &painter, screen_rect, s, &keys),
+            Screen::VideoChoose { .. } => {
+                self.video_choose_screen(ui, &painter, screen_rect, s, &keys)
+            }
+            _ => self.home_screen(ui, &painter, screen_rect, s, &keys),
         }
     }
 }
@@ -723,7 +864,11 @@ impl App {
 
         // Overlays
         match &self.screen {
-            Screen::Home | Screen::Browse(_) => {}
+            Screen::Home
+            | Screen::Browse(_)
+            | Screen::Picture(_)
+            | Screen::Music(_)
+            | Screen::VideoChoose { .. } => {}
             Screen::Choose { selected, resume } => {
                 let (mut selected, resume) = (*selected, *resume);
                 let list = choices(resume, config.discs.allow_disc_menu);
@@ -778,14 +923,24 @@ impl App {
                     "The tray opens in a moment.",
                 );
             }
-            Screen::Playing { .. } => {
-                paint_overlay(
-                    painter,
-                    screen_rect,
-                    s,
-                    "Playing…",
-                    "Close the player to come back.",
-                );
+            Screen::Playing {
+                child, stopping, ..
+            } => {
+                let stop_now =
+                    stopping.is_none() && (keys.back || ctx.input(|i| i.pointer.any_click()));
+                let pid = child.id();
+                let body = if stopping.is_some() {
+                    "Stopping…"
+                } else {
+                    "Esc / Back: stop"
+                };
+                paint_overlay(painter, screen_rect, s, "Playing…", body);
+                if stop_now {
+                    stop_player(pid);
+                    if let Screen::Playing { stopping, .. } = &mut self.screen {
+                        *stopping = Some(Instant::now());
+                    }
+                }
             }
             Screen::Message { text, .. } => {
                 paint_overlay(painter, screen_rect, s, "Something went wrong", text);
@@ -954,7 +1109,326 @@ impl App {
     }
 }
 
-/// "Videos · Pictures · PDF" for a folder tile.
+impl App {
+    fn picture_screen(
+        &mut self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        screen_rect: Rect,
+        s: f32,
+        keys: &Keys,
+    ) {
+        let Screen::Picture(mut view) = std::mem::replace(&mut self.screen, Screen::Home) else {
+            return;
+        };
+        painter.rect_filled(screen_rect, 0.0, Color32::BLACK);
+        let n = view.files.len();
+
+        // Mouse: click on the left/right half = previous/next.
+        let click = ui
+            .interact(
+                screen_rect,
+                ui.make_persistent_id("picture"),
+                Sense::click(),
+            )
+            .interact_pointer_pos()
+            .filter(|_| ui.ctx().input(|i| i.pointer.any_click()));
+        let prev = keys.left || keys.up || click.is_some_and(|p| p.x < screen_rect.center().x);
+        let next = keys.right
+            || keys.down
+            || keys.enter
+            || click.is_some_and(|p| p.x >= screen_rect.center().x);
+        if keys.back {
+            let path = view.files[view.index].path.clone();
+            self.screen = Screen::Browse(select(view.back, &path));
+            return;
+        }
+        if prev && view.index > 0 {
+            view.index -= 1;
+        }
+        if next && view.index + 1 < n {
+            view.index += 1;
+        }
+
+        // Load the current picture in the background, scaled to the screen.
+        if view.requested != Some(view.index) {
+            view.requested = Some(view.index);
+            let ppp = ui.ctx().pixels_per_point();
+            let (w, h) = (
+                (screen_rect.width() * ppp) as u32,
+                (screen_rect.height() * ppp) as u32,
+            );
+            let (tx, ctx, path) = (
+                self.picture_tx.clone(),
+                ui.ctx().clone(),
+                view.files[view.index].path.clone(),
+            );
+            std::thread::spawn(move || {
+                let result = pictures::load(&path, w, h);
+                let _ = tx.send((path, result));
+                ctx.request_repaint();
+            });
+        }
+
+        if let Some(texture) = &view.texture {
+            let size = texture.size_vec2();
+            let scale = (screen_rect.width() / size.x).min(screen_rect.height() / size.y);
+            let rect = Rect::from_center_size(screen_rect.center(), size * scale);
+            let tint = if view.shown == Some(view.index) {
+                Color32::WHITE
+            } else {
+                Color32::from_gray(90) // the next picture is still loading
+            };
+            painter.image(
+                texture.id(),
+                rect,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                tint,
+            );
+        }
+        if let Some(error) = &view.error {
+            paint_overlay(
+                painter,
+                screen_rect,
+                s,
+                "This picture can't be shown",
+                &elide(error, 90),
+            );
+        } else if view.shown != Some(view.index) {
+            painter.text(
+                screen_rect.center(),
+                Align2::CENTER_CENTER,
+                "Loading…",
+                FontId::proportional(32.0 * s),
+                TEXT_DIM,
+            );
+        }
+
+        // Caption
+        let band = Rect::from_min_max(
+            Pos2::new(screen_rect.min.x, screen_rect.max.y - 70.0 * s),
+            screen_rect.max,
+        );
+        painter.rect_filled(band, 0.0, Color32::from_black_alpha(150));
+        painter.text(
+            Pos2::new(band.min.x + 40.0 * s, band.center().y),
+            Align2::LEFT_CENTER,
+            elide(&view.files[view.index].name, 70),
+            FontId::proportional(24.0 * s),
+            TEXT,
+        );
+        painter.text(
+            Pos2::new(band.max.x - 40.0 * s, band.center().y),
+            Align2::RIGHT_CENTER,
+            format!("{} / {n}     ← →  ·  Esc: back", view.index + 1),
+            FontId::proportional(22.0 * s),
+            TEXT_DIM,
+        );
+        self.screen = Screen::Picture(view);
+    }
+
+    fn music_screen(
+        &mut self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        screen_rect: Rect,
+        s: f32,
+        keys: &Keys,
+    ) {
+        let Screen::Music(mut view) = std::mem::replace(&mut self.screen, Screen::Home) else {
+            return;
+        };
+        let state = view.player.state();
+        let current = view.start + state.playlist_pos.unwrap_or(0);
+        let current_path = view.tracks.get(current).map(|t| t.path.clone());
+        let back_to_browser = |view: MusicView| -> Screen {
+            let browse = view.back.clone();
+            Screen::Browse(match &current_path {
+                Some(p) => select(browse, p),
+                None => browse,
+            })
+        };
+        if keys.back {
+            view.player.stop();
+            self.screen = back_to_browser(view);
+            return;
+        }
+        if view.player.finished() {
+            self.screen = back_to_browser(view);
+            return;
+        }
+        if keys.enter {
+            view.player.toggle_pause();
+        }
+        if keys.left {
+            view.player.previous();
+        }
+        if keys.right {
+            view.player.next();
+        }
+        if keys.up {
+            view.player.seek(30.0);
+        }
+        if keys.down {
+            view.player.seek(-30.0);
+        }
+
+        let center = screen_rect.center();
+        paint_entry_icon(
+            painter,
+            EntryKind::Audio,
+            center - Vec2::new(0.0, 200.0 * s),
+            90.0 * s,
+        );
+        let title = view
+            .tracks
+            .get(current)
+            .map(|t| {
+                std::path::Path::new(&t.name)
+                    .file_stem()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| t.name.clone())
+            })
+            .unwrap_or_default();
+        painter.text(
+            center + Vec2::new(0.0, -20.0 * s),
+            Align2::CENTER_CENTER,
+            elide(&title, 50),
+            FontId::proportional(44.0 * s),
+            TEXT,
+        );
+        let folder_name = self
+            .config()
+            .0
+            .folders
+            .iter()
+            .find(|f| f.id == view.back.folder_id)
+            .map(|f| f.name.clone())
+            .unwrap_or_default();
+        painter.text(
+            center + Vec2::new(0.0, 35.0 * s),
+            Align2::CENTER_CENTER,
+            format!(
+                "{folder_name}  ·  Track {} of {}",
+                current + 1,
+                view.tracks.len()
+            ),
+            FontId::proportional(24.0 * s),
+            TEXT_DIM,
+        );
+
+        // Progress
+        let bar = Rect::from_center_size(
+            center + Vec2::new(0.0, 110.0 * s),
+            Vec2::new(900.0 * s, 10.0 * s),
+        );
+        let radius = CornerRadius::same((5.0 * s) as u8);
+        painter.rect_filled(bar, radius, Color32::from_rgb(0x3a, 0x40, 0x55));
+        if let (Some(pos), Some(dur)) = (state.position, state.duration)
+            && dur > 0.0
+        {
+            let mut done = bar;
+            done.set_width(bar.width() * (pos / dur).clamp(0.0, 1.0) as f32);
+            painter.rect_filled(done, radius, ACCENT);
+        }
+        let time = |t: Option<f64>| t.map(resume::format_time).unwrap_or_else(|| "–".into());
+        painter.text(
+            Pos2::new(bar.min.x, bar.max.y + 14.0 * s),
+            Align2::LEFT_TOP,
+            time(state.position),
+            FontId::proportional(22.0 * s),
+            TEXT_DIM,
+        );
+        painter.text(
+            Pos2::new(bar.max.x, bar.max.y + 14.0 * s),
+            Align2::RIGHT_TOP,
+            time(state.duration),
+            FontId::proportional(22.0 * s),
+            TEXT_DIM,
+        );
+        if state.paused {
+            painter.text(
+                center + Vec2::new(0.0, 200.0 * s),
+                Align2::CENTER_CENTER,
+                "Paused",
+                FontId::proportional(32.0 * s),
+                TEXT,
+            );
+        }
+        painter.text(
+            Pos2::new(center.x, screen_rect.max.y - 60.0 * s),
+            Align2::CENTER_CENTER,
+            "Enter: pause   ← →: previous / next   ↑ ↓: ±30 s   Esc: stop",
+            FontId::proportional(22.0 * s),
+            TEXT_DIM,
+        );
+        ui.ctx().request_repaint_after(Duration::from_millis(500));
+        self.screen = Screen::Music(view);
+    }
+
+    fn video_choose_screen(
+        &mut self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        screen_rect: Rect,
+        s: f32,
+        keys: &Keys,
+    ) {
+        let Screen::VideoChoose {
+            back,
+            entry,
+            position,
+            mut selected,
+        } = std::mem::replace(&mut self.screen, Screen::Home)
+        else {
+            return;
+        };
+        let items = [
+            MenuItem::new(
+                format!("Resume from {}", resume::format_time(position)),
+                "Continues where you stopped",
+            ),
+            MenuItem::new("Play from beginning", "Starts the video from the start"),
+            MenuItem::new("Back", ""),
+        ];
+        if keys.prev() {
+            selected = selected.saturating_sub(1);
+        }
+        if keys.next() {
+            selected = (selected + 1).min(items.len() - 1);
+        }
+        let title = entry.name.clone();
+        let clicked = paint_menu(ui, painter, screen_rect, s, &title, &items, selected);
+        match clicked.or(keys.enter.then_some(selected)) {
+            _ if keys.back => self.screen = Screen::Browse(back),
+            Some(0) => self.start_video(back, entry, Some(position)),
+            Some(1) => self.start_video(back, entry, None),
+            Some(_) => self.screen = Screen::Browse(back),
+            None => {
+                self.screen = Screen::VideoChoose {
+                    back,
+                    entry,
+                    position,
+                    selected,
+                }
+            }
+        }
+    }
+}
+
+/// Ask a player to quit (SIGTERM): mpv/VLC exit cleanly, so mpv still reports its last
+/// position to the resume monitor. `poll_background` kills it if it doesn't exit in time.
+fn stop_player(pid: u32) {
+    log::info!("stopping player (pid {pid})");
+    if let Ok(pid) = libc::pid_t::try_from(pid) {
+        // SAFETY: plain kill(2) on our own child process.
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
+}
+
+/// "Videos · Pictures" for a folder tile.
 fn folder_kinds(folder: &FolderSettings) -> String {
     let mut kinds: Vec<String> = Vec::new();
     for (on, name) in [
@@ -966,7 +1440,6 @@ fn folder_kinds(folder: &FolderSettings) -> String {
             kinds.push(name.into());
         }
     }
-    kinds.extend(folder.extensions.iter().map(|e| e.to_uppercase()));
     kinds.join(" · ")
 }
 
@@ -1075,25 +1548,6 @@ fn paint_entry_icon(painter: &egui::Painter, kind: EntryKind, center: Pos2, r: f
             ];
             painter.add(egui::Shape::convex_polygon(hill, TEXT, Stroke::NONE));
         }
-        EntryKind::Other => {
-            let page = Rect::from_center_size(center, Vec2::new(r * 1.5, r * 2.0));
-            painter.rect_stroke(
-                page,
-                CornerRadius::same((r * 0.12) as u8),
-                stroke,
-                StrokeKind::Middle,
-            );
-            for i in 0..3 {
-                let y = page.min.y + r * (0.6 + i as f32 * 0.4);
-                painter.line_segment(
-                    [
-                        Pos2::new(page.min.x + r * 0.3, y),
-                        Pos2::new(page.max.x - r * 0.3, y),
-                    ],
-                    stroke,
-                );
-            }
-        }
     }
 }
 
@@ -1171,7 +1625,24 @@ fn paint_disc_icon(painter: &egui::Painter, center: Pos2, r: f32, alpha: f32) {
     painter.circle_stroke(center, r * 0.85, Stroke::new(r * 0.04, hl));
 }
 
-/// Returns the index of a clicked option.
+/// One row of a menu.
+struct MenuItem {
+    label: String,
+    hint: String,
+    enabled: bool,
+}
+
+impl MenuItem {
+    fn new(label: impl Into<String>, hint: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            hint: hint.into(),
+            enabled: true,
+        }
+    }
+}
+
+/// The disc start menu. Returns the index of a clicked option.
 #[allow(clippy::too_many_arguments)]
 fn paint_chooser(
     ui: &egui::Ui,
@@ -1183,43 +1654,62 @@ fn paint_chooser(
     selected: usize,
     scan_ready: bool,
 ) -> Option<usize> {
+    let has_resume = list.iter().any(|c| matches!(c, Choice::Resume(_)));
+    let items: Vec<MenuItem> = list
+        .iter()
+        .map(|choice| {
+            let waiting = matches!(choice, Choice::Resume(_) | Choice::MainMovie) && !scan_ready;
+            let mut item = match choice {
+                Choice::Resume(pos) => MenuItem::new(
+                    format!("Resume from {}", resume::format_time(*pos)),
+                    "Continues where you stopped",
+                ),
+                Choice::MainMovie if has_resume => {
+                    MenuItem::new("Play from beginning", "Starts the movie from the start")
+                }
+                Choice::MainMovie => {
+                    MenuItem::new("Play movie", "Starts the main movie right away")
+                }
+                Choice::DiscMenu => {
+                    MenuItem::new("Disc menu", "Starts the disc like a normal player")
+                }
+                Choice::Eject => MenuItem::new("Eject disc", "Opens the tray"),
+                Choice::Back => MenuItem::new("Back", ""),
+            };
+            if waiting {
+                item.hint = tile.subtitle.clone();
+                item.enabled = false;
+            }
+            item
+        })
+        .collect();
+    paint_menu(ui, painter, screen, s, &tile.title, &items, selected)
+}
+
+/// A centered menu panel. Returns the index of a clicked option.
+fn paint_menu(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    screen: Rect,
+    s: f32,
+    title: &str,
+    items: &[MenuItem],
+    selected: usize,
+) -> Option<usize> {
     const ROW_STEP: f32 = 105.0;
     painter.rect_filled(screen, 0.0, Color32::from_black_alpha(190));
-    let height = 150.0 + list.len() as f32 * ROW_STEP + 30.0;
+    let height = 150.0 + items.len() as f32 * ROW_STEP + 30.0;
     let panel = Rect::from_center_size(screen.center(), Vec2::new(720.0 * s, height * s));
     painter.rect_filled(panel, CornerRadius::same((24.0 * s) as u8), TILE_BG);
     painter.text(
         Pos2::new(panel.center().x, panel.min.y + 50.0 * s),
         Align2::CENTER_TOP,
-        elide(&tile.title, 32),
+        elide(title, 32),
         FontId::proportional(40.0 * s),
         TEXT,
     );
     let mut clicked = None;
-    let has_resume = list.iter().any(|c| matches!(c, Choice::Resume(_)));
-    for (i, choice) in list.iter().enumerate() {
-        let needs_scan = matches!(choice, Choice::Resume(_) | Choice::MainMovie);
-        let waiting = needs_scan && !scan_ready;
-        let (label, hint): (String, &str) = match choice {
-            Choice::Resume(pos) => (
-                format!("Resume from {}", resume::format_time(*pos)),
-                "Continues where you stopped",
-            ),
-            Choice::MainMovie if has_resume => (
-                "Play from beginning".into(),
-                "Starts the movie from the start",
-            ),
-            Choice::MainMovie => ("Play movie".into(), "Starts the main movie right away"),
-            Choice::DiscMenu => ("Disc menu".into(), "Starts the disc like a normal player"),
-            Choice::Eject => ("Eject disc".into(), "Opens the tray"),
-            Choice::Back => ("Back".into(), ""),
-        };
-        let hint = if waiting {
-            tile.subtitle.as_str()
-        } else {
-            hint
-        };
-        let enabled = !waiting;
+    for (i, item) in items.iter().enumerate() {
         let row = Rect::from_min_size(
             Pos2::new(
                 panel.min.x + 60.0 * s,
@@ -1227,39 +1717,39 @@ fn paint_chooser(
             ),
             Vec2::new(panel.width() - 120.0 * s, (ROW_STEP - 15.0) * s),
         );
-        let focused = i == selected;
-        let fill = if focused {
+        let fill = if i == selected {
             ACCENT
         } else {
             Color32::from_rgb(0x2e, 0x33, 0x45)
         };
-        let alpha = if enabled { 1.0 } else { 0.45 };
+        let alpha = if item.enabled { 1.0 } else { 0.45 };
         painter.rect_filled(
             row,
             CornerRadius::same((14.0 * s) as u8),
             fill.gamma_multiply(alpha),
         );
+        let has_hint = !item.hint.is_empty();
         painter.text(
             Pos2::new(
                 row.min.x + 30.0 * s,
-                row.center().y - if hint.is_empty() { 0.0 } else { 14.0 * s },
+                row.center().y - if has_hint { 14.0 * s } else { 0.0 },
             ),
             Align2::LEFT_CENTER,
-            label,
+            &item.label,
             FontId::proportional(32.0 * s),
             TEXT.gamma_multiply(alpha),
         );
-        if !hint.is_empty() {
+        if has_hint {
             painter.text(
                 Pos2::new(row.min.x + 30.0 * s, row.center().y + 22.0 * s),
                 Align2::LEFT_CENTER,
-                hint,
+                &item.hint,
                 FontId::proportional(20.0 * s),
                 TEXT.gamma_multiply(0.75 * alpha),
             );
         }
         if ui
-            .interact(row, ui.make_persistent_id(("choice", i)), Sense::click())
+            .interact(row, ui.make_persistent_id(("menu", i)), Sense::click())
             .clicked()
         {
             clicked = Some(i);

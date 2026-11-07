@@ -7,6 +7,7 @@ edition = "2024"
 dirs = "7.0.0"
 eframe = "0.37.0"
 env_logger = "0.11.11"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff"] }
 libc = "0.2.191"
 log = "0.4.35"
 serde = { version = "1.0.229", features = ["derive"] }

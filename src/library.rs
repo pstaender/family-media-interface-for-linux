@@ -19,9 +19,7 @@ const AUDIO: &[&str] = &[
     "mp3", "flac", "ogg", "oga", "opus", "m4a", "m4b", "aac", "wav", "wma", "aiff", "aif", "ape",
     "mka", "alac",
 ];
-const IMAGES: &[&str] = &[
-    "jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif", "avif",
-];
+const IMAGES: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
@@ -29,8 +27,6 @@ pub enum EntryKind {
     Video,
     Audio,
     Image,
-    /// One of the folder's extra extensions; opened with the default application.
-    Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,7 +43,6 @@ pub struct Filter {
     pub video: bool,
     pub audio: bool,
     pub images: bool,
-    pub extensions: Vec<String>,
 }
 
 impl From<&FolderSettings> for Filter {
@@ -56,7 +51,6 @@ impl From<&FolderSettings> for Filter {
             video: f.video,
             audio: f.audio,
             images: f.images,
-            extensions: f.extensions.clone(),
         }
     }
 }
@@ -71,8 +65,6 @@ impl Filter {
             Some(EntryKind::Audio)
         } else if self.images && IMAGES.contains(&ext.as_str()) {
             Some(EntryKind::Image)
-        } else if self.extensions.contains(&ext) {
-            Some(EntryKind::Other)
         } else {
             None
         }
@@ -228,12 +220,12 @@ mod tests {
         let f = Filter {
             video: true,
             images: true,
-            extensions: vec!["pdf".into()],
             ..Default::default()
         };
         assert_eq!(f.kind_of("a.MKV"), Some(EntryKind::Video));
         assert_eq!(f.kind_of("a.jpeg"), Some(EntryKind::Image));
-        assert_eq!(f.kind_of("a.pdf"), Some(EntryKind::Other));
+        assert_eq!(f.kind_of("a.pdf"), None); // only media
+        assert_eq!(f.kind_of("a.heic"), None); // can't be displayed
         assert_eq!(f.kind_of("a.flac"), None); // audio not enabled
         assert_eq!(f.kind_of("mkv"), None); // no extension
     }
@@ -243,7 +235,6 @@ mod tests {
         let root = tree();
         let filter = Filter {
             video: true,
-            extensions: vec!["pdf".into()],
             ..Default::default()
         };
         let entries = list(&root, &[], &filter).unwrap();
@@ -253,12 +244,11 @@ mod tests {
                 "Also season 1",
                 "Season 1",
                 "Episode 2.MKV",
-                "Episode 10.mkv",
-                "notes.pdf"
+                "Episode 10.mkv"
             ]
         );
         assert_eq!(entries[0].kind, EntryKind::Folder);
-        assert_eq!(entries[4].kind, EntryKind::Other);
+        assert_eq!(entries[3].kind, EntryKind::Video);
     }
 
     #[test]

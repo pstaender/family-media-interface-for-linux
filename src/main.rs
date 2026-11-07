@@ -1,8 +1,10 @@
+mod audio;
 mod config;
 mod control;
 mod disc;
 mod library;
 mod makemkv;
+mod pictures;
 mod player;
 mod resume;
 mod store;

@@ -16,8 +16,7 @@
       "path": "/srv/media/movies",
       "video": true,
       "audio": false,
-      "images": false,
-      "extensions": []
+      "images": false
     },
     {
       "id": "photos",
@@ -25,8 +24,7 @@
       "path": "/home/shared/Pictures/Holidays",
       "video": true,
       "audio": false,
-      "images": true,
-      "extensions": []
+      "images": true
     },
     {
       "id": "stories",
@@ -34,10 +32,7 @@
       "path": "/home/shared/Stories",
       "video": false,
       "audio": true,
-      "images": false,
-      "extensions": [
-        "pdf"
-      ]
+      "images": false
     }
   ]
 }

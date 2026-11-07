@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 pub const VERSION: u32 = 1;
 const MAX_LANGUAGES: usize = 10;
 const MAX_FOLDERS: usize = 50;
-const MAX_EXTENSIONS: usize = 20;
 const MAX_NAME_CHARS: usize = 60;
 const MAX_PATH_BYTES: usize = 4096;
 
@@ -41,9 +40,10 @@ pub struct FolderSettings {
     pub audio: bool,
     #[serde(default)]
     pub images: bool,
-    /// Extra file extensions (lowercase, without dot), opened with the default application.
-    #[serde(default)]
-    pub extensions: Vec<String>,
+    /// Removed option (extra file types). Still accepted in older config files, but ignored and
+    /// never written: only media files are shown.
+    #[serde(default, rename = "extensions", skip_serializing)]
+    pub legacy_extensions: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -180,24 +180,7 @@ fn validate_folder(f: &FolderSettings) -> Result<(), String> {
             f.path
         ));
     }
-    if f.extensions.len() > MAX_EXTENSIONS {
-        return Err(format!("at most {MAX_EXTENSIONS} extensions"));
-    }
-    for (i, ext) in f.extensions.iter().enumerate() {
-        let ok = (1..=10).contains(&ext.len())
-            && ext
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
-        if !ok {
-            return Err(format!(
-                "extension \"{ext}\" must be 1-10 lowercase letters/digits, without dot"
-            ));
-        }
-        if f.extensions[..i].contains(ext) {
-            return Err(format!("extension \"{ext}\" is listed twice"));
-        }
-    }
-    if !(f.video || f.audio || f.images || !f.extensions.is_empty()) {
+    if !(f.video || f.audio || f.images) {
         return Err("choose at least one kind of file to show".into());
     }
     Ok(())
@@ -291,8 +274,20 @@ mod tests {
     fn example_folders() {
         let config = parse(include_str!("../docs/config.example.json")).unwrap();
         assert_eq!(config.folders.len(), 3);
-        assert_eq!(config.folders[2].extensions, ["pdf"]);
+        assert!(config.folders[2].audio);
         assert!(!config.folders[2].video);
+    }
+
+    #[test]
+    fn old_extensions_field_is_ignored() {
+        let config = parse(
+            r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x","video":true,"extensions":["pdf"]}]}"#,
+        )
+        .unwrap();
+        let written = serde_json::to_string(&config).unwrap();
+        assert!(!written.contains("extensions"));
+        // Extensions alone no longer make a folder valid.
+        assert!(parse(r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x","extensions":["pdf"]}]}"#).is_err());
     }
 
     #[test]
@@ -334,9 +329,6 @@ mod tests {
             r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x/../etc","video":true}]}"#,
             r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x/","video":true}]}"#,
             r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x//y","video":true}]}"#,
-            r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x","extensions":[".pdf"]}]}"#,
-            r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x","extensions":["PDF"]}]}"#,
-            r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x","extensions":["pdf","pdf"]}]}"#,
             r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x","video":true,"write":true}]}"#,
             r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x","video":true},{"id":"a","name":"B","path":"/y","audio":true}]}"#,
             "not json",

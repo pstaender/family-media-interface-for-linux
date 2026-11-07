@@ -13,6 +13,11 @@ test("the example folders are valid", () => {
   expect(v.ok && v.config.folders.map((f) => f.id)).toEqual(["movies", "photos", "stories"]);
 });
 
+test("the removed extensions option is ignored", () => {
+  const v = validateConfig({ version: 1, folders: [{ id: "a", name: "A", path: "/x", video: true, extensions: ["pdf"] }] });
+  expect(v.ok && v.config.folders[0]).toEqual({ id: "a", name: "A", path: "/x", video: true, audio: false, images: false });
+});
+
 test("paths are checked like on the Rust side", () => {
   for (const ok of ["/", "/a", "/srv/media movies/x.y", "/a/.hidden"]) expect(isNormalizedAbsolutePath(ok)).toBe(true);
   for (const bad of ["", "a", "/a/", "//a", "/a/./b", "/a/..", "/a/../b", "/a\0b"]) expect(isNormalizedAbsolutePath(bad)).toBe(false);
@@ -46,10 +51,8 @@ const BAD: unknown[] = [
   { version: 1, folders: [{ id: "a", name: "A", path: "/x/../etc", video: true }] },
   { version: 1, folders: [{ id: "a", name: "A", path: "/x/", video: true }] },
   { version: 1, folders: [{ id: "a", name: "A", path: "/x//y", video: true }] },
-  { version: 1, folders: [{ id: "a", name: "A", path: "/x", extensions: [".pdf"] }] },
-  { version: 1, folders: [{ id: "a", name: "A", path: "/x", extensions: ["PDF"] }] },
-  { version: 1, folders: [{ id: "a", name: "A", path: "/x", extensions: ["pdf", "pdf"] }] },
   { version: 1, folders: [{ id: "a", name: "A", path: "/x", video: true, write: true }] },
+  { version: 1, folders: [{ id: "a", name: "A", path: "/x", extensions: ["pdf"] }] },
   { version: 1, folders: [{ id: "a", name: "A", path: "/x", video: true }, { id: "a", name: "B", path: "/y", audio: true }] },
   "not an object",
   null,

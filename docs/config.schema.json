@@ -67,7 +67,7 @@
         "name",
         "path"
       ],
-      "description": "At least one of video/audio/images must be true or extensions non-empty. ids must be unique.",
+      "description": "At least one of video/audio/images must be true. ids must be unique. Only media files (videos, music, pictures) are ever shown.",
       "properties": {
         "id": {
           "type": "string",
@@ -100,17 +100,6 @@
           "type": "boolean",
           "default": false,
           "description": "Show pictures."
-        },
-        "extensions": {
-          "type": "array",
-          "maxItems": 20,
-          "uniqueItems": true,
-          "default": [],
-          "items": {
-            "type": "string",
-            "pattern": "^[a-z0-9]{1,10}$"
-          },
-          "description": "Additional file extensions to show, lowercase without dot, e.g. \"pdf\". Opened with the default application."
         }
       }
     }

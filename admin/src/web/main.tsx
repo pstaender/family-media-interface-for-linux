@@ -366,14 +366,6 @@ function newFolderId(name: string, taken: string[]): string {
   return id;
 }
 
-function parseExtensions(text: string): string[] {
-  const list = text
-    .split(/[\s,;]+/)
-    .map((e) => e.trim().replace(/^\.+/, "").toLowerCase())
-    .filter((e) => /^[a-z0-9]{1,10}$/.test(e));
-  return [...new Set(list)].slice(0, 20);
-}
-
 function FoldersSection(props: { folders: FolderSettings[]; onChange: (folders: FolderSettings[]) => void }) {
   const { folders, onChange } = props;
   const [picking, setPicking] = useState<number | "new" | null>(null);
@@ -387,7 +379,7 @@ function FoldersSection(props: { folders: FolderSettings[]; onChange: (folders: 
       const name = base.slice(0, 60);
       onChange([
         ...folders,
-        { id: newFolderId(name, folders.map((f) => f.id)), name, path, video: true, audio: true, images: true, extensions: [] },
+        { id: newFolderId(name, folders.map((f) => f.id)), name, path, video: true, audio: true, images: true },
       ]);
     } else if (typeof picking === "number") {
       update(picking, { path });
@@ -399,8 +391,8 @@ function FoldersSection(props: { folders: FolderSettings[]; onChange: (folders: 
     <section className="card">
       <h2>Folders</h2>
       <p className="hint">
-        Folders appear as tiles on the media center and can be browsed there. familynovice only
-        reads them — it never changes, moves or deletes files.
+        Folders appear as tiles on the media center and can be browsed there. Only videos, music and
+        pictures are shown. familynovice only reads them — it never changes, moves or deletes files.
       </p>
       {folders.length === 0 && <p>No folders yet.</p>}
       {folders.map((folder, i) => (
@@ -432,8 +424,7 @@ function FolderEditor(props: {
   onPick: () => void;
 }) {
   const { folder, onChange } = props;
-  const [extText, setExtText] = useState(folder.extensions.join(", "));
-  const nothing = !folder.video && !folder.audio && !folder.images && folder.extensions.length === 0;
+  const nothing = !folder.video && !folder.audio && !folder.images;
 
   return (
     <div className="folder">
@@ -467,22 +458,6 @@ function FolderEditor(props: {
           </label>
         ))}
       </div>
-      <label className="field" style={{ marginTop: 8 }}>
-        <span>Other file types (extensions, e.g. "pdf, txt")</span>
-        <input
-          type="text"
-          value={extText}
-          onChange={(e) => setExtText(e.target.value)}
-          onBlur={() => {
-            const list = parseExtensions(extText);
-            setExtText(list.join(", "));
-            onChange({ extensions: list });
-          }}
-        />
-        <small className="hint">
-          These open in the computer's default app. Only add types whose app can't change or delete files.
-        </small>
-      </label>
       {nothing && <div className="banner warn">Choose at least one kind of file to show.</div>}
     </div>
   );

@@ -132,7 +132,7 @@ test("folder picker lists only visible directories, read-only", async () => {
 });
 
 test("saves folders", async () => {
-  const folders = [{ id: "movies", name: "Movies", path: "/srv/movies", video: true, audio: false, images: false, extensions: ["pdf"] }];
+  const folders = [{ id: "movies", name: "Movies", path: "/srv/movies", video: true, audio: false, images: true }];
   const r = await call("PUT", "/api/config", { version: 1, folders });
   expect(r.data.saved).toBe(true);
   expect(JSON.parse(readFileSync(join(configDir, "config.json"), "utf8")).folders).toEqual(folders);

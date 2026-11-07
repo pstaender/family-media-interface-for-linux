@@ -14,8 +14,10 @@ use crate::store;
 
 /// Don't offer to resume if the movie was stopped this early.
 const MIN_RESUME_SECS: f64 = 60.0;
-/// Within this much of the end (end credits), the movie counts as finished.
+/// Within this much of the end (end credits), the movie counts as finished …
 const FINISHED_REMAINING_SECS: f64 = 5.0 * 60.0;
+/// … but at most this share of the duration, so short videos (episodes) work too.
+const FINISHED_REMAINING_SHARE: f64 = 0.10;
 const SAVE_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -27,8 +29,9 @@ pub struct Resume {
 impl Resume {
     /// Position to offer for resuming, or `None` if barely started or finished.
     pub fn resume_at(&self) -> Option<f64> {
-        let finished = self.duration_secs > 0.0
-            && self.duration_secs - self.position_secs < FINISHED_REMAINING_SECS;
+        let credits = FINISHED_REMAINING_SECS.min(self.duration_secs * FINISHED_REMAINING_SHARE);
+        let finished =
+            self.duration_secs > 0.0 && self.duration_secs - self.position_secs < credits;
         (self.position_secs >= MIN_RESUME_SECS && !finished).then_some(self.position_secs)
     }
 }
@@ -131,6 +134,18 @@ fn parse_property_change(line: &str) -> Option<(u64, Option<f64>)> {
     ))
 }
 
+/// Resume key for a video file: `file-<FNV-1a hash of the canonical path>`. Stable across
+/// runs and Rust versions (unlike `DefaultHasher`).
+pub fn file_key(path: &std::path::Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in path.as_os_str().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("file-{hash:016x}")
+}
+
 /// Seconds → `h:mm:ss`.
 pub fn format_time(secs: f64) -> String {
     let total = secs.max(0.0) as u64;
@@ -151,6 +166,9 @@ mod tests {
         assert_eq!(r(2533.0, 6120.0).resume_at(), Some(2533.0));
         assert_eq!(r(6000.0, 6120.0).resume_at(), None); // in the end credits
         assert_eq!(r(2533.0, 0.0).resume_at(), Some(2533.0)); // unknown duration
+        // A 10-minute episode stopped at 5:30 is not finished; at 9:30 it is.
+        assert_eq!(r(330.0, 600.0).resume_at(), Some(330.0));
+        assert_eq!(r(570.0, 600.0).resume_at(), None);
     }
 
     #[test]
@@ -170,6 +188,14 @@ mod tests {
             None
         );
         assert_eq!(parse_property_change("garbage"), None);
+    }
+
+    #[test]
+    fn file_keys_are_stable() {
+        let key = file_key(std::path::Path::new("/srv/movies/a.mkv"));
+        assert_eq!(key, file_key(std::path::Path::new("/srv/movies/a.mkv")));
+        assert_ne!(key, file_key(std::path::Path::new("/srv/movies/b.mkv")));
+        assert_eq!(file_key(std::path::Path::new("")), "file-cbf29ce484222325");
     }
 
     #[test]

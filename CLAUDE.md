@@ -130,8 +130,16 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
 - **Resume (`src/resume.rs`):** mpv gets `--input-ipc-server=$XDG_RUNTIME_DIR/familynovice-mpv.sock`.
   A thread observes `time-pos`/`duration`, saves every 5 s and when mpv exits, to
   `$XDG_DATA_HOME/familynovice/resume/<disc id>.json`. Resume is offered from 1 min on and
-  dropped within the last 5 min (end credits). Resuming passes `--start=<secs>`.
+  dropped within the end credits: the last 5 min, but at most the last 10 % (short videos). Resuming passes `--start=<secs>`.
   Unix socket paths are limited to 107 characters.
+- **Stopping playback:** Esc, Backspace and the back keys of remotes/gamepads/mice close mpv
+  (`player::MPV_INPUT_CONF`, written to our cache and passed via `--input-conf`); VLC quits on
+  Esc (`--key-quit=Esc`). On the media center's "Playing…" screen, Esc/Back (or a click) sends
+  SIGTERM to the player and SIGKILL after 2 s, for players that are hung or not visible. The
+  resume position survives both (saved on quit, and every 5 s while playing).
+- **mpv video output:** `--vo=gpu-next,gpu,sdl,x11`. Xv/VDPAU are skipped: without a usable GPU
+  (e.g. over RDP, display `:10`) mpv hung on Xv with a tiny invisible window. VLC gets
+  `--no-qt-privacy-ask` (no first-run dialog).
 - **Eject (`disc::eject`):** 1. `CDROM_LOCKDOOR` + `CDROMEJECT` ioctls. 2. If refused, unmount
   with `udisksctl` (desktop automount) and retry. 3. If still refused, run util-linux `eject`,
   which uses SCSI commands. Needed on the Pioneer BDR-UD04: after unmounting, the kernel
@@ -156,21 +164,28 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
 ### Folders (implemented, v1)
 
 - The admin adds folders (e.g. a shared movie, music or photo folder). Each folder gets a name
-  and a filter for which files are visible: **videos**, **music**, **pictures** (fixed
-  extension lists in `src/library.rs`) and/or **extra file extensions** (e.g. `pdf`).
+  and chooses which media is visible: **videos**, **music** and/or **pictures** (fixed
+  extension lists in `src/library.rs`). **Only these media files are ever shown**; other
+  files (documents etc.) never appear. Picture formats are limited to what the built-in viewer
+  can decode (JPEG, PNG, GIF, WebP, BMP, TIFF).
 - On the home screen, each folder is a tile in the "Folders" row. It can be browsed (subfolders
   plus visible files); hidden files (`.name`) are never shown. A folder that doesn't exist or
   can't be read is shown semi-transparent.
 - **Read-only** (see above). Browsing is confined to the configured folder: paths are
   canonicalized and must stay inside it, so `..` and symlinks pointing outside are refused.
-- Opening: videos with mpv (one file), music with mpv (from the chosen track to the end of the
-  folder), pictures with mpv as a slideshow of the folder's pictures starting at the chosen one,
-  extra extensions with the desktop's default application (`xdg-open`). Note: such
-  applications may offer "save as" and similar; only add extensions whose default viewer is
-  harmless.
-- Config: `folders` in `config.json` (id, name, absolute path, `video`/`audio`/`images`
-  booleans, `extensions`). The admin interface has a folder picker (`GET /api/browse`, lists
-  directories only, read-only).
+- Opening:
+  - **Pictures:** built-in viewer (`src/pictures.rs`, `image` crate): decoded in a thread,
+    turned upright (EXIF orientation), scaled to the screen; ←/→ previous/next, Esc back.
+  - **Music:** built-in player screen (`src/audio.rs`). The sound comes from mpv without any
+    window (`--no-video --force-window=no`), controlled over its IPC socket
+    (`$XDG_RUNTIME_DIR/familynovice-audio.sock`): pause, previous/next, ±30 s; plays from the
+    chosen track to the end of the folder.
+  - **Videos:** the same mpv setup as the disc's main movie (`player::mpv_movie`): preferred
+    audio/subtitle languages from the disc settings, resume tracking ("Resume from h:mm:ss" /
+    "Play from beginning"; key `file-<FNV-1a of the path>`), nothing written next to the media.
+- Config: `folders` in `config.json` (id, name, absolute path, `video`/`audio`/`images`). The
+  admin interface has a folder picker (`GET /api/browse`, lists directories only, read-only).
+  The removed `extensions` field is still accepted from older files but ignored.
 
 ### Allowed websites (domain allowlist with wildcards)
 
@@ -245,7 +260,9 @@ src/
   ui.rs           home screen / front row (egui): rows with focus navigation, disc chooser,
                   folder browser, overlays
   disc.rs         optical drive + disc detection (ioctl + udev)
-  library.rs      read-only folder browsing (file type filters, confinement to the folder)
+  library.rs      read-only folder browsing (media filters, confinement to the folder)
+  pictures.rs     picture decoding for the built-in viewer
+  audio.rs        built-in music player (windowless mpv controlled over IPC)
   makemkv.rs      makemkvcon robot-output parser, main title selection
   player.rs       builds the player commands (mpv / VLC with libmmbd)
   resume.rs       resume positions via mpv IPC

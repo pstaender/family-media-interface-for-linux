@@ -35,24 +35,19 @@ pub fn player_cache_dir() -> Option<PathBuf> {
 }
 
 /// Create the player cache dir (and its `screenshots` folder) and return it.
+/// Also writes mpv's key bindings (`player::MPV_INPUT_CONF`) there.
 pub fn prepare_player_cache() -> Option<PathBuf> {
     let dir = player_cache_dir()?;
     if let Err(e) = std::fs::create_dir_all(dir.join("screenshots")) {
         log::warn!("could not create {}: {e}", dir.display());
     }
-    Some(dir)
-}
-
-/// Write a small file into one of our cache dirs (only if its content changed).
-pub fn write_cache_file(dir: &Path, name: &str, content: &str) -> Option<PathBuf> {
-    let path = dir.join(name);
-    if std::fs::read_to_string(&path).ok().as_deref() != Some(content)
-        && let Err(e) = std::fs::write(&path, content)
+    let conf = dir.join(crate::player::MPV_INPUT_CONF_NAME);
+    if std::fs::read_to_string(&conf).ok().as_deref() != Some(crate::player::MPV_INPUT_CONF)
+        && let Err(e) = std::fs::write(&conf, crate::player::MPV_INPUT_CONF)
     {
-        log::warn!("could not write {}: {e}", path.display());
-        return None;
+        log::warn!("could not write {}: {e}", conf.display());
     }
-    Some(path)
+    Some(dir)
 }
 
 /// Socket for talking to the running mpv (`$XDG_RUNTIME_DIR`, falls back to the temp dir).
@@ -60,6 +55,13 @@ pub fn mpv_socket_path() -> PathBuf {
     dirs::runtime_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join(format!("{APP}-mpv.sock"))
+}
+
+/// Socket of the background music player.
+pub fn audio_socket_path() -> PathBuf {
+    dirs::runtime_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("{APP}-audio.sock"))
 }
 
 /// The media center's control socket (see `control.rs`), used by the admin interface.
