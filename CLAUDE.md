@@ -137,6 +137,9 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   Esc (`--key-quit=Esc`). On the media center's "Playing…" screen, Esc/Back (or a click) sends
   SIGTERM to the player and SIGKILL after 2 s, for players that are hung or not visible. The
   resume position survives both (saved on quit, and every 5 s while playing).
+- **Player in front:** while mpv/VLC runs, the media center sets its own window to
+  `WindowLevel::AlwaysOnBottom` (window managers may open the player behind our fullscreen
+  window); when the player exits: `Normal` + `Focus` (`ui::App::keep_player_in_front`).
 - **mpv video output:** `--vo=gpu-next,gpu,sdl,x11`. Xv/VDPAU are skipped: without a usable GPU
   (e.g. over RDP, display `:10`) mpv hung on Xv with a tiny invisible window. VLC gets
   `--no-qt-privacy-ask` (no first-run dialog).

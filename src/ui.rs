@@ -270,6 +270,8 @@ pub struct App {
     folder_checked: Option<Instant>,
     picture_tx: Sender<(PathBuf, Result<Picture, String>)>,
     picture_rx: Receiver<(PathBuf, Result<Picture, String>)>,
+    /// Whether our window is currently pushed below a running player.
+    window_below_player: bool,
 }
 
 impl App {
@@ -299,6 +301,7 @@ impl App {
             folder_checked: None,
             picture_tx,
             picture_rx,
+            window_below_player: false,
         }
     }
 
@@ -472,6 +475,28 @@ impl App {
         }
         if let Some(screen) = next {
             self.screen = screen;
+        }
+        self.keep_player_in_front();
+    }
+
+    /// While an external player (mpv/VLC) runs, keep our window at the bottom so the player
+    /// is always visible in front of it (window managers may open it behind our fullscreen
+    /// window). Afterwards: normal level and keyboard focus back to us.
+    fn keep_player_in_front(&mut self) {
+        let playing = matches!(self.screen, Screen::Playing { .. });
+        if playing == self.window_below_player {
+            return;
+        }
+        self.window_below_player = playing;
+        let level = if playing {
+            egui::WindowLevel::AlwaysOnBottom
+        } else {
+            egui::WindowLevel::Normal
+        };
+        self.ctx
+            .send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
+        if !playing {
+            self.ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
     }
 
@@ -1008,7 +1033,12 @@ impl App {
         painter.text(
             screen_rect.min + Vec2::new(margin, 60.0 * s),
             Align2::LEFT_TOP,
-            elide(&crumbs.join("  ›  "), 70),
+            fit_text(
+                painter,
+                &crumbs.join("  ›  "),
+                &FontId::proportional(42.0 * s),
+                screen_rect.width() - 2.0 * margin - 160.0 * s, // room for "12 / 140"
+            ),
             FontId::proportional(42.0 * s),
             TEXT,
         );
@@ -1062,7 +1092,12 @@ impl App {
             painter.text(
                 Pos2::new(rect.min.x + 90.0 * s, rect.center().y),
                 Align2::LEFT_CENTER,
-                elide(&entry.name, 80),
+                fit_text(
+                    painter,
+                    &entry.name,
+                    &FontId::proportional(30.0 * s),
+                    rect.width() - 160.0 * s, // icon on the left, "›" on the right
+                ),
                 FontId::proportional(30.0 * s),
                 TEXT,
             );
@@ -1213,7 +1248,12 @@ impl App {
         painter.text(
             Pos2::new(band.min.x + 40.0 * s, band.center().y),
             Align2::LEFT_CENTER,
-            elide(&view.files[view.index].name, 70),
+            fit_text(
+                painter,
+                &view.files[view.index].name,
+                &FontId::proportional(24.0 * s),
+                band.width() * 0.6,
+            ),
             FontId::proportional(24.0 * s),
             TEXT,
         );
@@ -1293,7 +1333,12 @@ impl App {
         painter.text(
             center + Vec2::new(0.0, -20.0 * s),
             Align2::CENTER_CENTER,
-            elide(&title, 50),
+            fit_text(
+                painter,
+                &title,
+                &FontId::proportional(44.0 * s),
+                screen_rect.width() - 160.0 * s,
+            ),
             FontId::proportional(44.0 * s),
             TEXT,
         );
@@ -1470,14 +1515,24 @@ fn paint_folder_tile(
     painter.text(
         Pos2::new(rect.center().x, rect.max.y - 110.0 * s),
         Align2::CENTER_TOP,
-        elide(title, 20),
+        fit_text(
+            painter,
+            title,
+            &FontId::proportional(30.0 * s),
+            rect.width() - 30.0 * s,
+        ),
         FontId::proportional(30.0 * s),
         c(TEXT),
     );
     painter.text(
         Pos2::new(rect.center().x, rect.max.y - 65.0 * s),
         Align2::CENTER_TOP,
-        elide(subtitle, 30),
+        fit_text(
+            painter,
+            subtitle,
+            &FontId::proportional(20.0 * s),
+            rect.width() - 30.0 * s,
+        ),
         FontId::proportional(20.0 * s),
         c(TEXT_DIM),
     );
@@ -1573,7 +1628,12 @@ fn paint_bluray_tile(painter: &egui::Painter, rect: Rect, s: f32, tile: &BlurayT
     painter.text(
         Pos2::new(rect.center().x, rect.max.y - 110.0 * s),
         Align2::CENTER_TOP,
-        elide(&tile.title, 22),
+        fit_text(
+            painter,
+            &tile.title,
+            &FontId::proportional(30.0 * s),
+            rect.width() - 30.0 * s,
+        ),
         FontId::proportional(30.0 * s),
         c(TEXT),
     );
@@ -1704,7 +1764,12 @@ fn paint_menu(
     painter.text(
         Pos2::new(panel.center().x, panel.min.y + 50.0 * s),
         Align2::CENTER_TOP,
-        elide(title, 32),
+        fit_text(
+            painter,
+            title,
+            &FontId::proportional(40.0 * s),
+            panel.width() - 60.0 * s,
+        ),
         FontId::proportional(40.0 * s),
         TEXT,
     );
@@ -1776,6 +1841,28 @@ fn paint_overlay(painter: &egui::Painter, screen: Rect, s: f32, title: &str, bod
             TEXT_DIM,
         );
     }
+}
+
+/// Shorten `text` with "…" so that it fits into `max_width` (measured with the real font).
+fn fit_text(painter: &egui::Painter, text: &str, font: &FontId, max_width: f32) -> String {
+    let width = |t: String| painter.layout_no_wrap(t, font.clone(), TEXT).size().x;
+    if width(text.to_string()) <= max_width {
+        return text.to_string();
+    }
+    // Binary search for the longest prefix that still fits together with "…".
+    let chars: Vec<char> = text.chars().collect();
+    let (mut lo, mut hi) = (0, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let candidate: String = chars[..mid].iter().collect();
+        if width(format!("{}…", candidate.trim_end())) <= max_width {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let cut: String = chars[..lo].iter().collect();
+    format!("{}…", cut.trim_end())
 }
 
 fn elide(text: &str, max_chars: usize) -> String {
