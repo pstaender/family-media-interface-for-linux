@@ -245,6 +245,7 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
   const [config, setConfig] = useState<Config | null>(null);
   const [saved, setSaved] = useState<string>("");
   const [pinSet, setPinSet] = useState(false);
+  const [pinAutoSubmit, setPinAutoSubmit] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [status, setStatus] = useState<Status | null>(null);
   const [busy, setBusy] = useState(false);
@@ -265,10 +266,11 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
 
   const loadConfig = useCallback(async () => {
     try {
-      const r = await api<{ config: Config; pinSet: boolean; error?: string }>("GET", "/api/config");
+      const r = await api<{ config: Config; pinSet: boolean; pinAutoSubmit: boolean; error?: string }>("GET", "/api/config");
       setConfig(r.config);
       setSaved(JSON.stringify(r.config));
       setPinSet(r.pinSet);
+      setPinAutoSubmit(r.pinAutoSubmit);
       if (r.error) setNotice({ kind: "error", text: `${r.error} Saving will replace it.` });
     } catch (e) {
       setNotice({ kind: "error", text: (e as Error).message });
@@ -337,6 +339,7 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
       content = (
         <PinTab
           pinSet={pinSet}
+          autoSubmit={pinAutoSubmit}
           doubling={config.parental.pin_backoff_doubling}
           onDoubling={(pin_backoff_doubling) => setConfig({ ...config, parental: { ...config.parental, pin_backoff_doubling } })}
           onPinChanged={async (text) => {
@@ -754,6 +757,7 @@ function LimitEditor(props: { rule: LimitRule; onChange: (r: LimitRule) => void;
 
 function PinTab(props: {
   pinSet: boolean;
+  autoSubmit: boolean;
   doubling: boolean;
   onDoubling: (v: boolean) => void;
   onPinChanged: (text: string) => Promise<void>;
@@ -807,6 +811,12 @@ function PinTab(props: {
             "With a PIN, the media center can be unlocked on the TV when the time is up, and the lock button appears on the home screen."
           )}
         </p>
+        {props.pinSet && !props.autoSubmit && (
+          <div className="banner warn">
+            This PIN was set before its number of digits was stored, so the media center needs OK after entering it.
+            Set the PIN once more (the same digits are fine) and it is checked as soon as the last digit is entered.
+          </div>
+        )}
         <form onSubmit={submit}>
           <div className="row">
             <label className="field" style={{ flex: 1 }}>

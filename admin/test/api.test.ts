@@ -169,6 +169,7 @@ test("PIN: 4-8 digits, stored only as hash, never sent to the browser, kept on s
 
   const got = await call("GET", "/api/config");
   expect(got.data.pinSet).toBe(true);
+  expect(got.data.pinAutoSubmit).toBe(true);
   expect(JSON.stringify(got.data)).not.toContain("argon2");
 
   // A normal save keeps the PIN; the browser can't set the hash directly.

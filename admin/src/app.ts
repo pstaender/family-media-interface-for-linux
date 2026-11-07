@@ -189,10 +189,12 @@ export function createAdminServer(options: AdminOptions) {
         GET: api(async () => {
           const { config, error } = await loadConfig();
           // The PIN hash never leaves the server; the browser only learns whether one is set.
-          const { pin_hash, pin_length: _length, ...parental } = config.parental;
+          const { pin_hash, pin_length, ...parental } = config.parental;
           const result: Record<string, unknown> = {
             config: { ...config, parental },
             pinSet: pin_hash !== undefined,
+            // PINs set before the length was stored can't be checked automatically.
+            pinAutoSubmit: pin_hash !== undefined && pin_length !== undefined,
           };
           if (error) result.error = error;
           return json(result);
