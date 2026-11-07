@@ -1324,10 +1324,17 @@ impl App {
                 );
             }
             Screen::Playing {
-                child, stopping, ..
+                child,
+                stopping,
+                started,
+                ..
             } => {
-                let stop_now =
-                    stopping.is_none() && (keys.back || ctx.input(|i| i.pointer.any_click()));
+                // Ignore input for a moment after starting: the click / OK press that opened
+                // the player (or website) must not stop it again right away.
+                let settled = started.elapsed() > Duration::from_millis(1000);
+                let stop_now = settled
+                    && stopping.is_none()
+                    && (keys.back || ctx.input(|i| i.pointer.any_click()));
                 let pid = child.id();
                 let body = if stopping.is_some() {
                     "Stopping…"

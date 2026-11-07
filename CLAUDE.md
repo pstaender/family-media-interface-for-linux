@@ -162,7 +162,8 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   Unix socket paths are limited to 107 characters.
 - **Stopping playback:** Esc, Backspace and the back keys of remotes/gamepads/mice close mpv
   (`player::MPV_INPUT_CONF`, written to our cache and passed via `--input-conf`); VLC quits on
-  Esc (`--key-quit=Esc`). On the media center's "Playing…" screen, Esc/Back (or a click) sends
+  Esc (`--key-quit=Esc`). On the media center's "Playing…" screen, Esc/Back (or a click; ignored
+  during the first second, so the click/OK that started it doesn't stop it again) sends
   SIGTERM to the player and SIGKILL after 2 s, for players that are hung or not visible. The
   resume position survives both (saved on quit, and every 5 s while playing).
 - **Player in front:** while mpv/VLC runs, the media center sets its own window to
@@ -233,7 +234,10 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
     `*.localhost`, `*.local`, loopback/private/link-local/CGNAT IPs (also IPv4-mapped IPv6),
     `file:` and other schemes. So a website can't reach the admin interface or devices at home.
 - **Browser window `familynovice-web`** (`web/`, WebKitGTK via `wry` + `tao`): fullscreen,
-  no address bar, only a ✕ close button (GTK overlay, page can't hide it). Holding **Esc**
+  no address bar, only a round "‹" back button (top left, page history, dimmed without a
+  previous page) and a ✕ close button (top right; both GTK overlays the page can't hide;
+  hidden while the page itself is fullscreen, e.g. a video, via WebKit's enter/leave-fullscreen
+  signals; theme hover effects switched off in the CSS). Holding **Esc**
   (or the remote's back key) for **3 s** closes it; short Esc presses still reach the page.
   **Every visited address is checked** (main frame, via WebKit's `load-changed`, which only
   concerns the main frame; on start, redirect and commit): a page outside the rules is

@@ -5,7 +5,9 @@
 //! (`--windowed` for development). Rules: `kika.de` (exactly) or `*.kika.de` (with
 //! subdomains), see `src/sites.rs`, which is shared with the media center.
 //!
-//! - fullscreen, no address bar, no menus; only a close button (✕) in the corner,
+//! - fullscreen, no address bar, no menus; only a back button (‹, top left; dimmed when
+//!   there is no previous page) and a close button (✕, top right), both hidden while the page
+//!   itself is fullscreen (e.g. a video),
 //! - holding Esc (or a remote's back key) for 3 s closes the window,
 //! - pages (main frame) only on the allowed domain: every visited address is checked; a page
 //!   outside is stopped and a dialog offers "Go back" or "Close website",
@@ -36,12 +38,21 @@ use wry::{NewWindowResponse, WebContext, WebViewBuilder, WebViewBuilderExtUnix, 
 const ESC_HOLD: Duration = Duration::from_secs(3);
 
 const CSS: &str = "
-button.fn-close {
-  font-size: 30px; min-width: 64px; min-height: 64px; padding: 0;
+/* Round overlay buttons. The GTK theme's own hover/active styles (background images,
+   shadows, fade transitions) are switched off, so hovering only darkens the circle. */
+button.fn-close, button.fn-close:hover, button.fn-close:active,
+button.fn-back, button.fn-back:hover, button.fn-back:active, button.fn-back:disabled {
+  background-image: none; box-shadow: none; text-shadow: none; -gtk-icon-shadow: none;
+  outline: none; transition: none;
+  min-width: 64px; min-height: 64px; padding: 0;
   border-radius: 32px; border: 2px solid rgba(255,255,255,0.7);
-  background: rgba(0,0,0,0.55); color: #fff; box-shadow: none;
+  background-color: rgba(0,0,0,0.55); color: #fff;
 }
-button.fn-close:hover { background: rgba(0,0,0,0.85); }
+button.fn-close { font-size: 30px; }
+button.fn-back { font-size: 40px; }
+button.fn-close:hover, button.fn-back:hover { background-color: rgba(0,0,0,0.85); }
+button.fn-close:active, button.fn-back:active { background-color: rgba(0,0,0,0.95); }
+button.fn-back:disabled { opacity: 0.35; }
 box.fn-dialog {
   background: rgba(22,25,34,0.97); border-radius: 20px; padding: 32px 40px;
   border: 1px solid rgba(255,255,255,0.15);
@@ -231,6 +242,18 @@ fn run(args: Args) -> Result<(), String> {
         let _ = p.send_event(UserEvent::Close);
     });
 
+    // Back in the page history (dimmed while there's no previous page).
+    let back = gtk::Button::with_label("‹");
+    back.style_context().add_class("fn-back");
+    back.set_halign(gtk::Align::Start);
+    back.set_valign(gtk::Align::Start);
+    back.set_margin_top(20);
+    back.set_margin_start(20);
+    back.set_tooltip_text(Some("Previous page"));
+    back.set_can_focus(false);
+    back.set_sensitive(false);
+    overlay.add_overlay(&back);
+
     let hint = gtk::Label::new(Some("Keep holding Esc to close…"));
     hint.style_context().add_class("fn-hint");
     hint.set_halign(gtk::Align::Center);
@@ -311,6 +334,38 @@ fn run(args: Args) -> Result<(), String> {
             dialog.show(&uri);
         });
     }
+    // Page fullscreen (e.g. a video player): hide our buttons, show them again afterwards.
+    {
+        let (back_c, close_c) = (back.clone(), close.clone());
+        view.connect_enter_fullscreen(move |_| {
+            back_c.hide();
+            close_c.hide();
+            false // allow fullscreen
+        });
+        let (back_c, close_c) = (back.clone(), close.clone());
+        view.connect_leave_fullscreen(move |_| {
+            back_c.show();
+            close_c.show();
+            false
+        });
+    }
+
+    // The back button follows the page history.
+    {
+        let back_c = back.clone();
+        view.connect_load_changed(move |view, event| {
+            if matches!(event, LoadEvent::Committed | LoadEvent::Finished) {
+                back_c.set_sensitive(view.can_go_back());
+            }
+        });
+        let view_c = view.clone();
+        back.connect_clicked(move |_| {
+            if view_c.can_go_back() {
+                view_c.go_back();
+            }
+        });
+    }
+
     // "Go back": back to the last allowed page (the blocked load never committed, so normally
     // the current page is still the allowed one).
     {
