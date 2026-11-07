@@ -1,6 +1,7 @@
 mod config;
 mod control;
 mod disc;
+mod library;
 mod makemkv;
 mod player;
 mod resume;

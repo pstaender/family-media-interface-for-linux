@@ -1,11 +1,21 @@
 import { expect, test } from "bun:test";
 import example from "../../docs/config.example.json";
-import { defaultConfig, validateConfig } from "../src/config";
+import { defaultConfig, isNormalizedAbsolutePath, validateConfig } from "../src/config";
 
 test("the example config is valid", () => {
   const v = validateConfig(example);
   expect(v.ok).toBe(true);
   if (v.ok) expect(v.config.discs.audio_languages).toEqual(["deu", "eng"]);
+});
+
+test("the example folders are valid", () => {
+  const v = validateConfig(example);
+  expect(v.ok && v.config.folders.map((f) => f.id)).toEqual(["movies", "photos", "stories"]);
+});
+
+test("paths are checked like on the Rust side", () => {
+  for (const ok of ["/", "/a", "/srv/media movies/x.y", "/a/.hidden"]) expect(isNormalizedAbsolutePath(ok)).toBe(true);
+  for (const bad of ["", "a", "/a/", "//a", "/a/./b", "/a/..", "/a/../b", "/a\0b"]) expect(isNormalizedAbsolutePath(bad)).toBe(false);
 });
 
 test("missing fields take defaults", () => {
@@ -27,6 +37,20 @@ const BAD: unknown[] = [
   { version: 1, discs: { enabled: "yes" } },
   { version: 1, discs: { audio_languages: "deu" } },
   { version: 1, discs: { audio_languages: Array(11).fill(0).map((_, i) => `a${String.fromCharCode(97 + i)}a`) } },
+  { version: 1, folders: [{ id: "a", name: "A", path: "/x" }] },
+  { version: 1, folders: [{ id: "A", name: "A", path: "/x", video: true }] },
+  { version: 1, folders: [{ id: "-a", name: "A", path: "/x", video: true }] },
+  { version: 1, folders: [{ id: "a", name: "", path: "/x", video: true }] },
+  { version: 1, folders: [{ id: "a", name: " A", path: "/x", video: true }] },
+  { version: 1, folders: [{ id: "a", name: "A", path: "x", video: true }] },
+  { version: 1, folders: [{ id: "a", name: "A", path: "/x/../etc", video: true }] },
+  { version: 1, folders: [{ id: "a", name: "A", path: "/x/", video: true }] },
+  { version: 1, folders: [{ id: "a", name: "A", path: "/x//y", video: true }] },
+  { version: 1, folders: [{ id: "a", name: "A", path: "/x", extensions: [".pdf"] }] },
+  { version: 1, folders: [{ id: "a", name: "A", path: "/x", extensions: ["PDF"] }] },
+  { version: 1, folders: [{ id: "a", name: "A", path: "/x", extensions: ["pdf", "pdf"] }] },
+  { version: 1, folders: [{ id: "a", name: "A", path: "/x", video: true, write: true }] },
+  { version: 1, folders: [{ id: "a", name: "A", path: "/x", video: true }, { id: "a", name: "B", path: "/y", audio: true }] },
   "not an object",
   null,
   [],

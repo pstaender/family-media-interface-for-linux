@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
-import type { Config } from "../config";
+import type { Config, FolderSettings } from "../config";
 
 // ---------------------------------------------------------------------------
 // API
@@ -266,6 +266,8 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
         />
       </section>
 
+      <FoldersSection folders={config.folders} onChange={(folders) => setConfig({ ...config, folders })} />
+
       <div className="row" style={{ marginBottom: 24 }}>
         <button className="primary" onClick={save} disabled={busy || !dirty}>
           {busy ? "Saving…" : "Save and apply"}
@@ -349,6 +351,181 @@ function LanguageList(props: {
         >
           Add
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Folders
+
+function newFolderId(name: string, taken: string[]): string {
+  const slug = name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30) || "folder";
+  let id = slug;
+  while (taken.includes(id)) id = `${slug}-${Math.random().toString(36).slice(2, 6)}`;
+  return id;
+}
+
+function parseExtensions(text: string): string[] {
+  const list = text
+    .split(/[\s,;]+/)
+    .map((e) => e.trim().replace(/^\.+/, "").toLowerCase())
+    .filter((e) => /^[a-z0-9]{1,10}$/.test(e));
+  return [...new Set(list)].slice(0, 20);
+}
+
+function FoldersSection(props: { folders: FolderSettings[]; onChange: (folders: FolderSettings[]) => void }) {
+  const { folders, onChange } = props;
+  const [picking, setPicking] = useState<number | "new" | null>(null);
+
+  const update = (i: number, patch: Partial<FolderSettings>) =>
+    onChange(folders.map((f, j) => (j === i ? { ...f, ...patch } : f)));
+
+  const picked = (path: string) => {
+    if (picking === "new") {
+      const base = path === "/" ? "Computer" : path.split("/").pop()!;
+      const name = base.slice(0, 60);
+      onChange([
+        ...folders,
+        { id: newFolderId(name, folders.map((f) => f.id)), name, path, video: true, audio: true, images: true, extensions: [] },
+      ]);
+    } else if (typeof picking === "number") {
+      update(picking, { path });
+    }
+    setPicking(null);
+  };
+
+  return (
+    <section className="card">
+      <h2>Folders</h2>
+      <p className="hint">
+        Folders appear as tiles on the media center and can be browsed there. familynovice only
+        reads them — it never changes, moves or deletes files.
+      </p>
+      {folders.length === 0 && <p>No folders yet.</p>}
+      {folders.map((folder, i) => (
+        <FolderEditor
+          key={folder.id}
+          folder={folder}
+          onChange={(patch) => update(i, patch)}
+          onRemove={() => onChange(folders.filter((_, j) => j !== i))}
+          onPick={() => setPicking(i)}
+        />
+      ))}
+      {picking !== null ? (
+        <FolderPicker
+          start={typeof picking === "number" ? folders[picking]?.path : undefined}
+          onPick={picked}
+          onCancel={() => setPicking(null)}
+        />
+      ) : (
+        folders.length < 50 && <button onClick={() => setPicking("new")}>Add folder…</button>
+      )}
+    </section>
+  );
+}
+
+function FolderEditor(props: {
+  folder: FolderSettings;
+  onChange: (patch: Partial<FolderSettings>) => void;
+  onRemove: () => void;
+  onPick: () => void;
+}) {
+  const { folder, onChange } = props;
+  const [extText, setExtText] = useState(folder.extensions.join(", "));
+  const nothing = !folder.video && !folder.audio && !folder.images && folder.extensions.length === 0;
+
+  return (
+    <div className="folder">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <label className="field" style={{ flex: 1, marginBottom: 8 }}>
+          <span>Name on the tile</span>
+          <input
+            type="text"
+            maxLength={60}
+            value={folder.name}
+            onChange={(e) => onChange({ name: e.target.value })}
+            onBlur={() => onChange({ name: folder.name.trim().replace(/\p{Cc}/gu, "") })}
+          />
+        </label>
+        <button onClick={props.onRemove} aria-label={`Remove ${folder.name}`}>Remove</button>
+      </div>
+      <div className="row" style={{ marginBottom: 8 }}>
+        <code className="path">{folder.path}</code>
+        <button className="small" onClick={props.onPick}>Change…</button>
+      </div>
+      <div className="row kinds">
+        {(
+          [
+            ["video", "Videos"],
+            ["audio", "Music"],
+            ["images", "Pictures"],
+          ] as const
+        ).map(([key, label]) => (
+          <label key={key} className="check">
+            <input type="checkbox" checked={folder[key]} onChange={(e) => onChange({ [key]: e.target.checked })} /> {label}
+          </label>
+        ))}
+      </div>
+      <label className="field" style={{ marginTop: 8 }}>
+        <span>Other file types (extensions, e.g. "pdf, txt")</span>
+        <input
+          type="text"
+          value={extText}
+          onChange={(e) => setExtText(e.target.value)}
+          onBlur={() => {
+            const list = parseExtensions(extText);
+            setExtText(list.join(", "));
+            onChange({ extensions: list });
+          }}
+        />
+        <small className="hint">
+          These open in the computer's default app. Only add types whose app can't change or delete files.
+        </small>
+      </label>
+      {nothing && <div className="banner warn">Choose at least one kind of file to show.</div>}
+    </div>
+  );
+}
+
+function FolderPicker(props: { start?: string; onPick: (path: string) => void; onCancel: () => void }) {
+  const [listing, setListing] = useState<{ path: string; parent: string | null; dirs: string[]; error?: string } | null>(null);
+
+  const open = useCallback(async (path?: string) => {
+    const query = path ? `?path=${encodeURIComponent(path)}` : "";
+    const res = await fetch(`/api/browse${query}`);
+    const data = await res.json();
+    if (res.ok) setListing(data);
+    else setListing({ path: data.path ?? path ?? "/", parent: data.parent ?? null, dirs: [], error: data.error });
+  }, []);
+
+  useEffect(() => {
+    open(props.start);
+  }, [open, props.start]);
+
+  if (!listing) return null;
+  const child = (name: string) => (listing.path === "/" ? `/${name}` : `${listing.path}/${name}`);
+
+  return (
+    <div className="picker">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <code className="path">{listing.path}</code>
+        <button className="small" disabled={listing.parent === null} onClick={() => open(listing.parent ?? "/")}>↑ Up</button>
+      </div>
+      {listing.error && <div className="banner error" style={{ marginTop: 8 }}>{listing.error}</div>}
+      <ul className="dirs">
+        {listing.dirs.length === 0 && !listing.error && <li className="hint">No subfolders</li>}
+        {listing.dirs.map((d) => (
+          <li key={d}>
+            <button className="link" onClick={() => open(child(d))}>📁 {d}</button>
+          </li>
+        ))}
+      </ul>
+      <div className="row">
+        <button className="primary" disabled={!!listing.error} onClick={() => props.onPick(listing.path)}>
+          Use this folder
+        </button>
+        <button onClick={props.onCancel}>Cancel</button>
       </div>
     </div>
   );

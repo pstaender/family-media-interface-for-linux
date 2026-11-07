@@ -10,9 +10,10 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Key, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
 };
 
-use crate::config::Config;
+use crate::config::{Config, FolderSettings};
 use crate::control::SharedConfig;
 use crate::disc::{self, DriveReport, DriveState, MediaKind};
+use crate::library::{self, Entry, EntryKind, Filter};
 use crate::makemkv::{self, DiscInfo, ScanProgress};
 use crate::player::{self, MovieOptions, PlayMode};
 use crate::{resume, store};
@@ -69,11 +70,100 @@ enum Screen {
         resume: Option<f64>,
     },
     Ejecting,
+    /// Browsing a configured folder.
+    Browse(Browse),
     Playing {
         child: Child,
         started: Instant,
+        /// Where to return when the player exits (`None`: home screen).
+        back: Option<Browse>,
+        /// Started from a disc (for the error hint).
+        disc: bool,
     },
-    Message(String),
+    Message {
+        text: String,
+        back: Option<Browse>,
+    },
+}
+
+fn message(text: impl Into<String>) -> Screen {
+    Screen::Message {
+        text: text.into(),
+        back: None,
+    }
+}
+
+/// State of the folder browser.
+#[derive(Clone)]
+struct Browse {
+    folder_id: String,
+    /// Folder names below the configured folder.
+    sub: Vec<String>,
+    entries: Vec<Entry>,
+    selected: usize,
+    error: Option<String>,
+}
+
+impl Browse {
+    /// Read a directory (read-only). `select` picks an entry by name, e.g. the folder we
+    /// just came back from.
+    fn open(folder: &FolderSettings, sub: Vec<String>, select: Option<&str>) -> Self {
+        let root = PathBuf::from(&folder.path);
+        let (entries, error) = match library::list(&root, &sub, &Filter::from(folder)) {
+            Ok(entries) => (entries, None),
+            Err(e) => {
+                log::warn!("cannot list folder {}: {e}", folder.id);
+                (Vec::new(), Some(e))
+            }
+        };
+        let selected = select
+            .and_then(|name| entries.iter().position(|e| e.name == name))
+            .unwrap_or(0);
+        Self {
+            folder_id: folder.id.clone(),
+            sub,
+            entries,
+            selected,
+            error,
+        }
+    }
+}
+
+/// Keys pressed this frame.
+struct Keys {
+    enter: bool,
+    back: bool,
+    up: bool,
+    down: bool,
+    left: bool,
+    right: bool,
+    page_up: bool,
+    page_down: bool,
+    quit: bool,
+}
+
+impl Keys {
+    fn read(ctx: &egui::Context) -> Self {
+        ctx.input(|i| Keys {
+            enter: i.key_pressed(Key::Enter) || i.key_pressed(Key::Space),
+            back: i.key_pressed(Key::Escape) || i.key_pressed(Key::Backspace),
+            up: i.key_pressed(Key::ArrowUp),
+            down: i.key_pressed(Key::ArrowDown),
+            left: i.key_pressed(Key::ArrowLeft),
+            right: i.key_pressed(Key::ArrowRight),
+            page_up: i.key_pressed(Key::PageUp),
+            page_down: i.key_pressed(Key::PageDown),
+            quit: i.modifiers.ctrl && i.key_pressed(Key::Q),
+        })
+    }
+
+    /// For vertical lists: up/left = previous, down/right = next.
+    fn prev(&self) -> bool {
+        self.up || self.left
+    }
+    fn next(&self) -> bool {
+        self.down || self.right
+    }
 }
 
 /// What the Blu-ray tile shows.
@@ -125,6 +215,13 @@ pub struct App {
     eject_rx: Receiver<Result<(), String>>,
     config: SharedConfig,
     screen: Screen,
+    /// Focused tile on the home screen: (row, column). Row 0: discs, row 1: folders.
+    focus: (usize, usize),
+    /// Horizontal scroll of the folders row.
+    folder_scroll: f32,
+    /// Whether each folder (by id) can be read; refreshed every few seconds.
+    folder_ok: HashMap<String, bool>,
+    folder_checked: Option<Instant>,
 }
 
 impl App {
@@ -147,6 +244,10 @@ impl App {
             eject_rx,
             config,
             screen: Screen::Home,
+            focus: (0, 0),
+            folder_scroll: 0.0,
+            folder_ok: HashMap::new(),
+            folder_checked: None,
         }
     }
 
@@ -187,8 +288,26 @@ impl App {
         while let Ok(result) = self.eject_rx.try_recv() {
             self.screen = match result {
                 Ok(()) => Screen::Home,
-                Err(e) => Screen::Message(e),
+                Err(e) => message(e),
             };
+        }
+        // Folder availability (read-only metadata check), every 5 s.
+        if self
+            .folder_checked
+            .is_none_or(|t| t.elapsed() > Duration::from_secs(5))
+        {
+            let (config, _) = self.config();
+            self.folder_ok = config
+                .folders
+                .iter()
+                .map(|f| {
+                    let ok = std::fs::metadata(&f.path).is_ok_and(|m| m.is_dir())
+                        && std::fs::read_dir(&f.path).is_ok();
+                    (f.id.clone(), ok)
+                })
+                .collect();
+            self.folder_checked = Some(Instant::now());
+            self.ctx.request_repaint_after(Duration::from_secs(5));
         }
         // Every new Blu-ray: use the cached disc info, or start a MakeMKV scan.
         for report in &self.drives {
@@ -227,20 +346,43 @@ impl App {
         if self.scans.values().any(|s| s.progress().is_some()) {
             self.ctx.request_repaint_after(Duration::from_millis(250));
         }
-        if let Screen::Playing { child, started } = &mut self.screen {
+        let mut next = None;
+        if let Screen::Playing {
+            child,
+            started,
+            back,
+            disc,
+        } = &mut self.screen
+        {
             match child.try_wait() {
                 Ok(None) => self.ctx.request_repaint_after(Duration::from_millis(500)),
                 Ok(Some(status))
                     if !status.success() && started.elapsed() < Duration::from_secs(10) =>
                 {
-                    self.screen = Screen::Message(format!(
-                        "The player stopped right away ({status}).\n\
-                         Is MakeMKV installed and registered? See scripts/setup.sh."
-                    ));
+                    let text = if *disc {
+                        format!(
+                            "The player stopped right away ({status}).\n\
+                             Is MakeMKV installed and registered? See scripts/setup.sh."
+                        )
+                    } else {
+                        format!("This file could not be played ({status}).")
+                    };
+                    next = Some(Screen::Message {
+                        text,
+                        back: back.take(),
+                    });
                 }
-                Ok(Some(_)) => self.screen = Screen::Home,
-                Err(e) => self.screen = Screen::Message(format!("Lost track of the player: {e}")),
+                Ok(Some(_)) => next = Some(back.take().map_or(Screen::Home, Screen::Browse)),
+                Err(e) => {
+                    next = Some(Screen::Message {
+                        text: format!("Lost track of the player: {e}"),
+                        back: back.take(),
+                    })
+                }
             }
+        }
+        if let Some(screen) = next {
+            self.screen = screen;
         }
     }
 
@@ -334,6 +476,7 @@ impl App {
         let track = (mode == PlayMode::MainMovie)
             .then_some(tile.disc_id.clone())
             .flatten();
+        let player_cache = store::prepare_player_cache();
         let socket = store::mpv_socket_path();
         if track.is_some() {
             store::remove(&socket); // stale socket from an earlier run
@@ -343,6 +486,7 @@ impl App {
             ipc_socket: track.is_some().then_some(socket.as_path()),
             audio_languages: &config.discs.audio_languages,
             subtitle_languages: &config.discs.subtitle_languages,
+            cache_dir: player_cache.as_deref(),
         };
         let mut cmd = player::command(mode, device, info, &options);
         log::info!("starting player: {cmd:?}");
@@ -354,12 +498,55 @@ impl App {
                 Screen::Playing {
                     child,
                     started: Instant::now(),
+                    back: None,
+                    disc: true,
                 }
             }
-            Err(e) => Screen::Message(format!(
+            Err(e) => message(format!(
                 "Could not start the player ({:?}): {e}.\nRun scripts/setup.sh to install it.",
                 cmd.get_program()
             )),
+        };
+    }
+
+    /// Open a file from the folder browser with the matching player/viewer.
+    fn open_file(&mut self, browse: Browse, entry: Entry) {
+        let files: Vec<PathBuf> = browse
+            .entries
+            .iter()
+            .filter(|e| e.kind == entry.kind)
+            .map(|e| e.path.clone())
+            .collect();
+        let start = files.iter().position(|p| *p == entry.path).unwrap_or(0);
+        let cache = store::prepare_player_cache();
+        let conf = match (entry.kind, &cache) {
+            (EntryKind::Image, Some(dir)) => {
+                store::write_cache_file(dir, "image-input.conf", player::IMAGE_INPUT_CONF)
+            }
+            _ => None,
+        };
+        let Some(mut cmd) =
+            player::file_command(entry.kind, &files, start, cache.as_deref(), conf.as_deref())
+        else {
+            self.screen = Screen::Browse(browse);
+            return;
+        };
+        log::info!("opening {}: {cmd:?}", entry.path.display());
+        self.screen = match cmd.spawn() {
+            Ok(child) => Screen::Playing {
+                child,
+                started: Instant::now(),
+                back: Some(browse),
+                disc: false,
+            },
+            Err(e) => Screen::Message {
+                text: format!(
+                    "Could not open \"{}\" ({:?}): {e}",
+                    entry.name,
+                    cmd.get_program()
+                ),
+                back: Some(browse),
+            },
         };
     }
 }
@@ -373,22 +560,59 @@ impl eframe::App for App {
         let painter = ui.painter().clone();
         painter.rect_filled(screen_rect, 0.0, BG);
 
-        let (enter, escape, up, down, quit) = ctx.input(|i| {
-            (
-                i.key_pressed(Key::Enter) || i.key_pressed(Key::Space),
-                i.key_pressed(Key::Escape) || i.key_pressed(Key::Backspace),
-                i.key_pressed(Key::ArrowUp) || i.key_pressed(Key::ArrowLeft),
-                i.key_pressed(Key::ArrowDown) || i.key_pressed(Key::ArrowRight),
-                i.modifiers.ctrl && i.key_pressed(Key::Q),
-            )
-        });
+        let keys = Keys::read(&ctx);
         // TODO: protect leaving the media center with the PIN.
-        if quit {
+        if keys.quit {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
-        // Header
+        if matches!(self.screen, Screen::Browse(_)) {
+            self.browse_screen(ui, &painter, screen_rect, s, &keys);
+        } else {
+            self.home_screen(ui, &painter, screen_rect, s, &keys);
+        }
+    }
+}
+
+impl App {
+    fn home_screen(
+        &mut self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        screen_rect: Rect,
+        s: f32,
+        keys: &Keys,
+    ) {
+        let ctx = ui.ctx().clone();
+        let (config, _) = self.config();
+        let folders = &config.folders;
         let margin = 80.0 * s;
+        let tile_size = Vec2::new(300.0 * s, 340.0 * s);
+        let gap = 40.0 * s;
+        let home = matches!(self.screen, Screen::Home);
+
+        // Focus navigation between the rows and tiles.
+        let row_lens = [1, folders.len()];
+        let rows = if folders.is_empty() { 1 } else { 2 };
+        if home {
+            let (mut row, mut col) = self.focus;
+            if keys.up && row > 0 {
+                row -= 1;
+            }
+            if keys.down && row + 1 < rows {
+                row += 1;
+            }
+            row = row.min(rows - 1);
+            if keys.left {
+                col = col.saturating_sub(1);
+            }
+            if keys.right {
+                col += 1;
+            }
+            col = col.min(row_lens[row] - 1);
+            self.focus = (row, col);
+        }
+
         painter.text(
             screen_rect.min + Vec2::new(margin, 50.0 * s),
             Align2::LEFT_TOP,
@@ -397,54 +621,122 @@ impl eframe::App for App {
             TEXT_DIM,
         );
 
-        // Row: Discs
-        painter.text(
-            screen_rect.min + Vec2::new(margin, 170.0 * s),
-            Align2::LEFT_TOP,
-            "Discs",
-            FontId::proportional(40.0 * s),
-            TEXT,
-        );
+        // Row 0: discs
+        let row_label = |y: f32, text: &str| {
+            painter.text(
+                screen_rect.min + Vec2::new(margin, y),
+                Align2::LEFT_TOP,
+                text,
+                FontId::proportional(38.0 * s),
+                TEXT,
+            );
+        };
+        let mut activate = None;
+        let discs_y = 130.0 * s;
+        row_label(discs_y, "Discs");
         let tile = self.bluray_tile();
         let tile_rect = Rect::from_min_size(
-            screen_rect.min + Vec2::new(margin, 240.0 * s),
-            Vec2::new(340.0 * s, 400.0 * s),
+            screen_rect.min + Vec2::new(margin, discs_y + 65.0 * s),
+            tile_size,
         );
-        let home = matches!(self.screen, Screen::Home);
         let response = ui.interact(
             tile_rect,
-            ui.make_persistent_id("bluray_tile"),
+            ui.make_persistent_id("tile-disc"),
             Sense::click(),
         );
         let focus = ctx.animate_bool_with_time(
-            ui.make_persistent_id("bluray_focus"),
-            home && tile.available,
+            ui.make_persistent_id("focus-disc"),
+            home && self.focus == (0, 0),
             0.15,
         );
-        paint_bluray_tile(&painter, tile_rect, s, &tile, focus);
+        paint_bluray_tile(painter, tile_rect, s, &tile, focus);
+        if home && response.clicked() {
+            self.focus = (0, 0);
+            activate = Some((0, 0));
+        }
 
-        match &self.screen {
-            Screen::Home => {
-                if tile.available && (enter || response.clicked()) {
+        // Row 1: folders
+        if !folders.is_empty() {
+            let y = discs_y + 65.0 * s + tile_size.y + 45.0 * s;
+            row_label(y, "Folders");
+            let step = tile_size.x + gap;
+            let visible = screen_rect.width() - 2.0 * margin;
+            if self.focus.0 == 1 {
+                // Keep the focused tile on screen.
+                let left = self.focus.1 as f32 * step;
+                let right = left + tile_size.x;
+                if left < self.folder_scroll {
+                    self.folder_scroll = left;
+                } else if right > self.folder_scroll + visible {
+                    self.folder_scroll = right - visible;
+                }
+            }
+            for (i, folder) in folders.iter().enumerate() {
+                let x = margin + i as f32 * step - self.folder_scroll;
+                if x + tile_size.x < 0.0 || x > screen_rect.width() {
+                    continue;
+                }
+                let rect =
+                    Rect::from_min_size(screen_rect.min + Vec2::new(x, y + 65.0 * s), tile_size);
+                let available = self.folder_ok.get(&folder.id).copied().unwrap_or(false);
+                let id = ui.make_persistent_id(("tile-folder", &folder.id));
+                let response = ui.interact(rect, id, Sense::click());
+                let focus = ctx.animate_bool_with_time(
+                    ui.make_persistent_id(("focus-folder", &folder.id)),
+                    home && self.focus == (1, i),
+                    0.15,
+                );
+                let subtitle = if available {
+                    folder_kinds(folder)
+                } else {
+                    "Not available".into()
+                };
+                paint_folder_tile(painter, rect, s, &folder.name, &subtitle, available, focus);
+                if home && response.clicked() {
+                    self.focus = (1, i);
+                    activate = Some((1, i));
+                }
+            }
+        }
+
+        if home && keys.enter {
+            activate = Some(self.focus);
+        }
+        if let Some((row, col)) = activate {
+            match row {
+                0 if tile.available => {
                     self.screen = Screen::Choose {
                         selected: 0,
                         resume: tile.disc_id.as_deref().and_then(resume::load),
                     };
                 }
+                1 => {
+                    if let Some(folder) = folders.get(col)
+                        && self.folder_ok.get(&folder.id).copied().unwrap_or(false)
+                    {
+                        self.screen = Screen::Browse(Browse::open(folder, Vec::new(), None));
+                    }
+                }
+                _ => {}
             }
+        }
+
+        // Overlays
+        match &self.screen {
+            Screen::Home | Screen::Browse(_) => {}
             Screen::Choose { selected, resume } => {
                 let (mut selected, resume) = (*selected, *resume);
-                let list = choices(resume, self.config().0.discs.allow_disc_menu);
-                if up {
+                let list = choices(resume, config.discs.allow_disc_menu);
+                if keys.prev() {
                     selected = selected.saturating_sub(1);
                 }
-                if down {
+                if keys.next() {
                     selected = (selected + 1).min(list.len() - 1);
                 }
                 let scan_ready = self.scan_done(tile.disc_key.as_ref());
                 let clicked = paint_chooser(
                     ui,
-                    &painter,
+                    painter,
                     screen_rect,
                     s,
                     &tile,
@@ -452,9 +744,9 @@ impl eframe::App for App {
                     selected,
                     scan_ready,
                 );
-                let activated = clicked.or(enter.then_some(selected));
+                let activated = clicked.or(keys.enter.then_some(selected));
                 self.screen = Screen::Choose { selected, resume };
-                if escape || !tile.available {
+                if keys.back || !tile.available {
                     self.screen = Screen::Home;
                 } else if let Some(i) = activated {
                     match list[i] {
@@ -479,7 +771,7 @@ impl eframe::App for App {
             }
             Screen::Ejecting => {
                 paint_overlay(
-                    &painter,
+                    painter,
                     screen_rect,
                     s,
                     "Ejecting…",
@@ -488,18 +780,318 @@ impl eframe::App for App {
             }
             Screen::Playing { .. } => {
                 paint_overlay(
-                    &painter,
+                    painter,
                     screen_rect,
                     s,
                     "Playing…",
-                    "The movie is playing.",
+                    "Close the player to come back.",
                 );
             }
-            Screen::Message(msg) => {
-                paint_overlay(&painter, screen_rect, s, "Something went wrong", msg);
-                if enter || escape || ctx.input(|i| i.pointer.any_click()) {
-                    self.screen = Screen::Home;
+            Screen::Message { text, .. } => {
+                paint_overlay(painter, screen_rect, s, "Something went wrong", text);
+                if keys.enter || keys.back || ctx.input(|i| i.pointer.any_click()) {
+                    let Screen::Message { back, .. } =
+                        std::mem::replace(&mut self.screen, Screen::Home)
+                    else {
+                        unreachable!("matched Screen::Message above")
+                    };
+                    self.screen = back.map_or(Screen::Home, Screen::Browse);
                 }
+            }
+        }
+    }
+
+    fn browse_screen(
+        &mut self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        screen_rect: Rect,
+        s: f32,
+        keys: &Keys,
+    ) {
+        let Screen::Browse(mut b) = std::mem::replace(&mut self.screen, Screen::Home) else {
+            return;
+        };
+        let (config, _) = self.config();
+        // The folder may have been removed by the admin in the meantime.
+        let Some(folder) = config.folders.iter().find(|f| f.id == b.folder_id) else {
+            return; // back to the home screen
+        };
+        let margin = 80.0 * s;
+        let top = 170.0 * s;
+        let row_h = 78.0 * s;
+        let visible = (((screen_rect.height() - top - 80.0 * s) / row_h).floor() as usize).max(1);
+        let n = b.entries.len();
+
+        // Navigation
+        // Mouse wheel: one notch moves the selection by one entry.
+        let wheel: f32 = ui.ctx().input(|i| {
+            i.events
+                .iter()
+                .map(|e| match e {
+                    egui::Event::MouseWheel { delta, .. } => delta.y,
+                    _ => 0.0,
+                })
+                .sum()
+        });
+        if (keys.up || wheel > 0.0) && b.selected > 0 {
+            b.selected -= 1;
+        }
+        if (keys.down || wheel < 0.0) && b.selected + 1 < n {
+            b.selected += 1;
+        }
+        if keys.page_up {
+            b.selected = b.selected.saturating_sub(visible);
+        }
+        if keys.page_down && n > 0 {
+            b.selected = (b.selected + visible).min(n - 1);
+        }
+
+        // Header: folder name › subfolders
+        let mut crumbs = vec![folder.name.as_str()];
+        crumbs.extend(b.sub.iter().map(String::as_str));
+        painter.text(
+            screen_rect.min + Vec2::new(margin, 60.0 * s),
+            Align2::LEFT_TOP,
+            elide(&crumbs.join("  ›  "), 70),
+            FontId::proportional(42.0 * s),
+            TEXT,
+        );
+        if n > 0 {
+            painter.text(
+                Pos2::new(screen_rect.max.x - margin, screen_rect.min.y + 72.0 * s),
+                Align2::RIGHT_TOP,
+                format!("{} / {n}", b.selected + 1),
+                FontId::proportional(26.0 * s),
+                TEXT_DIM,
+            );
+        }
+
+        let mut activate = keys.enter;
+        if let Some(error) = &b.error {
+            paint_overlay(
+                painter,
+                screen_rect,
+                s,
+                "This folder can't be opened right now",
+                &elide(error, 90),
+            );
+        } else if n == 0 {
+            painter.text(
+                screen_rect.center(),
+                Align2::CENTER_CENTER,
+                "Nothing to show here",
+                FontId::proportional(32.0 * s),
+                TEXT_DIM,
+            );
+        }
+
+        let first = b
+            .selected
+            .saturating_sub(visible / 2)
+            .min(n.saturating_sub(visible));
+        for (i, entry) in b.entries.iter().enumerate().skip(first).take(visible) {
+            let y = top + (i - first) as f32 * row_h;
+            let rect = Rect::from_min_size(
+                Pos2::new(screen_rect.min.x + margin, screen_rect.min.y + y),
+                Vec2::new(screen_rect.width() - 2.0 * margin, row_h - 10.0 * s),
+            );
+            let selected = i == b.selected;
+            painter.rect_filled(
+                rect,
+                CornerRadius::same((12.0 * s) as u8),
+                if selected { ACCENT } else { TILE_BG },
+            );
+            let icon_center = Pos2::new(rect.min.x + 45.0 * s, rect.center().y);
+            paint_entry_icon(painter, entry.kind, icon_center, 20.0 * s);
+            painter.text(
+                Pos2::new(rect.min.x + 90.0 * s, rect.center().y),
+                Align2::LEFT_CENTER,
+                elide(&entry.name, 80),
+                FontId::proportional(30.0 * s),
+                TEXT,
+            );
+            if entry.kind == EntryKind::Folder {
+                painter.text(
+                    Pos2::new(rect.max.x - 30.0 * s, rect.center().y),
+                    Align2::RIGHT_CENTER,
+                    "›",
+                    FontId::proportional(36.0 * s),
+                    if selected { TEXT } else { TEXT_DIM },
+                );
+            }
+            let id = ui.make_persistent_id(("entry", i));
+            if ui.interact(rect, id, Sense::click()).clicked() {
+                b.selected = i;
+                activate = true;
+            }
+        }
+
+        painter.text(
+            Pos2::new(screen_rect.min.x + margin, screen_rect.max.y - 50.0 * s),
+            Align2::LEFT_CENTER,
+            "Enter: open     Esc / Backspace: back",
+            FontId::proportional(22.0 * s),
+            TEXT_DIM,
+        );
+
+        if keys.back {
+            match b.sub.pop() {
+                None => return, // leave the folder: home screen
+                Some(last) => b = Browse::open(folder, b.sub, Some(&last)),
+            }
+        } else if activate && let Some(entry) = b.entries.get(b.selected).cloned() {
+            if entry.kind == EntryKind::Folder {
+                let mut sub = b.sub.clone();
+                sub.push(entry.name);
+                b = Browse::open(folder, sub, None);
+            } else {
+                self.open_file(b, entry);
+                return;
+            }
+        }
+        self.screen = Screen::Browse(b);
+    }
+}
+
+/// "Videos · Pictures · PDF" for a folder tile.
+fn folder_kinds(folder: &FolderSettings) -> String {
+    let mut kinds: Vec<String> = Vec::new();
+    for (on, name) in [
+        (folder.video, "Videos"),
+        (folder.audio, "Music"),
+        (folder.images, "Pictures"),
+    ] {
+        if on {
+            kinds.push(name.into());
+        }
+    }
+    kinds.extend(folder.extensions.iter().map(|e| e.to_uppercase()));
+    kinds.join(" · ")
+}
+
+fn paint_folder_tile(
+    painter: &egui::Painter,
+    rect: Rect,
+    s: f32,
+    title: &str,
+    subtitle: &str,
+    available: bool,
+    focus: f32,
+) {
+    let alpha = if available { 1.0 } else { UNAVAILABLE_ALPHA };
+    let c = |col: Color32| col.gamma_multiply(alpha);
+    let rect = rect.expand(focus * 12.0 * s);
+    let radius = CornerRadius::same((18.0 * s) as u8);
+    painter.rect_filled(rect, radius, c(TILE_BG));
+    if focus > 0.0 {
+        painter.rect_stroke(
+            rect,
+            radius,
+            Stroke::new(4.0 * s, ACCENT.gamma_multiply(focus)),
+            StrokeKind::Outside,
+        );
+    }
+    let center = Pos2::new(rect.center().x, rect.min.y + rect.height() * 0.38);
+    paint_folder_icon(painter, center, rect.width() * 0.62, alpha);
+    painter.text(
+        Pos2::new(rect.center().x, rect.max.y - 110.0 * s),
+        Align2::CENTER_TOP,
+        elide(title, 20),
+        FontId::proportional(30.0 * s),
+        c(TEXT),
+    );
+    painter.text(
+        Pos2::new(rect.center().x, rect.max.y - 65.0 * s),
+        Align2::CENTER_TOP,
+        elide(subtitle, 30),
+        FontId::proportional(20.0 * s),
+        c(TEXT_DIM),
+    );
+}
+
+/// A folder: tab plus body, `width` wide, centered on `center`.
+fn paint_folder_icon(painter: &egui::Painter, center: Pos2, width: f32, alpha: f32) {
+    let c = |col: Color32| col.gamma_multiply(alpha);
+    let h = width * 0.72;
+    let body = Rect::from_center_size(
+        center + Vec2::new(0.0, h * 0.08),
+        Vec2::new(width, h * 0.84),
+    );
+    let tab = Rect::from_min_size(
+        Pos2::new(body.min.x, body.min.y - h * 0.14),
+        Vec2::new(width * 0.42, h * 0.24),
+    );
+    let r = CornerRadius::same((width * 0.06) as u8);
+    painter.rect_filled(tab, r, c(Color32::from_rgb(0xd9, 0x9a, 0x2b)));
+    painter.rect_filled(body, r, c(Color32::from_rgb(0xf2, 0xb5, 0x44)));
+    painter.rect_filled(
+        Rect::from_min_size(body.min, Vec2::new(body.width(), body.height() * 0.18)),
+        r,
+        c(Color32::from_rgb(0xf6, 0xc6, 0x66)),
+    );
+}
+
+/// Small icon for a browser entry, `r` is roughly the half size.
+fn paint_entry_icon(painter: &egui::Painter, kind: EntryKind, center: Pos2, r: f32) {
+    let stroke = Stroke::new((r * 0.12).max(1.5), TEXT);
+    match kind {
+        EntryKind::Folder => paint_folder_icon(painter, center, r * 2.0, 1.0),
+        EntryKind::Video => {
+            let frame = Rect::from_center_size(center, Vec2::new(r * 2.0, r * 1.5));
+            painter.rect_stroke(
+                frame,
+                CornerRadius::same((r * 0.2) as u8),
+                stroke,
+                StrokeKind::Middle,
+            );
+            let tri = vec![
+                center + Vec2::new(-r * 0.3, -r * 0.4),
+                center + Vec2::new(r * 0.45, 0.0),
+                center + Vec2::new(-r * 0.3, r * 0.4),
+            ];
+            painter.add(egui::Shape::convex_polygon(tri, TEXT, Stroke::NONE));
+        }
+        EntryKind::Audio => {
+            let head = center + Vec2::new(-r * 0.35, r * 0.55);
+            painter.circle_filled(head, r * 0.35, TEXT);
+            let top = center + Vec2::new(r * 0.0, -r * 0.8);
+            painter.line_segment([head + Vec2::new(r * 0.33, 0.0), top], stroke);
+            painter.line_segment([top, top + Vec2::new(r * 0.55, r * 0.3)], stroke);
+        }
+        EntryKind::Image => {
+            let frame = Rect::from_center_size(center, Vec2::new(r * 2.0, r * 1.6));
+            painter.rect_stroke(
+                frame,
+                CornerRadius::same((r * 0.15) as u8),
+                stroke,
+                StrokeKind::Middle,
+            );
+            painter.circle_filled(center + Vec2::new(r * 0.45, -r * 0.35), r * 0.2, TEXT);
+            let hill = vec![
+                Pos2::new(frame.min.x + r * 0.2, frame.max.y - r * 0.2),
+                Pos2::new(center.x - r * 0.2, center.y - r * 0.2),
+                Pos2::new(center.x + r * 0.5, frame.max.y - r * 0.2),
+            ];
+            painter.add(egui::Shape::convex_polygon(hill, TEXT, Stroke::NONE));
+        }
+        EntryKind::Other => {
+            let page = Rect::from_center_size(center, Vec2::new(r * 1.5, r * 2.0));
+            painter.rect_stroke(
+                page,
+                CornerRadius::same((r * 0.12) as u8),
+                stroke,
+                StrokeKind::Middle,
+            );
+            for i in 0..3 {
+                let y = page.min.y + r * (0.6 + i as f32 * 0.4);
+                painter.line_segment(
+                    [
+                        Pos2::new(page.min.x + r * 0.3, y),
+                        Pos2::new(page.max.x - r * 0.3, y),
+                    ],
+                    stroke,
+                );
             }
         }
     }

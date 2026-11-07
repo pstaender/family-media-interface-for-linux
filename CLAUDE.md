@@ -50,6 +50,24 @@ It has two parts:
 > reload over the control socket, and a first admin interface (password, disc settings).
 > Update this file as more gets decided.
 
+## Non-destructive: read-only media access
+
+familynovice is a **non-destructive media center**. It never writes, moves, renames or deletes
+anything outside its own folders:
+
+- `$XDG_CONFIG_HOME/familynovice/` (config, admin password hash),
+- `$XDG_DATA_HOME/familynovice/` (resume positions, later usage data),
+- `$XDG_CACHE_HOME/familynovice/` (disc info, build files, player screenshots),
+- `$XDG_RUNTIME_DIR` / temp dir (sockets).
+
+Media (discs, shared folders, everything else) is only ever **read**. Code that touches media
+uses read-only operations (`read_dir`, `metadata`, open for reading); no create/write/rename/
+remove calls on media paths, and no "convenience" features that change files (thumbnails next
+to media, playlists, tags, deleting). Players and viewers we start must not write next to the
+media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cache, VLC gets
+`--snapshot-path` inside our cache. The only exception touching a device is ejecting a disc
+(and unmounting it for that), which doesn't change any file.
+
 ## Features
 
 ### Media center UI (native, Rust)
@@ -135,6 +153,25 @@ It has two parts:
 - Parental controls apply to discs too: respect DVD/Blu-ray parental levels where they exist,
   and let profiles block or require approval for disc playback.
 
+### Folders (implemented, v1)
+
+- The admin adds folders (e.g. a shared movie, music or photo folder). Each folder gets a name
+  and a filter for which files are visible: **videos**, **music**, **pictures** (fixed
+  extension lists in `src/library.rs`) and/or **extra file extensions** (e.g. `pdf`).
+- On the home screen, each folder is a tile in the "Folders" row. It can be browsed (subfolders
+  plus visible files); hidden files (`.name`) are never shown. A folder that doesn't exist or
+  can't be read is shown semi-transparent.
+- **Read-only** (see above). Browsing is confined to the configured folder: paths are
+  canonicalized and must stay inside it, so `..` and symlinks pointing outside are refused.
+- Opening: videos with mpv (one file), music with mpv (from the chosen track to the end of the
+  folder), pictures with mpv as a slideshow of the folder's pictures starting at the chosen one,
+  extra extensions with the desktop's default application (`xdg-open`). Note: such
+  applications may offer "save as" and similar; only add extensions whose default viewer is
+  harmless.
+- Config: `folders` in `config.json` (id, name, absolute path, `video`/`audio`/`images`
+  booleans, `extensions`). The admin interface has a folder picker (`GET /api/browse`, lists
+  directories only, read-only).
+
 ### Allowed websites (domain allowlist with wildcards)
 
 - The admin sets up which websites each profile may visit. Entries are domains with optional
@@ -205,8 +242,10 @@ It has two parts:
 Cargo.toml        Rust media center (single crate for now; may become a workspace)
 src/
   main.rs         entry point, window setup (`--windowed` for development)
-  ui.rs           home screen / front row (egui), screens and input handling
+  ui.rs           home screen / front row (egui): rows with focus navigation, disc chooser,
+                  folder browser, overlays
   disc.rs         optical drive + disc detection (ioctl + udev)
+  library.rs      read-only folder browsing (file type filters, confinement to the folder)
   makemkv.rs      makemkvcon robot-output parser, main title selection
   player.rs       builds the player commands (mpv / VLC with libmmbd)
   resume.rs       resume positions via mpv IPC
@@ -293,6 +332,8 @@ Before you consider a change done, run the formatter, linter and tests for every
 - Security- and child-safety-relevant code (PIN checks, domain matching, time limits, launcher)
   must have tests, including tests for ways around it.
 - Fail closed: if config is missing or invalid, or a check errors, deny access instead of allowing it.
+- Non-destructive: never write outside familynovice's own folders (see "Non-destructive:
+  read-only media access"). Review every new file operation against this.
 - No telemetry and no unneeded network calls. Usage data and config stay on the machine.
 - Follow the XDG Base Directory spec for config, data and cache locations.
 - Stay desktop-environment agnostic (see Deployment target).

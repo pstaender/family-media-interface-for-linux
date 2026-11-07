@@ -9,10 +9,87 @@
 //! - **Disc menu** → `vlc bluray://<device>`: regular start with full disc menus (BD-J menus
 //!   need Java and libbluray's BD-J support).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::library::EntryKind;
 use crate::makemkv::DiscInfo;
+
+/// Keep mpv from writing next to the media (screenshots, watch-later files): everything
+/// goes into our cache dir. See "Non-destructive" in CLAUDE.md.
+fn mpv_no_writes(cmd: &mut Command, cache_dir: Option<&Path>) {
+    if let Some(dir) = cache_dir {
+        cmd.arg(format!(
+            "--screenshot-dir={}",
+            dir.join("screenshots").display()
+        ))
+        .arg(format!(
+            "--watch-later-dir={}",
+            dir.join("watch_later").display()
+        ));
+    }
+    cmd.arg("--no-save-position-on-quit");
+}
+
+/// Command to open a file from a folder. `files` are the folder's files of the same kind
+/// (for music: play on from `start`; for pictures: a slideshow starting at `start`).
+/// `image_input_conf`: mpv key bindings for pictures (left/right = previous/next).
+pub fn file_command(
+    kind: EntryKind,
+    files: &[PathBuf],
+    start: usize,
+    cache_dir: Option<&Path>,
+    image_input_conf: Option<&Path>,
+) -> Option<Command> {
+    let chosen = files.get(start)?;
+    let mut cmd = match kind {
+        EntryKind::Folder => return None,
+        EntryKind::Other => {
+            // Desktop-independent "open with the default application".
+            let mut cmd = Command::new("xdg-open");
+            cmd.arg(chosen);
+            cmd
+        }
+        EntryKind::Video | EntryKind::Audio | EntryKind::Image => {
+            let mut cmd = Command::new("mpv");
+            cmd.args(["--fullscreen", "--no-terminal"]);
+            mpv_no_writes(&mut cmd, cache_dir);
+            match kind {
+                EntryKind::Audio => {
+                    cmd.arg("--force-window=yes");
+                }
+                EntryKind::Image => {
+                    cmd.arg("--image-display-duration=inf")
+                        .arg(format!("--playlist-start={start}"));
+                    if let Some(conf) = image_input_conf {
+                        cmd.arg(format!("--input-conf={}", conf.display()));
+                    }
+                }
+                _ => {}
+            }
+            // "--" so that no file name can ever be read as an option.
+            cmd.arg("--");
+            match kind {
+                EntryKind::Video => {
+                    cmd.arg(chosen);
+                }
+                EntryKind::Audio => {
+                    cmd.args(&files[start..]);
+                }
+                _ => {
+                    cmd.args(files);
+                }
+            }
+            cmd
+        }
+    };
+    cmd.stdin(Stdio::null()).stdout(Stdio::null());
+    Some(cmd)
+}
+
+/// mpv key bindings for picture slideshows.
+pub const IMAGE_INPUT_CONF: &str =
+    "RIGHT playlist-next\nLEFT playlist-prev\nENTER playlist-next\nSPACE playlist-next\n";
 
 /// ISO 639-2 has two codes for some languages (terminology / bibliographic), and discs use
 /// both. The admin interface stores the terminology code; players get both variants.
@@ -74,6 +151,8 @@ pub struct MovieOptions<'a> {
     pub audio_languages: &'a [String],
     /// Preferred subtitle languages; empty means no subtitles.
     pub subtitle_languages: &'a [String],
+    /// Our cache dir: players put screenshots etc. there instead of next to the media.
+    pub cache_dir: Option<&'a Path>,
 }
 
 /// Build the player command for a mode. `info` comes from the MakeMKV scan; without it,
@@ -95,6 +174,7 @@ pub fn command(
             cmd.arg("--fullscreen")
                 .arg("--no-terminal")
                 .arg(format!("--bluray-device={}", device.display()));
+            mpv_no_writes(&mut cmd, movie.cache_dir);
             if let Some(start) = movie.start_secs {
                 cmd.arg(format!("--start={start:.1}"));
             }
@@ -116,6 +196,12 @@ pub fn command(
         PlayMode::DiscMenu => {
             let mut cmd = Command::new("vlc");
             cmd.args(["--fullscreen", "--play-and-exit", "--no-video-title-show"]);
+            if let Some(dir) = movie.cache_dir {
+                cmd.arg(format!(
+                    "--snapshot-path={}",
+                    dir.join("screenshots").display()
+                ));
+            }
             if !movie.audio_languages.is_empty() {
                 cmd.arg(format!(
                     "--audio-language={}",
@@ -242,6 +328,66 @@ mod tests {
         assert_eq!(l(&["fre"]), "fre,fra");
         assert_eq!(l(&["deu", "ger"]), "deu,ger"); // no duplicates
         assert_eq!(l(&[]), "");
+    }
+
+    #[test]
+    fn players_write_only_into_our_cache() {
+        let cache = Path::new("/home/u/.cache/familynovice/player");
+        let options = MovieOptions {
+            cache_dir: Some(cache),
+            ..Default::default()
+        };
+        let mpv = args(&command(
+            PlayMode::MainMovie,
+            Path::new("/dev/sr0"),
+            None,
+            &options,
+        ));
+        assert!(mpv.contains(&format!("--screenshot-dir={}/screenshots", cache.display())));
+        assert!(mpv.contains(&"--no-save-position-on-quit".to_string()));
+        let vlc = args(&command(
+            PlayMode::DiscMenu,
+            Path::new("/dev/sr0"),
+            None,
+            &options,
+        ));
+        assert!(vlc.contains(&format!("--snapshot-path={}/screenshots", cache.display())));
+    }
+
+    #[test]
+    fn folder_files() {
+        let files: Vec<PathBuf> = ["/m/a.jpg", "/m/b.jpg", "/m/-c.jpg"]
+            .iter()
+            .map(PathBuf::from)
+            .collect();
+        let cache = Some(Path::new("/c"));
+        // Pictures: slideshow of all, starting at the chosen one, keys from our conf.
+        let img = file_command(
+            EntryKind::Image,
+            &files,
+            1,
+            cache,
+            Some(Path::new("/c/img.conf")),
+        )
+        .unwrap();
+        let a = args(&img);
+        assert!(a.contains(&"--playlist-start=1".to_string()));
+        assert!(a.contains(&"--input-conf=/c/img.conf".to_string()));
+        let dashdash = a.iter().position(|x| x == "--").unwrap();
+        assert_eq!(&a[dashdash + 1..], ["/m/a.jpg", "/m/b.jpg", "/m/-c.jpg"]);
+        // Music: from the chosen track to the end.
+        let a = args(&file_command(EntryKind::Audio, &files, 1, cache, None).unwrap());
+        assert_eq!(a.last().unwrap(), "/m/-c.jpg");
+        assert!(!a.contains(&"/m/a.jpg".to_string()));
+        // Video: just the chosen file.
+        let a = args(&file_command(EntryKind::Video, &files, 2, cache, None).unwrap());
+        assert_eq!(&a[a.len() - 2..], ["--", "/m/-c.jpg"]);
+        // Other: default application.
+        let other = file_command(EntryKind::Other, &files, 0, cache, None).unwrap();
+        assert_eq!(other.get_program(), "xdg-open");
+        // Out of range / folders: nothing.
+        assert!(file_command(EntryKind::Video, &files, 9, cache, None).is_none());
+        assert!(file_command(EntryKind::Folder, &files, 0, cache, None).is_none());
     }
 
     #[test]

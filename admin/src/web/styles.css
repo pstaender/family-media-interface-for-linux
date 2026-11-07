@@ -103,6 +103,7 @@ label.field span {
 }
 
 input[type="password"],
+input[type="text"],
 select {
   width: 100%;
   padding: 9px 11px;
@@ -241,4 +242,71 @@ button.small {
 details summary {
   cursor: pointer;
   font-weight: 600;
+}
+
+.folder {
+  border-top: 1px solid var(--border);
+  padding: 14px 0;
+}
+
+.folder:last-of-type {
+  margin-bottom: 12px;
+}
+
+code.path {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.kinds {
+  gap: 18px;
+}
+
+.check {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  cursor: pointer;
+}
+
+.check input {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--accent);
+}
+
+.picker {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--bg);
+}
+
+ul.dirs {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+ul.dirs li {
+  padding: 1px 0;
+}
+
+button.link {
+  border: none;
+  background: none;
+  padding: 4px 6px;
+  width: 100%;
+  text-align: left;
+  border-radius: 6px;
+}
+
+button.link:hover {
+  background: var(--card);
 }

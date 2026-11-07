@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, statSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server as NetServer } from "node:net";
 import { join } from "node:path";
 import { createAdminServer } from "../src/app";
@@ -79,6 +79,13 @@ test("setup sets the password once, stored only as argon2 hash", async () => {
   expect(again.status).toBe(400);
 });
 
+test("folder picker needs a login", async () => {
+  const saved = cookie;
+  cookie = "";
+  expect((await call("GET", "/api/browse?path=/")).status).toBe(401);
+  cookie = saved;
+});
+
 test("rejects foreign Host headers (DNS rebinding)", async () => {
   const r = await call("GET", "/api/state", undefined, { Host: "evil.example:80" });
   expect(r.status).toBe(403);
@@ -106,7 +113,29 @@ test("reads default config, rejects invalid, saves and applies valid config", as
   expect(written).toEqual({
     version: 1,
     discs: { enabled: true, allow_disc_menu: false, audio_languages: ["deu"], subtitle_languages: [] },
+    folders: [],
   });
+});
+
+test("folder picker lists only visible directories, read-only", async () => {
+  const base = mkdtempSync("/tmp/fn-admin-browse-");
+  for (const d of ["Movies", "Music 10", "Music 2", ".hidden"]) mkdirSync(join(base, d));
+  writeFileSync(join(base, "file.mkv"), "x");
+  const r = await call("GET", `/api/browse?path=${encodeURIComponent(base)}`);
+  expect(r.data.dirs).toEqual(["Movies", "Music 2", "Music 10"]);
+  expect(r.data.parent).toBe("/tmp");
+  expect((await call("GET", "/api/browse?path=relative")).status).toBe(400);
+  expect((await call("GET", `/api/browse?path=${encodeURIComponent(base + "/../etc")}`)).status).toBe(400);
+  const missing = await call("GET", `/api/browse?path=${encodeURIComponent(base + "/nope")}`);
+  expect(missing.data.error).toBe("This folder doesn't exist.");
+  rmSync(base, { recursive: true, force: true });
+});
+
+test("saves folders", async () => {
+  const folders = [{ id: "movies", name: "Movies", path: "/srv/movies", video: true, audio: false, images: false, extensions: ["pdf"] }];
+  const r = await call("PUT", "/api/config", { version: 1, folders });
+  expect(r.data.saved).toBe(true);
+  expect(JSON.parse(readFileSync(join(configDir, "config.json"), "utf8")).folders).toEqual(folders);
 });
 
 test("status comes from the media center", async () => {

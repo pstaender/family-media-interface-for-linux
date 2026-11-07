@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 
 pub const VERSION: u32 = 1;
 const MAX_LANGUAGES: usize = 10;
+const MAX_FOLDERS: usize = 50;
+const MAX_EXTENSIONS: usize = 20;
+const MAX_NAME_CHARS: usize = 60;
+const MAX_PATH_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -19,6 +23,27 @@ pub struct Config {
     pub version: u32,
     #[serde(default)]
     pub discs: DiscSettings,
+    #[serde(default)]
+    pub folders: Vec<FolderSettings>,
+}
+
+/// A folder shown in the "Folders" row. Always accessed read-only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FolderSettings {
+    pub id: String,
+    pub name: String,
+    /// Absolute, normalized path.
+    pub path: String,
+    #[serde(default)]
+    pub video: bool,
+    #[serde(default)]
+    pub audio: bool,
+    #[serde(default)]
+    pub images: bool,
+    /// Extra file extensions (lowercase, without dot), opened with the default application.
+    #[serde(default)]
+    pub extensions: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -47,6 +72,7 @@ impl Default for Config {
         Self {
             version: VERSION,
             discs: DiscSettings::default(),
+            folders: Vec::new(),
         }
     }
 }
@@ -61,6 +87,7 @@ impl Config {
                 allow_disc_menu: false,
                 ..DiscSettings::default()
             },
+            folders: Vec::new(),
         }
     }
 }
@@ -116,7 +143,77 @@ fn validate(config: &Config) -> Result<(), String> {
             }
         }
     }
+    if config.folders.len() > MAX_FOLDERS {
+        return Err(format!("folders: at most {MAX_FOLDERS} folders"));
+    }
+    for (i, folder) in config.folders.iter().enumerate() {
+        validate_folder(folder).map_err(|e| format!("folders[{i}]: {e}"))?;
+        if config.folders[..i].iter().any(|f| f.id == folder.id) {
+            return Err(format!("folders[{i}]: id \"{}\" is used twice", folder.id));
+        }
+    }
     Ok(())
+}
+
+fn validate_folder(f: &FolderSettings) -> Result<(), String> {
+    let id_ok = (1..=40).contains(&f.id.len())
+        && f.id
+            .bytes()
+            .enumerate()
+            .all(|(i, b)| b.is_ascii_lowercase() || b.is_ascii_digit() || (b == b'-' && i > 0));
+    if !id_ok {
+        return Err(format!(
+            "id \"{}\" must be lowercase letters, digits and -",
+            f.id
+        ));
+    }
+    let name_chars = f.name.chars().count();
+    if name_chars == 0 || name_chars > MAX_NAME_CHARS {
+        return Err(format!("name must have 1 to {MAX_NAME_CHARS} characters"));
+    }
+    if f.name.trim() != f.name || f.name.chars().any(char::is_control) {
+        return Err("name must not start/end with spaces or contain control characters".into());
+    }
+    if !is_normalized_absolute_path(&f.path) {
+        return Err(format!(
+            "path \"{}\" must be an absolute path without '.', '..' or empty parts",
+            f.path
+        ));
+    }
+    if f.extensions.len() > MAX_EXTENSIONS {
+        return Err(format!("at most {MAX_EXTENSIONS} extensions"));
+    }
+    for (i, ext) in f.extensions.iter().enumerate() {
+        let ok = (1..=10).contains(&ext.len())
+            && ext
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
+        if !ok {
+            return Err(format!(
+                "extension \"{ext}\" must be 1-10 lowercase letters/digits, without dot"
+            ));
+        }
+        if f.extensions[..i].contains(ext) {
+            return Err(format!("extension \"{ext}\" is listed twice"));
+        }
+    }
+    if !(f.video || f.audio || f.images || !f.extensions.is_empty()) {
+        return Err("choose at least one kind of file to show".into());
+    }
+    Ok(())
+}
+
+/// `/a/b` yes; `a/b`, `/a/../b`, `/a/./b`, `/a//b`, `/a/` no; `/` yes.
+pub fn is_normalized_absolute_path(path: &str) -> bool {
+    if path == "/" {
+        return true;
+    }
+    path.len() <= MAX_PATH_BYTES
+        && !path.contains('\0')
+        && path.starts_with('/')
+        && path[1..]
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 /// Load the config file. `Ok(None)` if there is none yet.
@@ -191,6 +288,24 @@ mod tests {
     }
 
     #[test]
+    fn example_folders() {
+        let config = parse(include_str!("../docs/config.example.json")).unwrap();
+        assert_eq!(config.folders.len(), 3);
+        assert_eq!(config.folders[2].extensions, ["pdf"]);
+        assert!(!config.folders[2].video);
+    }
+
+    #[test]
+    fn paths() {
+        for ok in ["/", "/a", "/srv/media movies/x.y", "/a/.hidden"] {
+            assert!(is_normalized_absolute_path(ok), "{ok}");
+        }
+        for bad in ["", "a", "/a/", "//a", "/a/./b", "/a/..", "/a/../b", "/a\0b"] {
+            assert!(!is_normalized_absolute_path(bad), "{bad}");
+        }
+    }
+
+    #[test]
     fn missing_fields_take_defaults() {
         let config = parse(r#"{"version":1}"#).unwrap();
         assert_eq!(config, Config::default());
@@ -210,6 +325,20 @@ mod tests {
             r#"{"version":1,"discs":{"audio_languages":["DEU"]}}"#,
             r#"{"version":1,"discs":{"audio_languages":["deu","deu"]}}"#,
             r#"{"version":1,"discs":{"enabled":"yes"}}"#,
+            r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x"}]}"#,
+            r#"{"version":1,"folders":[{"id":"A","name":"A","path":"/x","video":true}]}"#,
+            r#"{"version":1,"folders":[{"id":"-a","name":"A","path":"/x","video":true}]}"#,
+            r#"{"version":1,"folders":[{"id":"a","name":"","path":"/x","video":true}]}"#,
+            r#"{"version":1,"folders":[{"id":"a","name":" A","path":"/x","video":true}]}"#,
+            r#"{"version":1,"folders":[{"id":"a","name":"A","path":"x","video":true}]}"#,
+            r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x/../etc","video":true}]}"#,
+            r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x/","video":true}]}"#,
+            r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x//y","video":true}]}"#,
+            r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x","extensions":[".pdf"]}]}"#,
+            r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x","extensions":["PDF"]}]}"#,
+            r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x","extensions":["pdf","pdf"]}]}"#,
+            r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x","video":true,"write":true}]}"#,
+            r#"{"version":1,"folders":[{"id":"a","name":"A","path":"/x","video":true},{"id":"a","name":"B","path":"/y","audio":true}]}"#,
             "not json",
         ] {
             assert!(parse(bad).is_err(), "should reject {bad}");

@@ -28,6 +28,33 @@ pub fn resume_path(key: &str) -> Option<PathBuf> {
     )
 }
 
+/// `$XDG_CACHE_HOME/familynovice/player`: where players may write (screenshots, …),
+/// so they never write next to the media.
+pub fn player_cache_dir() -> Option<PathBuf> {
+    Some(dirs::cache_dir()?.join(APP).join("player"))
+}
+
+/// Create the player cache dir (and its `screenshots` folder) and return it.
+pub fn prepare_player_cache() -> Option<PathBuf> {
+    let dir = player_cache_dir()?;
+    if let Err(e) = std::fs::create_dir_all(dir.join("screenshots")) {
+        log::warn!("could not create {}: {e}", dir.display());
+    }
+    Some(dir)
+}
+
+/// Write a small file into one of our cache dirs (only if its content changed).
+pub fn write_cache_file(dir: &Path, name: &str, content: &str) -> Option<PathBuf> {
+    let path = dir.join(name);
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(content)
+        && let Err(e) = std::fs::write(&path, content)
+    {
+        log::warn!("could not write {}: {e}", path.display());
+        return None;
+    }
+    Some(path)
+}
+
 /// Socket for talking to the running mpv (`$XDG_RUNTIME_DIR`, falls back to the temp dir).
 pub fn mpv_socket_path() -> PathBuf {
     dirs::runtime_dir()

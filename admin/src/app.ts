@@ -6,7 +6,9 @@
 // - changing requests need the header `X-Familynovice: 1` and a matching Origin (CSRF),
 // - all input is validated before anything is written.
 
-import { join } from "node:path";
+import { readdir, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import index from "./web/index.html";
 import {
   Auth,
@@ -14,7 +16,7 @@ import {
   sessionCookie,
   sessionToken,
 } from "./auth";
-import { validateConfig, defaultConfig } from "./config";
+import { isNormalizedAbsolutePath, validateConfig, defaultConfig } from "./config";
 import { NOT_RUNNING, sendCommand } from "./control";
 import { readJson, writeJsonAtomic } from "./files";
 
@@ -28,6 +30,27 @@ export interface AdminOptions {
 }
 
 const MAX_BODY_BYTES = 64 * 1024;
+const MAX_BROWSE_ENTRIES = 2000;
+
+/**
+ * List the subdirectories of `path` for the folder picker. Read-only (readdir/stat only);
+ * hidden entries are skipped.
+ */
+export async function listDirectories(path: string): Promise<{ path: string; parent: string | null; dirs: string[] }> {
+  const items = await readdir(path, { withFileTypes: true });
+  const dirs: string[] = [];
+  for (const item of items) {
+    if (item.name.startsWith(".")) continue;
+    let isDir = item.isDirectory();
+    if (item.isSymbolicLink()) {
+      isDir = await stat(join(path, item.name)).then((s) => s.isDirectory(), () => false);
+    }
+    if (isDir) dirs.push(item.name);
+    if (dirs.length >= MAX_BROWSE_ENTRIES) break;
+  }
+  dirs.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+  return { path, parent: path === "/" ? null : dirname(path), dirs };
+}
 
 function json(data: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return Response.json(data, {
@@ -164,6 +187,23 @@ export function createAdminServer(options: AdminOptions) {
           },
           { mutating: true },
         ),
+      },
+
+      "/api/browse": {
+        GET: api(async (req) => {
+          const path = new URL(req.url).searchParams.get("path") || homedir();
+          if (!isNormalizedAbsolutePath(path)) return json({ error: "Invalid path." }, 400);
+          try {
+            return json(await listDirectories(path));
+          } catch (e) {
+            const code = (e as NodeJS.ErrnoException).code;
+            const reason =
+              code === "ENOENT" ? "This folder doesn't exist." :
+              code === "EACCES" ? "No permission to read this folder." :
+              code === "ENOTDIR" ? "This is not a folder." : "This folder can't be read.";
+            return json({ error: reason, path, parent: path === "/" ? null : dirname(path) }, 400);
+          }
+        }),
       },
 
       "/api/status": {

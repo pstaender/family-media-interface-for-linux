@@ -36,6 +36,15 @@
           "description": "Preferred subtitle languages, most preferred first. Empty: no subtitles."
         }
       }
+    },
+    "folders": {
+      "type": "array",
+      "maxItems": 50,
+      "default": [],
+      "description": "Folders shown in the \"Folders\" row. Always accessed read-only.",
+      "items": {
+        "$ref": "#/$defs/folder"
+      }
     }
   },
   "$defs": {
@@ -48,6 +57,61 @@
         "type": "string",
         "pattern": "^[a-z]{3}$",
         "description": "ISO 639-2 code as used on discs, e.g. \"deu\", \"eng\"."
+      }
+    },
+    "folder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "path"
+      ],
+      "description": "At least one of video/audio/images must be true or extensions non-empty. ids must be unique.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
+          "description": "Stable id (used for resume etc.)."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Shown on the tile. No control characters, no leading/trailing spaces."
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 4096,
+          "pattern": "^/",
+          "description": "Absolute path without '.', '..' or empty segments (a trailing '/' is not allowed except for '/')."
+        },
+        "video": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show video files."
+        },
+        "audio": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show music/audio files."
+        },
+        "images": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show pictures."
+        },
+        "extensions": {
+          "type": "array",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "default": [],
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]{1,10}$"
+          },
+          "description": "Additional file extensions to show, lowercase without dot, e.g. \"pdf\". Opened with the default application."
+        }
       }
     }
   }

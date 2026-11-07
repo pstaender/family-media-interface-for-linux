@@ -8,5 +8,36 @@
       "eng"
     ],
     "subtitle_languages": []
-  }
+  },
+  "folders": [
+    {
+      "id": "movies",
+      "name": "Movies",
+      "path": "/srv/media/movies",
+      "video": true,
+      "audio": false,
+      "images": false,
+      "extensions": []
+    },
+    {
+      "id": "photos",
+      "name": "Holiday photos",
+      "path": "/home/shared/Pictures/Holidays",
+      "video": true,
+      "audio": false,
+      "images": true,
+      "extensions": []
+    },
+    {
+      "id": "stories",
+      "name": "Stories",
+      "path": "/home/shared/Stories",
+      "video": false,
+      "audio": true,
+      "images": false,
+      "extensions": [
+        "pdf"
+      ]
+    }
+  ]
 }
