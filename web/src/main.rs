@@ -13,7 +13,9 @@
 //! - pop-ups open in the same window if allowed, otherwise the same dialog appears,
 //! - downloads are blocked (nothing is written; cookies etc. only in `--data-dir`).
 
+// Shared with the media center; parts of it are only used there.
 #[path = "../../src/sites.rs"]
+#[allow(dead_code)]
 mod sites;
 
 use std::cell::{Cell, RefCell};
@@ -156,6 +158,9 @@ impl BlockedDialog {
             .and_then(|u| u.host_str().map(String::from))
             .unwrap_or_else(|| url.to_string());
         self.address.set_text(&host);
+        // show_all() does nothing on a widget with no_show_all set (which keeps the dialog
+        // hidden when the window first appears), so lift it here.
+        self.container.set_no_show_all(false);
         self.container.show_all();
         self.back_button.grab_focus(); // Enter = go back
     }
