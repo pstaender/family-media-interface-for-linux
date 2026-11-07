@@ -1,6 +1,8 @@
 mod disc;
 mod makemkv;
 mod player;
+mod resume;
+mod store;
 mod ui;
 
 use eframe::egui;

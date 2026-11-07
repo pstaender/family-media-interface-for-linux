@@ -22,9 +22,23 @@ pub enum PlayMode {
     DiscMenu,
 }
 
+/// Options for the main movie (mpv only).
+#[derive(Debug, Clone, Default)]
+pub struct MovieOptions<'a> {
+    /// Start position in seconds (resume).
+    pub start_secs: Option<f64>,
+    /// mpv JSON IPC socket, used to track the playback position.
+    pub ipc_socket: Option<&'a Path>,
+}
+
 /// Build the player command for a mode. `info` comes from the MakeMKV scan; without it,
 /// the main movie falls back to mpv's "longest title" choice.
-pub fn command(mode: PlayMode, device: &Path, info: Option<&DiscInfo>) -> Command {
+pub fn command(
+    mode: PlayMode,
+    device: &Path,
+    info: Option<&DiscInfo>,
+    movie: &MovieOptions,
+) -> Command {
     let mut cmd = match mode {
         PlayMode::MainMovie => {
             let target = info
@@ -35,8 +49,14 @@ pub fn command(mode: PlayMode, device: &Path, info: Option<&DiscInfo>) -> Comman
             let mut cmd = Command::new("mpv");
             cmd.arg("--fullscreen")
                 .arg("--no-terminal")
-                .arg(format!("--bluray-device={}", device.display()))
-                .arg(target);
+                .arg(format!("--bluray-device={}", device.display()));
+            if let Some(start) = movie.start_secs {
+                cmd.arg(format!("--start={start:.1}"));
+            }
+            if let Some(socket) = movie.ipc_socket {
+                cmd.arg(format!("--input-ipc-server={}", socket.display()));
+            }
+            cmd.arg(target);
             cmd
         }
         PlayMode::DiscMenu => {
@@ -67,7 +87,12 @@ mod tests {
     #[test]
     fn main_movie_uses_detected_playlist() {
         let info = parse_robot_output("TINFO:0,9,0,\"1:40:00\"\nTINFO:0,16,0,\"00800.mpls\"\n");
-        let cmd = command(PlayMode::MainMovie, Path::new("/dev/sr0"), Some(&info));
+        let cmd = command(
+            PlayMode::MainMovie,
+            Path::new("/dev/sr0"),
+            Some(&info),
+            &MovieOptions::default(),
+        );
         assert_eq!(cmd.get_program(), "mpv");
         let a = args(&cmd);
         assert!(a.contains(&"--bluray-device=/dev/sr0".to_string()));
@@ -76,13 +101,41 @@ mod tests {
 
     #[test]
     fn main_movie_without_scan_falls_back_to_longest() {
-        let cmd = command(PlayMode::MainMovie, Path::new("/dev/sr0"), None);
+        let cmd = command(
+            PlayMode::MainMovie,
+            Path::new("/dev/sr0"),
+            None,
+            &MovieOptions::default(),
+        );
         assert_eq!(args(&cmd).last().unwrap(), "bd://longest");
     }
 
     #[test]
+    fn main_movie_resume_and_ipc() {
+        let socket = Path::new("/run/user/1000/familynovice-mpv.sock");
+        let cmd = command(
+            PlayMode::MainMovie,
+            Path::new("/dev/sr0"),
+            None,
+            &MovieOptions {
+                start_secs: Some(2533.0),
+                ipc_socket: Some(socket),
+            },
+        );
+        let a = args(&cmd);
+        assert!(a.contains(&"--start=2533.0".to_string()));
+        assert!(a.contains(&"--input-ipc-server=/run/user/1000/familynovice-mpv.sock".to_string()));
+        assert_eq!(a.last().unwrap(), "bd://longest");
+    }
+
+    #[test]
     fn disc_menu_uses_vlc_with_libmmbd() {
-        let cmd = command(PlayMode::DiscMenu, Path::new("/dev/sr1"), None);
+        let cmd = command(
+            PlayMode::DiscMenu,
+            Path::new("/dev/sr1"),
+            None,
+            &MovieOptions::default(),
+        );
         assert_eq!(cmd.get_program(), "vlc");
         assert_eq!(args(&cmd).last().unwrap(), "bluray:///dev/sr1");
         let envs: Vec<_> = cmd.get_envs().collect();

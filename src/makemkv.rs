@@ -15,6 +15,8 @@
 use std::path::Path;
 use std::process::Command;
 
+use serde::{Deserialize, Serialize};
+
 const AP_NAME: u32 = 2;
 const AP_CHAPTER_COUNT: u32 = 8;
 const AP_DURATION: u32 = 9;
@@ -24,7 +26,7 @@ const AP_SOURCE_FILE_NAME: u32 = 16;
 /// Titles shorter than this are never considered the main movie.
 const MIN_MAIN_TITLE_SECS: u32 = 20 * 60;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiscInfo {
     /// Disc title, e.g. from the disc's metadata (`Kubo and the Two Strings`).
     pub name: Option<String>,
@@ -33,7 +35,7 @@ pub struct DiscInfo {
     pub messages: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TitleInfo {
     pub id: u32,
     pub duration_secs: u32,

@@ -18,6 +18,8 @@ use std::time::Duration;
 
 // From <linux/cdrom.h>
 const CDROM_DRIVE_STATUS: libc::c_ulong = 0x5326;
+const CDROMEJECT: libc::c_ulong = 0x5309;
+const CDROM_LOCKDOOR: libc::c_ulong = 0x5329;
 const CDSL_CURRENT: libc::c_ulong = i32::MAX as libc::c_ulong;
 const CDS_NO_INFO: i32 = 0;
 const CDS_NO_DISC: i32 = 1;
@@ -42,12 +44,19 @@ pub struct Disc {
 }
 
 impl Disc {
-    /// A key that identifies this disc (not the drive).
+    /// A key that identifies this disc (not the drive), e.g. `8d3f12ee17357a03_KUBO_TWO_STRINGS`.
+    /// `None` if the disc has neither UUID nor label, so it can't be recognized again.
+    pub fn id(&self) -> Option<String> {
+        match (&self.uuid, &self.label) {
+            (Some(u), Some(l)) => Some(format!("{u}_{l}")),
+            (Some(x), None) | (None, Some(x)) => Some(x.clone()),
+            (None, None) => None,
+        }
+    }
+
+    /// Key for the current session: the disc id, or the device if the disc has no id.
     pub fn key(&self, device: &Path) -> String {
-        self.uuid
-            .clone()
-            .or_else(|| self.label.clone())
-            .unwrap_or_else(|| device.display().to_string())
+        self.id().unwrap_or_else(|| device.display().to_string())
     }
 }
 
@@ -113,6 +122,60 @@ fn drive_status(device: &Path) -> std::io::Result<i32> {
         Err(std::io::Error::last_os_error())
     } else {
         Ok(rc)
+    }
+}
+
+/// Open the tray. If the disc is mounted (e.g. by the desktop's automounter), unmount it
+/// with udisks first and try again. Blocks for a moment, so call it from a background thread.
+pub fn eject(device: &Path) -> Result<(), String> {
+    let Err(first) = eject_ioctl(device) else {
+        log::info!("ejected {}", device.display());
+        return Ok(());
+    };
+    log::info!(
+        "eject refused ({first}), unmounting {} first",
+        device.display()
+    );
+    let out = Command::new("udisksctl")
+        .args(["unmount", "--no-user-interaction", "--block-device"])
+        .arg(device)
+        .output();
+    match &out {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => log::warn!(
+            "udisksctl unmount failed: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
+        Err(e) => log::warn!("udisksctl not available: {e}"),
+    }
+    eject_ioctl(device).map_err(|e| {
+        log::warn!("eject failed: {e}");
+        "The disc could not be ejected. Is it still in use?".to_string()
+    })?;
+    log::info!("ejected {} after unmounting", device.display());
+    Ok(())
+}
+
+fn eject_ioctl(device: &Path) -> std::io::Result<()> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(device)?;
+    let fd = file.as_raw_fd();
+    // SAFETY: valid open fd; both ioctls take an integer argument.
+    let rc = unsafe {
+        // Unlocking fails while the disc is mounted; the eject below reports the real error.
+        libc::ioctl(fd, CDROM_LOCKDOOR as _, 0 as libc::c_ulong);
+        libc::ioctl(fd, CDROMEJECT as _, 0 as libc::c_ulong)
+    };
+    match rc {
+        0 => Ok(()),
+        rc if rc < 0 => Err(std::io::Error::last_os_error()),
+        // Positive values are SCSI status codes passed through by the kernel, e.g. 2 =
+        // CHECK CONDITION when the drive refuses because the disc is mounted.
+        rc => Err(std::io::Error::other(format!(
+            "drive refused (SCSI status {rc})"
+        ))),
     }
 }
 
@@ -240,6 +303,20 @@ mod tests {
             "ID_CDROM_BD=1\nID_CDROM_MEDIA=1\nID_CDROM_MEDIA_DVD=1\nID_FS_LABEL=MOVIE\n",
         );
         assert_eq!(disc_from_properties(&props).unwrap().kind, MediaKind::Dvd);
+    }
+
+    #[test]
+    fn disc_ids() {
+        let disc = |uuid: Option<&str>, label: Option<&str>| Disc {
+            kind: MediaKind::BluRay,
+            uuid: uuid.map(String::from),
+            label: label.map(String::from),
+        };
+        let dev = Path::new("/dev/sr0");
+        assert_eq!(disc(Some("8d3f"), Some("KUBO")).key(dev), "8d3f_KUBO");
+        assert_eq!(disc(None, Some("KUBO")).id().as_deref(), Some("KUBO"));
+        assert_eq!(disc(None, None).id(), None);
+        assert_eq!(disc(None, None).key(dev), "/dev/sr0");
     }
 
     #[test]

@@ -12,7 +12,8 @@ use eframe::egui::{
 
 use crate::disc::{self, DriveReport, DriveState, MediaKind};
 use crate::makemkv::{self, DiscInfo, ScanProgress};
-use crate::player::{self, PlayMode};
+use crate::player::{self, MovieOptions, PlayMode};
+use crate::{resume, store};
 
 const BG: Color32 = Color32::from_rgb(0x12, 0x14, 0x1c);
 const TILE_BG: Color32 = Color32::from_rgb(0x22, 0x26, 0x34);
@@ -62,7 +63,10 @@ enum Screen {
     /// Asking how to start the Blu-ray.
     Choose {
         selected: usize,
+        /// Where the movie was stopped last time, if it can be resumed.
+        resume: Option<f64>,
     },
+    Ejecting,
     Playing {
         child: Child,
         started: Instant,
@@ -77,18 +81,36 @@ struct BlurayTile {
     subtitle: String,
     device: Option<PathBuf>,
     disc_key: Option<String>,
+    /// Stable id of the disc (for cache and resume); `None` if the disc has no UUID/label.
+    disc_id: Option<String>,
     /// Estimated progress (0–1) while the disc is being read.
     progress: Option<f32>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq)]
 enum Choice {
+    /// (b) Resume the main movie at this position.
+    Resume(f64),
     MainMovie,
     DiscMenu,
+    Eject,
     Back,
 }
 
-const CHOICES: [Choice; 3] = [Choice::MainMovie, Choice::DiscMenu, Choice::Back];
+/// The options shown for a Blu-ray. "Resume" only appears if the movie was played before.
+fn choices(resume: Option<f64>) -> Vec<Choice> {
+    let mut list = Vec::new();
+    if let Some(pos) = resume {
+        list.push(Choice::Resume(pos));
+    }
+    list.extend([
+        Choice::MainMovie,
+        Choice::DiscMenu,
+        Choice::Eject,
+        Choice::Back,
+    ]);
+    list
+}
 
 pub struct App {
     ctx: egui::Context,
@@ -97,6 +119,8 @@ pub struct App {
     scan_tx: Sender<ScanEvent>,
     scan_rx: Receiver<ScanEvent>,
     scans: HashMap<String, ScanState>,
+    eject_tx: Sender<Result<(), String>>,
+    eject_rx: Receiver<Result<(), String>>,
     screen: Screen,
 }
 
@@ -108,6 +132,7 @@ impl App {
             repaint.request_repaint()
         });
         let (scan_tx, scan_rx) = mpsc::channel();
+        let (eject_tx, eject_rx) = mpsc::channel();
         Self {
             ctx,
             drives_rx,
@@ -115,6 +140,8 @@ impl App {
             scan_tx,
             scan_rx,
             scans: HashMap::new(),
+            eject_tx,
+            eject_rx,
             screen: Screen::Home,
         }
     }
@@ -147,11 +174,23 @@ impl App {
                 }
             }
         }
-        // Start a MakeMKV scan for every new Blu-ray.
+        while let Ok(result) = self.eject_rx.try_recv() {
+            self.screen = match result {
+                Ok(()) => Screen::Home,
+                Err(e) => Screen::Message(e),
+            };
+        }
+        // Every new Blu-ray: use the cached disc info, or start a MakeMKV scan.
         for report in &self.drives {
             if let DriveState::Loaded(d) = &report.state {
                 let key = d.key(&report.device);
                 if d.kind == MediaKind::BluRay && !self.scans.contains_key(&key) {
+                    let cache_path = d.id().and_then(|id| store::disc_cache_path(&id));
+                    if let Some(info) = cache_path.as_deref().and_then(store::load::<DiscInfo>) {
+                        log::info!("disc info for {key} loaded from cache");
+                        self.scans.insert(key, ScanState::Done(info));
+                        continue;
+                    }
                     self.scans.insert(key.clone(), ScanState::running());
                     let (tx, device, ctx) = (
                         self.scan_tx.clone(),
@@ -163,6 +202,11 @@ impl App {
                             let _ = tx.send(ScanEvent::Progress(key.clone(), p));
                             ctx.request_repaint();
                         });
+                        if let (Ok(info), Some(path)) = (&result, &cache_path)
+                            && let Err(e) = store::save(path, info)
+                        {
+                            log::warn!("could not cache disc info: {e}");
+                        }
                         let _ = tx.send(ScanEvent::Done(key, result));
                         ctx.request_repaint();
                     });
@@ -197,6 +241,7 @@ impl App {
             subtitle: subtitle.into(),
             device: None,
             disc_key: None,
+            disc_id: None,
             progress: None,
         };
         if self.drives.is_empty() {
@@ -229,6 +274,7 @@ impl App {
                 subtitle,
                 device: Some(report.device.clone()),
                 disc_key: Some(key),
+                disc_id: d.id(),
                 progress: progress.map(|(_, f)| f),
             };
         }
@@ -255,19 +301,36 @@ impl App {
         )
     }
 
-    fn start(&mut self, mode: PlayMode, tile: &BlurayTile) {
+    fn start(&mut self, mode: PlayMode, tile: &BlurayTile, start_secs: Option<f64>) {
         let Some(device) = &tile.device else { return };
         let info = match tile.disc_key.as_ref().and_then(|k| self.scans.get(k)) {
             Some(ScanState::Done(info)) => Some(info),
             _ => None,
         };
-        let mut cmd = player::command(mode, device, info);
+        // Track the position (for "Resume") only for discs we can recognize again.
+        let track = (mode == PlayMode::MainMovie)
+            .then_some(tile.disc_id.clone())
+            .flatten();
+        let socket = store::mpv_socket_path();
+        if track.is_some() {
+            store::remove(&socket); // stale socket from an earlier run
+        }
+        let options = MovieOptions {
+            start_secs,
+            ipc_socket: track.is_some().then_some(socket.as_path()),
+        };
+        let mut cmd = player::command(mode, device, info, &options);
         log::info!("starting player: {cmd:?}");
         self.screen = match cmd.spawn() {
-            Ok(child) => Screen::Playing {
-                child,
-                started: Instant::now(),
-            },
+            Ok(child) => {
+                if let Some(id) = track {
+                    resume::spawn_monitor(socket, id);
+                }
+                Screen::Playing {
+                    child,
+                    started: Instant::now(),
+                }
+            }
             Err(e) => Screen::Message(format!(
                 "Could not start the player ({:?}): {e}.\nRun scripts/setup.sh to install it.",
                 cmd.get_program()
@@ -338,32 +401,65 @@ impl eframe::App for App {
         match &self.screen {
             Screen::Home => {
                 if tile.available && (enter || response.clicked()) {
-                    self.screen = Screen::Choose { selected: 0 };
+                    self.screen = Screen::Choose {
+                        selected: 0,
+                        resume: tile.disc_id.as_deref().and_then(resume::load),
+                    };
                 }
             }
-            Screen::Choose { selected } => {
-                let mut selected = *selected;
+            Screen::Choose { selected, resume } => {
+                let (mut selected, resume) = (*selected, *resume);
+                let list = choices(resume);
                 if up {
                     selected = selected.saturating_sub(1);
                 }
                 if down {
-                    selected = (selected + 1).min(CHOICES.len() - 1);
+                    selected = (selected + 1).min(list.len() - 1);
                 }
                 let scan_ready = self.scan_done(tile.disc_key.as_ref());
-                let clicked =
-                    paint_chooser(ui, &painter, screen_rect, s, &tile, selected, scan_ready);
+                let clicked = paint_chooser(
+                    ui,
+                    &painter,
+                    screen_rect,
+                    s,
+                    &tile,
+                    &list,
+                    selected,
+                    scan_ready,
+                );
                 let activated = clicked.or(enter.then_some(selected));
-                self.screen = Screen::Choose { selected };
+                self.screen = Screen::Choose { selected, resume };
                 if escape || !tile.available {
                     self.screen = Screen::Home;
                 } else if let Some(i) = activated {
-                    match CHOICES[i] {
-                        Choice::MainMovie if scan_ready => self.start(PlayMode::MainMovie, &tile),
-                        Choice::MainMovie => {} // still reading the disc
-                        Choice::DiscMenu => self.start(PlayMode::DiscMenu, &tile),
+                    match list[i] {
+                        // The main movie needs the scan result (which playlist to play).
+                        Choice::Resume(_) | Choice::MainMovie if !scan_ready => {}
+                        Choice::Resume(pos) => self.start(PlayMode::MainMovie, &tile, Some(pos)),
+                        Choice::MainMovie => self.start(PlayMode::MainMovie, &tile, None),
+                        Choice::DiscMenu => self.start(PlayMode::DiscMenu, &tile, None),
+                        Choice::Eject => {
+                            if let Some(device) = tile.device.clone() {
+                                let (tx, ctx) = (self.eject_tx.clone(), ctx.clone());
+                                std::thread::spawn(move || {
+                                    let _ = tx.send(disc::eject(&device));
+                                    ctx.request_repaint();
+                                });
+                                self.screen = Screen::Ejecting;
+                            }
+                        }
                         Choice::Back => self.screen = Screen::Home,
                     }
                 }
+            }
+            Screen::Ejecting => {
+                paint_overlay(
+                    &painter,
+                    screen_rect,
+                    s,
+                    "Ejecting…",
+                    "The tray opens in a moment.",
+                );
             }
             Screen::Playing { .. } => {
                 paint_overlay(
@@ -459,17 +555,21 @@ fn paint_disc_icon(painter: &egui::Painter, center: Pos2, r: f32, alpha: f32) {
 }
 
 /// Returns the index of a clicked option.
+#[allow(clippy::too_many_arguments)]
 fn paint_chooser(
     ui: &egui::Ui,
     painter: &egui::Painter,
     screen: Rect,
     s: f32,
     tile: &BlurayTile,
+    list: &[Choice],
     selected: usize,
     scan_ready: bool,
 ) -> Option<usize> {
+    const ROW_STEP: f32 = 105.0;
     painter.rect_filled(screen, 0.0, Color32::from_black_alpha(190));
-    let panel = Rect::from_center_size(screen.center(), Vec2::new(720.0 * s, 560.0 * s));
+    let height = 150.0 + list.len() as f32 * ROW_STEP + 30.0;
+    let panel = Rect::from_center_size(screen.center(), Vec2::new(720.0 * s, height * s));
     painter.rect_filled(panel, CornerRadius::same((24.0 * s) as u8), TILE_BG);
     painter.text(
         Pos2::new(panel.center().x, panel.min.y + 50.0 * s),
@@ -479,20 +579,36 @@ fn paint_chooser(
         TEXT,
     );
     let mut clicked = None;
-    for (i, choice) in CHOICES.iter().enumerate() {
-        let (label, hint) = match choice {
-            Choice::MainMovie if scan_ready => ("Play movie", "Starts the main movie right away"),
-            Choice::MainMovie => ("Play movie", tile.subtitle.as_str()),
-            Choice::DiscMenu => ("Disc menu", "Starts the disc like a normal player"),
-            Choice::Back => ("Back", ""),
+    let has_resume = list.iter().any(|c| matches!(c, Choice::Resume(_)));
+    for (i, choice) in list.iter().enumerate() {
+        let needs_scan = matches!(choice, Choice::Resume(_) | Choice::MainMovie);
+        let waiting = needs_scan && !scan_ready;
+        let (label, hint): (String, &str) = match choice {
+            Choice::Resume(pos) => (
+                format!("Resume from {}", resume::format_time(*pos)),
+                "Continues where you stopped",
+            ),
+            Choice::MainMovie if has_resume => (
+                "Play from beginning".into(),
+                "Starts the movie from the start",
+            ),
+            Choice::MainMovie => ("Play movie".into(), "Starts the main movie right away"),
+            Choice::DiscMenu => ("Disc menu".into(), "Starts the disc like a normal player"),
+            Choice::Eject => ("Eject disc".into(), "Opens the tray"),
+            Choice::Back => ("Back".into(), ""),
         };
-        let enabled = *choice != Choice::MainMovie || scan_ready;
+        let hint = if waiting {
+            tile.subtitle.as_str()
+        } else {
+            hint
+        };
+        let enabled = !waiting;
         let row = Rect::from_min_size(
             Pos2::new(
                 panel.min.x + 60.0 * s,
-                panel.min.y + (150.0 + i as f32 * 120.0) * s,
+                panel.min.y + (150.0 + i as f32 * ROW_STEP) * s,
             ),
-            Vec2::new(panel.width() - 120.0 * s, 100.0 * s),
+            Vec2::new(panel.width() - 120.0 * s, (ROW_STEP - 15.0) * s),
         );
         let focused = i == selected;
         let fill = if focused {

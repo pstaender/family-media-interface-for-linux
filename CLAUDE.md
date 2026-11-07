@@ -93,7 +93,21 @@ It has two parts:
 - **Tile:** the "Discs" row shows a Blu-ray tile with our own disc icon (not the Blu-ray
   logo). It's fully visible with the disc name when a Blu-ray is inserted, and semi-transparent
   (35 %) otherwise, with a hint such as "Insert a Blu-ray" or "Tray is open".
-- **Start options** (asked when the tile is activated, `src/player.rs`):
+- **Disc id:** `<ID_FS_UUID>_<ID_FS_LABEL>`. The label alone isn't unique: the 2D and 3D
+  discs of "Kubo and the Two Strings" both have `KUBO_TWO_STRINGS`.
+- **Disc info cache (`src/store.rs`):** scan results are stored as JSON in
+  `$XDG_CACHE_HOME/familynovice/discs/<disc id>.json`, so a known disc is ready right away.
+  Playback still takes ~16 s to start, because libmmbd unlocks the disc again in the player.
+- **Resume (`src/resume.rs`):** mpv gets `--input-ipc-server=$XDG_RUNTIME_DIR/familynovice-mpv.sock`.
+  A thread observes `time-pos`/`duration`, saves every 5 s and when mpv exits, to
+  `$XDG_DATA_HOME/familynovice/resume/<disc id>.json`. Resume is offered from 1 min on and
+  dropped within the last 5 min (end credits). Resuming passes `--start=<secs>`.
+  Unix socket paths are limited to 107 characters.
+- **Eject:** `CDROM_LOCKDOOR` + `CDROMEJECT` ioctls. If the disc is mounted (desktop
+  automount), it's unmounted with `udisksctl` first.
+- **Start options** (asked when the tile is activated, `src/player.rs`): "Resume from h:mm:ss"
+  (only if played before), "Play movie" / "Play from beginning", "Disc menu", "Eject disc",
+  "Back". In terms of the original wish list:
   - **(b) Play movie:** `mpv bd://mpls/<main playlist>`. Plays the main movie directly with no
     menus or trailers. Works reliably, apart from obfuscated discs.
   - **(c) Disc menu:** `vlc bluray:///dev/srX`. Starts the disc like a normal player, with
@@ -158,6 +172,8 @@ src/
   disc.rs         optical drive + disc detection (ioctl + udev)
   makemkv.rs      makemkvcon robot-output parser, main title selection
   player.rs       builds the player commands (mpv / VLC with libmmbd)
+  resume.rs       resume positions via mpv IPC
+  store.rs        JSON files in XDG dirs (disc cache, resume), atomic writes
 scripts/
   setup.sh        installs players, builds MakeMKV from source
 admin/            Bun + React admin web interface (planned)
