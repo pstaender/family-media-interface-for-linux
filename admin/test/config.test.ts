@@ -34,6 +34,13 @@ test("website domains like src/sites.rs", () => {
   }
 });
 
+test("home title", () => {
+  const v = validateConfig(example);
+  expect(v.ok && v.config.home).toEqual({ title: "Family Cinema", show_title: true });
+  const w = validateConfig({ version: 1, home: { show_title: false } });
+  expect(w.ok && w.config.home).toEqual({ title: "familynovice", show_title: false });
+});
+
 test("paths are checked like on the Rust side", () => {
   for (const ok of ["/", "/a", "/srv/media movies/x.y", "/a/.hidden"]) expect(isNormalizedAbsolutePath(ok)).toBe(true);
   for (const bad of ["", "a", "/a/", "//a", "/a/./b", "/a/..", "/a/../b", "/a\0b"]) expect(isNormalizedAbsolutePath(bad)).toBe(false);
@@ -80,6 +87,11 @@ const BAD: unknown[] = [
   { version: 1, websites: [{ id: "a", name: "A", url: "https://kika.de/", allow_subdomains: "yes" }] },
   { version: 1, websites: [{ id: "a", name: "A", url: "https://kika.de/", extra: 1 }] },
   { version: 1, websites: [{ id: "a", name: "A", url: "https://a.de/" }, { id: "a", name: "B", url: "https://b.de/" }] },
+  { version: 1, home: { title: "" } },
+  { version: 1, home: { title: " Kino" } },
+  { version: 1, home: { title: "a\u0007b" } },
+  { version: 1, home: { show_title: "no" } },
+  { version: 1, home: { logo: "x" } },
   "not an object",
   null,
   [],

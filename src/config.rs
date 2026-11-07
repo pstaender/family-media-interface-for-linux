@@ -23,11 +23,31 @@ const MAX_URL_BYTES: usize = 2048;
 pub struct Config {
     pub version: u32,
     #[serde(default)]
+    pub home: HomeSettings,
+    #[serde(default)]
     pub discs: DiscSettings,
     #[serde(default)]
     pub folders: Vec<FolderSettings>,
     #[serde(default)]
     pub websites: Vec<WebsiteSettings>,
+}
+
+/// The home screen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct HomeSettings {
+    /// Shown in the top-left corner.
+    pub title: String,
+    pub show_title: bool,
+}
+
+impl Default for HomeSettings {
+    fn default() -> Self {
+        Self {
+            title: "familynovice".into(),
+            show_title: true,
+        }
+    }
 }
 
 /// A website shown in the "Websites" row (rules: `src/sites.rs`).
@@ -91,6 +111,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             version: VERSION,
+            home: HomeSettings::default(),
             discs: DiscSettings::default(),
             folders: Vec::new(),
             websites: Vec::new(),
@@ -103,6 +124,7 @@ impl Config {
     pub fn locked_down() -> Self {
         Self {
             version: VERSION,
+            home: HomeSettings::default(),
             discs: DiscSettings {
                 enabled: false,
                 allow_disc_menu: false,
@@ -147,6 +169,7 @@ fn validate(config: &Config) -> Result<(), String> {
             config.version
         ));
     }
+    check_text(&config.home.title).map_err(|e| format!("home.title: {e}"))?;
     for (field, list) in [
         ("discs.audio_languages", &config.discs.audio_languages),
         ("discs.subtitle_languages", &config.discs.subtitle_languages),
@@ -197,12 +220,17 @@ fn validate_id_and_name(id: &str, name: &str) -> Result<(), String> {
             "id \"{id}\" must be lowercase letters, digits and -"
         ));
     }
-    let name_chars = name.chars().count();
-    if name_chars == 0 || name_chars > MAX_NAME_CHARS {
-        return Err(format!("name must have 1 to {MAX_NAME_CHARS} characters"));
+    check_text(name).map_err(|e| format!("name {e}"))
+}
+
+/// Names and titles: 1–60 characters, no control characters, no leading/trailing spaces.
+fn check_text(text: &str) -> Result<(), String> {
+    let chars = text.chars().count();
+    if chars == 0 || chars > MAX_NAME_CHARS {
+        return Err(format!("must have 1 to {MAX_NAME_CHARS} characters"));
     }
-    if name.trim() != name || name.chars().any(char::is_control) {
-        return Err("name must not start/end with spaces or contain control characters".into());
+    if text.trim() != text || text.chars().any(char::is_control) {
+        return Err("must not start/end with spaces or contain control characters".into());
     }
     Ok(())
 }
@@ -353,6 +381,16 @@ mod tests {
     }
 
     #[test]
+    fn home_title() {
+        let config = parse(include_str!("../docs/config.example.json")).unwrap();
+        assert_eq!(config.home.title, "Family Cinema");
+        let c = parse(r#"{"version":1,"home":{"show_title":false}}"#).unwrap();
+        assert_eq!(c.home.title, "familynovice");
+        assert!(!c.home.show_title);
+        assert!(parse(r#"{"version":1}"#).unwrap().home.show_title);
+    }
+
+    #[test]
     fn paths() {
         for ok in ["/", "/a", "/srv/media movies/x.y", "/a/.hidden"] {
             assert!(is_normalized_absolute_path(ok), "{ok}");
@@ -403,6 +441,11 @@ mod tests {
             r#"{"version":1,"websites":[{"id":"a","name":"A","url":"https://kika.de/","allow_subdomains":"yes"}]}"#,
             r#"{"version":1,"websites":[{"id":"a","name":"A","url":"https://kika.de/","extra":1}]}"#,
             r#"{"version":1,"websites":[{"id":"a","name":"A","url":"https://a.de/"},{"id":"a","name":"B","url":"https://b.de/"}]}"#,
+            r#"{"version":1,"home":{"title":""}}"#,
+            r#"{"version":1,"home":{"title":" Kino"}}"#,
+            r#"{"version":1,"home":{"title":"a\u0007b"}}"#,
+            r#"{"version":1,"home":{"show_title":"no"}}"#,
+            r#"{"version":1,"home":{"logo":"x"}}"#,
             "not json",
         ] {
             assert!(parse(bad).is_err(), "should reject {bad}");

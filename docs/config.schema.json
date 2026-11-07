@@ -12,6 +12,25 @@
     "version": {
       "const": 1
     },
+    "home": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The media center's home screen. Missing fields take their defaults.",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "default": "familynovice",
+          "description": "Shown in the top-left corner. No control characters, no leading/trailing spaces."
+        },
+        "show_title": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the title at all."
+        }
+      }
+    },
     "discs": {
       "type": "object",
       "additionalProperties": false,

@@ -1,5 +1,9 @@
 {
   "version": 1,
+  "home": {
+    "title": "Family Cinema",
+    "show_title": true
+  },
   "discs": {
     "enabled": true,
     "allow_disc_menu": true,

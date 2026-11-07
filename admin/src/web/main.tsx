@@ -229,6 +229,36 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
       {notice && <div className={`banner ${notice.kind}`}>{notice.text}</div>}
 
       <section className="card">
+        <h2>Home screen</h2>
+        <label className="toggle">
+          <input
+            type="checkbox"
+            checked={config.home.show_title}
+            onChange={(e) => setConfig({ ...config, home: { ...config.home, show_title: e.target.checked } })}
+          />
+          <span>
+            Show a title
+            <small>Shown in the top-left corner of the media center.</small>
+          </span>
+        </label>
+        <label className="field" style={{ marginTop: 6 }}>
+          <span>Title</span>
+          <input
+            type="text"
+            maxLength={60}
+            value={config.home.title}
+            disabled={!config.home.show_title}
+            placeholder="familynovice"
+            onChange={(e) => setConfig({ ...config, home: { ...config.home, title: e.target.value } })}
+            onBlur={() => {
+              const title = config.home.title.trim().replace(/\p{Cc}/gu, "") || "familynovice";
+              setConfig({ ...config, home: { ...config.home, title } });
+            }}
+          />
+        </label>
+      </section>
+
+      <section className="card">
         <h2>Discs</h2>
         <p className="hint">DVDs and Blu-rays from the disc drive.</p>
         <label className="toggle">

@@ -879,13 +879,21 @@ impl App {
         ));
 
         // Header (above the scrolling rows)
-        ui.painter().text(
-            screen_rect.min + Vec2::new(margin, 50.0 * s),
-            Align2::LEFT_TOP,
-            "familynovice",
-            FontId::proportional(34.0 * s),
-            TEXT_DIM,
-        );
+        if config.home.show_title {
+            let font = FontId::proportional(34.0 * s);
+            ui.painter().text(
+                screen_rect.min + Vec2::new(margin, 50.0 * s),
+                Align2::LEFT_TOP,
+                fit_text(
+                    painter,
+                    &config.home.title,
+                    &font,
+                    screen_rect.width() - 2.0 * margin,
+                ),
+                font,
+                TEXT_DIM,
+            );
+        }
 
         let tile = self.bluray_tile();
         let mut activate = None;

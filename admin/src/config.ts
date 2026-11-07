@@ -38,8 +38,16 @@ export interface WebsiteSettings {
   allow_subdomains: boolean;
 }
 
+/** The media center's home screen. */
+export interface HomeSettings {
+  /** Shown in the top-left corner. */
+  title: string;
+  show_title: boolean;
+}
+
 export interface Config {
   version: number;
+  home: HomeSettings;
   discs: DiscSettings;
   folders: FolderSettings[];
   websites: WebsiteSettings[];
@@ -48,6 +56,7 @@ export interface Config {
 export function defaultConfig(): Config {
   return {
     version: CONFIG_VERSION,
+    home: { title: "familynovice", show_title: true },
     discs: {
       enabled: true,
       allow_disc_menu: true,
@@ -104,11 +113,17 @@ function checkIdAndName(id: unknown, name: unknown): string | null {
   if (typeof id !== "string" || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(id)) {
     return `id "${String(id)}" must be lowercase letters, digits and -`;
   }
-  if (typeof name !== "string" || [...name].length === 0 || [...name].length > MAX_NAME_CHARS) {
-    return `name must have 1 to ${MAX_NAME_CHARS} characters`;
+  const problem = checkText(name);
+  return problem ? `name ${problem}` : null;
+}
+
+/** Names and titles, like `check_text` in src/config.rs. */
+function checkText(text: unknown): string | null {
+  if (typeof text !== "string" || [...text].length === 0 || [...text].length > MAX_NAME_CHARS) {
+    return `must have 1 to ${MAX_NAME_CHARS} characters`;
   }
-  if (name.trim() !== name || /\p{Cc}/u.test(name)) {
-    return "name must not start/end with spaces or contain control characters";
+  if (text.trim() !== text || /\p{Cc}/u.test(text)) {
+    return "must not start/end with spaces or contain control characters";
   }
   return null;
 }
@@ -179,7 +194,7 @@ function languages(value: unknown, field: string): string[] | string {
 /** Validate untrusted input and fill in defaults. */
 export function validateConfig(input: unknown): Validation {
   if (!isObject(input)) return { ok: false, error: "config must be an object" };
-  const top = unknownKey(input, ["version", "discs", "folders", "websites"], "config");
+  const top = unknownKey(input, ["version", "home", "discs", "folders", "websites"], "config");
   if (top) return { ok: false, error: top };
   if (input.version !== CONFIG_VERSION) {
     return {
@@ -188,6 +203,21 @@ export function validateConfig(input: unknown): Validation {
     };
   }
   const config = defaultConfig();
+  if (input.home !== undefined) {
+    const h = input.home;
+    if (!isObject(h)) return { ok: false, error: "home: must be an object" };
+    const extra = unknownKey(h, ["title", "show_title"], "home");
+    if (extra) return { ok: false, error: extra };
+    if (h.title !== undefined) {
+      const problem = checkText(h.title);
+      if (problem) return { ok: false, error: `home.title: ${problem}` };
+      config.home.title = h.title as string;
+    }
+    if (h.show_title !== undefined) {
+      if (typeof h.show_title !== "boolean") return { ok: false, error: "home.show_title: must be true or false" };
+      config.home.show_title = h.show_title;
+    }
+  }
   if (input.discs !== undefined) {
     const d = input.discs;
     if (!isObject(d)) return { ok: false, error: "discs: must be an object" };

@@ -75,6 +75,8 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
 - **Home screen:** horizontal rows/shelves of large tiles (e.g. "Discs", "Websites", "Apps",
   "Recently used"). Only the most important functions are on the first screen. Use our own visual
   design; don't copy any existing product's look.
+- **Title (implemented):** the text in the top-left corner (`home.title`, default
+  "familynovice") can be changed or hidden (`home.show_title`) in the admin interface.
 - **Smart search:** one search field covering everything the current profile may use (apps,
   websites, discs, media). Make it typo-tolerant (fuzzy matching) and never let it show
   items the profile isn't allowed to see.
