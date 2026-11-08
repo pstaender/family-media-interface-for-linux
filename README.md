@@ -268,7 +268,7 @@ Blocked pages are logged as `familynovice-web: blocked …`.
 | --- | --- |
 | `~/.config/familynovice/config.json` | settings (written by the admin panel) |
 | `~/.config/familynovice/admin.json` | admin password hash |
-| `~/.local/share/familynovice/` | resume positions, usage time (`usage.json`), remote buttons (`remote.json`) |
+| `~/.local/share/familynovice/` | resume positions, usage time (`usage.json`), remote buttons (`remote.json`), recently played files per folder (`recent.json`) |
 | `/etc/udev/rules.d/70-familynovice-remote.rules` | read access to the remote (`scripts/remote-access.sh`) |
 | `~/.cache/familynovice/` | disc info, website cookies and logos, player screenshots, MakeMKV build |
 | `/run/user/<uid>/familynovice*.sock` | control sockets |

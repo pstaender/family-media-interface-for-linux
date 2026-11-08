@@ -146,6 +146,34 @@ pub fn list(root: &Path, sub: &[String], filter: &Filter) -> Result<Vec<Entry>, 
     Ok(entries)
 }
 
+/// One file inside `root` (e.g. from the recently played list), checked like `list` does:
+/// no hidden names, inside the root after following symlinks, a regular file the filter
+/// shows. `None` if it's gone or not allowed (any more).
+pub fn file_entry(root: &Path, sub: &[String], name: &str, filter: &Filter) -> Option<Entry> {
+    if name.starts_with('.') || sub.iter().any(|s| s.starts_with('.')) {
+        return None;
+    }
+    let mut components = Path::new(name).components();
+    if !matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    ) {
+        return None;
+    }
+    let dir = resolve(root, sub).ok()?;
+    let root = root.canonicalize().ok()?;
+    let path = dir.join(name).canonicalize().ok()?;
+    if !path.starts_with(&root) || !std::fs::metadata(&path).ok()?.is_file() {
+        return None;
+    }
+    let kind = filter.kind_of(name)?;
+    Some(Entry {
+        name: name.to_owned(),
+        kind,
+        path,
+    })
+}
+
 /// Case-insensitive comparison that compares runs of digits by their numeric value.
 pub fn natural_cmp(a: &str, b: &str) -> Ordering {
     let (mut a, mut b) = (a.chars().peekable(), b.chars().peekable());
@@ -272,6 +300,30 @@ mod tests {
         for bad in ["..", ".", "a/b", "/etc", ""] {
             assert!(resolve(&root, &[bad.into()]).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn single_files_are_checked_like_listed_ones() {
+        let root = tree();
+        let filter = Filter {
+            video: true,
+            ..Default::default()
+        };
+        let a = file_entry(&root, &["Season 1".into()], "a.mp4", &filter).unwrap();
+        assert_eq!(a.kind, EntryKind::Video);
+        assert!(a.path.ends_with("Season 1/a.mp4"));
+        let none = |sub: &[&str], name: &str, f: &Filter| {
+            let sub: Vec<String> = sub.iter().map(|s| s.to_string()).collect();
+            file_entry(&root, &sub, name, f).is_none()
+        };
+        assert!(none(&[], "escape.mp4", &filter)); // symlink to outside
+        assert!(none(&["escape"], "secret.mp4", &filter));
+        assert!(none(&[], ".secret.mp4", &filter)); // hidden
+        assert!(none(&[], "../outside/secret.mp4", &filter));
+        assert!(none(&[], "gone.mkv", &filter));
+        assert!(none(&[], "Season 1", &filter)); // a folder
+        assert!(none(&[], "song.flac", &filter)); // audio not shown in this folder
+        assert!(none(&[], "notes.pdf", &filter));
     }
 
     #[test]

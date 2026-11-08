@@ -11,6 +11,7 @@ mod mpris;
 mod pictures;
 mod pin;
 mod player;
+mod recent;
 mod remote;
 mod resume;
 // Parts of it are only used by the browser window (web/, includes this file).

@@ -22,6 +22,7 @@ use crate::makemkv::{self, DiscInfo, ScanProgress};
 use crate::mpris::{MediaCommand, Mpris, Status as PlayStatus};
 use crate::pictures::{self, Picture};
 use crate::player::{self, MovieOptions, PlayMode};
+use crate::recent;
 use crate::remote::{self, Action, Calibration, RemoteMap};
 use crate::usage::SharedTracker;
 use crate::{cover, resume, sites, store};
@@ -147,8 +148,37 @@ struct Browse {
     /// Folder names below the configured folder.
     sub: Vec<String>,
     entries: Vec<Entry>,
+    /// Only on the folder's first page: the last played files, after `entries`.
+    recent: Vec<RecentEntry>,
+    /// Index into `entries`, then `recent`.
     selected: usize,
     error: Option<String>,
+}
+
+/// A recently played file, checked again when the folder page opens.
+#[derive(Clone)]
+struct RecentEntry {
+    /// Its folder below the configured folder.
+    sub: Vec<String>,
+    entry: Entry,
+}
+
+/// The last played files of a folder that still exist and are still allowed.
+fn recent_entries(folder: &FolderSettings) -> Vec<RecentEntry> {
+    let root = PathBuf::from(&folder.path);
+    let filter = Filter::from(folder);
+    recent::Recent::load()
+        .items(&folder.id)
+        .iter()
+        .filter_map(|item| {
+            let entry = library::file_entry(&root, &item.sub, &item.name, &filter)?;
+            matches!(entry.kind, EntryKind::Video | EntryKind::Audio).then(|| RecentEntry {
+                sub: item.sub.clone(),
+                entry,
+            })
+        })
+        .take(recent::SHOWN)
+        .collect()
 }
 
 impl Browse {
@@ -166,10 +196,16 @@ impl Browse {
         let selected = select
             .and_then(|name| entries.iter().position(|e| e.name == name))
             .unwrap_or(0);
+        let recent = if sub.is_empty() && error.is_none() {
+            recent_entries(folder)
+        } else {
+            Vec::new()
+        };
         Self {
             folder_id: folder.id.clone(),
             sub,
             entries,
+            recent,
             selected,
             error,
         }
@@ -202,6 +238,8 @@ struct MusicView {
     /// The track whose cover was asked for last, and where the answer arrives.
     cover_track: Option<PathBuf>,
     cover_rx: Option<Receiver<Option<cover::Cover>>>,
+    /// The track last put on the recently played list.
+    recorded: Option<PathBuf>,
 }
 
 impl MusicView {
@@ -1355,6 +1393,7 @@ impl App {
                         cover: None,
                         cover_track: None,
                         cover_rx: None,
+                        recorded: None,
                     }),
                     Err(e) => Screen::Message {
                         text: e,
@@ -1433,6 +1472,12 @@ impl App {
         self.screen = match cmd.spawn() {
             Ok(child) => {
                 resume::spawn_monitor(socket.clone(), resume::file_key(&entry.path));
+                recent::record(
+                    &browse.folder_id,
+                    &browse.sub,
+                    &entry.name,
+                    recent::Kind::Video,
+                );
                 Screen::Playing {
                     child,
                     started: Instant::now(),
@@ -1930,6 +1975,8 @@ impl App {
         let row_h = 78.0 * s;
         let visible = (((screen_rect.height() - top - 80.0 * s) / row_h).floor() as usize).max(1);
         let n = b.entries.len();
+        // Selectable: the entries, then the recently played files.
+        let total = n + b.recent.len();
 
         // Navigation
         // Mouse wheel: one notch moves the selection by one entry.
@@ -1945,14 +1992,14 @@ impl App {
         if (keys.up || wheel > 0.0) && b.selected > 0 {
             b.selected -= 1;
         }
-        if (keys.down || wheel < 0.0) && b.selected + 1 < n {
+        if (keys.down || wheel < 0.0) && b.selected + 1 < total {
             b.selected += 1;
         }
         if keys.page_up {
             b.selected = b.selected.saturating_sub(visible);
         }
-        if keys.page_down && n > 0 {
-            b.selected = (b.selected + visible).min(n - 1);
+        if keys.page_down && total > 0 {
+            b.selected = (b.selected + visible).min(total - 1);
         }
 
         // Header: folder name › subfolders
@@ -1974,7 +2021,7 @@ impl App {
             FontId::proportional(42.0 * s),
             TEXT,
         );
-        if n > 0 {
+        if b.selected < n {
             painter.text(
                 Pos2::new(screen_rect.max.x - margin, screen_rect.min.y + 72.0 * s),
                 Align2::RIGHT_TOP,
@@ -1993,7 +2040,7 @@ impl App {
                 "This folder can't be opened right now",
                 &elide(error, 90),
             );
-        } else if n == 0 {
+        } else if total == 0 {
             painter.text(
                 screen_rect.center(),
                 Align2::CENTER_CENTER,
@@ -2003,12 +2050,49 @@ impl App {
             );
         }
 
-        let first = b
-            .selected
+        // Rows: the entries, then a "Recently played" heading and those files.
+        enum Row {
+            Entry(usize),
+            Heading,
+            Recent(usize),
+        }
+        let mut rows: Vec<Row> = (0..n).map(Row::Entry).collect();
+        if !b.recent.is_empty() {
+            rows.push(Row::Heading);
+            rows.extend((0..b.recent.len()).map(Row::Recent));
+        }
+        let selected_row = if b.selected < n {
+            b.selected
+        } else {
+            b.selected + 1 // after the heading
+        };
+        let first = selected_row
             .saturating_sub(visible / 2)
-            .min(n.saturating_sub(visible));
-        for (i, entry) in b.entries.iter().enumerate().skip(first).take(visible) {
-            let y = top + (i - first) as f32 * row_h;
+            .min(rows.len().saturating_sub(visible));
+        for (r, row) in rows.iter().enumerate().skip(first).take(visible) {
+            let y = top + (r - first) as f32 * row_h;
+            let (i, entry, label) = match row {
+                Row::Heading => {
+                    painter.text(
+                        Pos2::new(
+                            screen_rect.min.x + margin + 10.0 * s,
+                            screen_rect.min.y + y + (row_h - 10.0 * s) / 2.0 + 8.0 * s,
+                        ),
+                        Align2::LEFT_CENTER,
+                        "Recently played",
+                        FontId::proportional(28.0 * s),
+                        TEXT_DIM,
+                    );
+                    continue;
+                }
+                Row::Entry(i) => (*i, &b.entries[*i], b.entries[*i].name.clone()),
+                Row::Recent(j) => {
+                    let item = &b.recent[*j];
+                    let mut parts: Vec<&str> = item.sub.iter().map(String::as_str).collect();
+                    parts.push(&item.entry.name);
+                    (n + j, &item.entry, parts.join("  ›  "))
+                }
+            };
             let rect = Rect::from_min_size(
                 Pos2::new(screen_rect.min.x + margin, screen_rect.min.y + y),
                 Vec2::new(screen_rect.width() - 2.0 * margin, row_h - 10.0 * s),
@@ -2026,7 +2110,7 @@ impl App {
                 Align2::LEFT_CENTER,
                 fit_text(
                     painter,
-                    &entry.name,
+                    &label,
                     &FontId::proportional(30.0 * s),
                     rect.width() - 160.0 * s, // icon on the left, "›" on the right
                 ),
@@ -2062,6 +2146,20 @@ impl App {
                 None => return, // leave the folder: home screen
                 Some(last) => b = Browse::open(folder, b.sub, Some(&last)),
             }
+        } else if activate
+            && let Some(item) = b.selected.checked_sub(n).and_then(|j| b.recent.get(j))
+        {
+            // Open it from its own folder, so "back" and next/previous track work there.
+            let item = item.clone();
+            let target = Browse::open(folder, item.sub, Some(&item.entry.name));
+            let entry = target
+                .entries
+                .iter()
+                .find(|e| e.path == item.entry.path)
+                .cloned()
+                .unwrap_or(item.entry);
+            self.open_file(target, entry);
+            return;
         } else if activate && let Some(entry) = b.entries.get(b.selected).cloned() {
             if entry.kind == EntryKind::Folder {
                 let mut sub = b.sub.clone();
@@ -2221,6 +2319,17 @@ impl App {
         let current = view.start + state.playlist_pos.unwrap_or(0);
         let current_path = view.tracks.get(current).map(|t| t.path.clone());
         view.update_cover(ui.ctx(), current_path.as_deref());
+        if let Some(track) = view.tracks.get(current)
+            && view.recorded.as_ref() != Some(&track.path)
+        {
+            recent::record(
+                &view.back.folder_id,
+                &view.back.sub,
+                &track.name,
+                recent::Kind::Audio,
+            );
+            view.recorded = Some(track.path.clone());
+        }
         let back_to_browser = |view: MusicView| -> Screen {
             let browse = view.back.clone();
             Screen::Browse(match &current_path {

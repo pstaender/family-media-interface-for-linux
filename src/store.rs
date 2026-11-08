@@ -33,6 +33,11 @@ pub fn usage_path() -> Option<PathBuf> {
     Some(dirs::data_dir()?.join(APP).join("usage.json"))
 }
 
+/// `$XDG_DATA_HOME/familynovice/recent.json`: recently played files per folder.
+pub fn recent_path() -> Option<PathBuf> {
+    Some(dirs::data_dir()?.join(APP).join("recent.json"))
+}
+
 /// `$XDG_DATA_HOME/familynovice/remote.json`: the remote's buttons (calibration).
 pub fn remote_path() -> Option<PathBuf> {
     Some(dirs::data_dir()?.join(APP).join("remote.json"))

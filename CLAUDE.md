@@ -238,6 +238,14 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
 - On the home screen, each folder is a tile in the "Folders" row. It can be browsed (subfolders
   plus visible files); hidden files (`.name`) are never shown. A folder that doesn't exist or
   can't be read is shown semi-transparent.
+- **Recently played (`src/recent.rs`):** the folder's first page ends with a "Recently
+  played" heading and the last 5 videos/music files played from it (newest first; label
+  `subfolder › file`). Stored per folder id in `$XDG_DATA_HOME/familynovice/recent.json`
+  (relative paths, 20 kept); music playing on through a folder counts once (the next track
+  of the same folder replaces the previous one). Every item is checked again when shown
+  (`library::file_entry`: no hidden names, inside the folder, filter allows it), so removed
+  files or a changed filter never show. Opening one opens its own folder first, so back and
+  next/previous track work there.
 - **Read-only** (see above). Browsing is confined to the configured folder: paths are
   canonicalized and must stay inside it, so `..` and symlinks pointing outside are refused.
 - Opening:
@@ -380,6 +388,7 @@ src/
                   folder browser, overlays
   disc.rs         optical drive + disc detection (ioctl + udev)
   remote.rs       remote read from its input device, calibration (remote.json)
+  recent.rs       recently played files per folder (recent.json)
   library.rs      read-only folder browsing (media filters, confinement to the folder)
   sites.rs        website rules (allowed pages, always-blocked addresses); also used by web/
   pictures.rs     picture decoding for the built-in viewer
