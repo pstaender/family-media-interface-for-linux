@@ -96,6 +96,11 @@ label.field {
   margin-bottom: 14px;
 }
 
+label.field > small {
+  display: block;
+  margin-top: 4px;
+}
+
 label.field span {
   display: block;
   font-weight: 500;
@@ -555,35 +560,167 @@ select {
 
 /* ---------------------------------------------------------------- narrow screens */
 
-@media (max-width: 760px) {
+/* Tablets: narrower menu, tabs wrap instead of scrolling out of sight. */
+@media (max-width: 1000px) {
   .layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: 210px minmax(0, 1fr);
   }
 
+  main.content {
+    padding: 24px 20px 0;
+  }
+
+  .tabs {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+}
+
+@media (max-width: 760px) {
+  /* minmax(0, …): wide children (menus, tables, long paths) scroll or wrap instead of
+     widening the page. */
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 1fr; /* the header keeps its height on short pages */
+  }
+
+  /* Compact header: name + log out, the status, then the three pages as equal buttons. */
   .sidebar {
     position: static;
     height: auto;
     border-right: none;
     border-bottom: 1px solid var(--border);
-    padding: 14px 16px;
+    padding: 12px 16px 14px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "brand logout"
+      "status status"
+      "nav nav";
+    gap: 6px 12px;
+    align-items: center;
+    align-content: start;
+  }
+
+  .brand {
+    grid-area: brand;
+    padding: 0;
+    min-width: 0;
+  }
+
+  .sidebar .status {
+    grid-area: status;
+    padding: 0;
+  }
+
+  .sidebar > ul {
+    grid-area: nav;
+    min-width: 0;
   }
 
   .sidebar ul {
-    flex-direction: row;
-    overflow-x: auto;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 6px;
   }
 
   .sidebar a {
-    white-space: nowrap;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 4px;
+    font-size: 13px;
+    line-height: 1.25;
+    text-align: center;
+    justify-content: center;
+    height: 100%;
+    border: 1px solid var(--border);
+  }
+
+  .sidebar a.active {
+    border-color: var(--accent);
   }
 
   .sidebar .logout {
+    grid-area: logout;
     margin-top: 0;
-    align-self: flex-start;
+    padding: 6px 10px;
   }
 
   main.content {
-    padding: 20px 16px 0;
+    padding: 18px 16px 0;
+  }
+
+  main.content h1 {
+    font-size: 20px;
+    margin-bottom: 12px;
+  }
+
+  /* All tabs visible: they wrap into pills instead of scrolling out of sight. */
+  .tabs {
+    flex-wrap: wrap;
+    gap: 6px;
+    border-bottom: none;
+    overflow: visible;
+  }
+
+  .tabs a {
+    padding: 7px 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    margin-bottom: 0;
+    font-size: 14px;
+  }
+
+  .tabs a.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-text);
+  }
+
+  /* Bigger touch targets. */
+  button.small {
+    padding: 6px 12px;
+    font-size: 14px;
+  }
+
+  .card {
+    padding: 16px;
+  }
+
+  /* 16 px keeps phones from zooming into a field when it gets focus. */
+  input[type="password"],
+  input[type="text"],
+  input[type="number"],
+  input[type="time"],
+  select {
+    font-size: 16px;
+  }
+
+  select {
+    max-width: 100%;
+  }
+
+  .savebar {
+    padding: 12px 0 calc(14px + env(safe-area-inset-bottom));
+  }
+
+  .savebar button.primary {
+    flex: 1;
+    justify-content: center;
+    padding: 12px;
+  }
+
+  table.buttons th {
+    width: auto;
+  }
+
+  .logo-preview {
+    flex-wrap: wrap;
+  }
+
+  .add-language {
+    max-width: none;
   }
 }
 

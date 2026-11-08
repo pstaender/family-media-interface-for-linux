@@ -338,6 +338,11 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
 
 ### Admin web interface (Bun + React)
 
+- Responsive (`styles.css`): desktop = left menu; ≤ 1000 px narrower menu, tabs wrap;
+  ≤ 760 px (phones) compact header (name + log out, status, the three pages as equal
+  buttons), tabs as wrapping pills, full-width save button, 16 px inputs (no zoom on focus),
+  bigger small buttons. Grid columns use `minmax(0, …)` so wide content never widens the
+  page. Checked with headless Chrome screenshots at 375 / 768 / 1280 px.
 - Layout: left menu with three pages, each with tabs (URL `#/page/tab`):
   **Home screen & media** (Home screen, Discs, Folders, Websites), **Parental control**
   (Status, Time limits), **Password & PIN** (PIN, Admin password). One "Save and apply" for all
