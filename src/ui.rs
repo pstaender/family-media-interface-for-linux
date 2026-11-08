@@ -508,12 +508,13 @@ impl App {
         screen_rect: Rect,
         s: f32,
         remote_events: &[remote::KeyEvent],
+        desktop_media: &[MediaCommand],
     ) {
         let Screen::Calibrate(view) = &mut self.screen else {
             return;
         };
         let now = Instant::now();
-        let window_presses: Vec<String> = ctx.input(|i| {
+        let mut window_presses: Vec<String> = ctx.input(|i| {
             i.events
                 .iter()
                 .filter_map(|e| match e {
@@ -532,6 +533,12 @@ impl App {
                 })
                 .collect()
         });
+        // Desktops grab media keys (they never reach the window) and pass them on via MPRIS.
+        window_presses.extend(
+            desktop_media
+                .iter()
+                .map(|c| format!("desktop:{c:?}").to_lowercase()),
+        );
         let center = screen_rect.center();
         let font = |size: f32| FontId::proportional(size * s);
         painter.text(
@@ -1444,7 +1451,9 @@ impl eframe::App for App {
         painter.rect_filled(screen_rect, 0.0, BG);
 
         let mut keys = Keys::read(&ctx);
-        keys.media.extend(self.media_rx.try_iter());
+        // Media keys the desktop grabbed and passed on via MPRIS (Cinnamon, GNOME, KDE, …).
+        let desktop_media: Vec<MediaCommand> = self.media_rx.try_iter().collect();
+        keys.media.extend(&desktop_media);
         for (name, action) in self.remote_map.window_keys() {
             if Key::from_name(name).is_some_and(|k| ctx.input(|i| i.key_pressed(k))) {
                 keys.apply(action);
@@ -1495,7 +1504,14 @@ impl eframe::App for App {
             }));
         }
         if matches!(self.screen, Screen::Calibrate(_)) {
-            self.calibrate_screen(&ctx, &painter, screen_rect, s, &remote_events);
+            self.calibrate_screen(
+                &ctx,
+                &painter,
+                screen_rect,
+                s,
+                &remote_events,
+                &desktop_media,
+            );
             return;
         }
         // Buttons only the device reports (e.g. OK = KEY_SELECT), while our window is in

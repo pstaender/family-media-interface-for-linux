@@ -82,7 +82,8 @@ pub struct Button {
     /// Key codes from the input device (linux/input-event-codes.h, e.g. 353 = KEY_SELECT).
     #[serde(default)]
     pub codes: Vec<u16>,
-    /// What the window got for the same press (`key:Enter`, `mouse:secondary`). Empty: the
+    /// What the window got for the same press (`key:Enter`, `mouse:secondary`, or
+    /// `desktop:next` for a media key the desktop grabbed and sent via MPRIS). Empty: the
     /// window gets nothing, so the media center acts on `codes` itself.
     #[serde(default)]
     pub window: Vec<String>,
@@ -153,6 +154,7 @@ impl RemoteMap {
             .map(|w| match w.split_once(':') {
                 Some(("key", k)) => format!("{k} key"),
                 Some(("mouse", m)) => format!("{m} click"),
+                Some(("desktop", d)) => format!("{d} via the desktop (media key)"),
                 _ => w.clone(),
             })
             .collect();
