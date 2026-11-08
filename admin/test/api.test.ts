@@ -155,7 +155,7 @@ test("reads default config, rejects invalid, saves and applies valid config", as
         discs: { enabled: true, allow_disc_menu: false, audio_languages: ["deu"], subtitle_languages: [] },
         folders: [],
         websites: [],
-        games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false } },
+        games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false }, blocks: { enabled: false, start_level: 0, sound: false } },
         limits: [],
       },
     ],

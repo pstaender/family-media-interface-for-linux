@@ -443,8 +443,15 @@ pub(crate) fn menu(
         selected = (selected + 1).min(items.len() - 1);
     }
     let center = screen.center();
+    // Long menus: smaller rows, higher up.
+    let compact = items.len() > 5;
+    let (title_y, first_y, step, height) = if compact {
+        (-430.0, -320.0, 92.0, 76.0)
+    } else {
+        (-220.0, -60.0, 100.0, 80.0)
+    };
     painter.text(
-        Pos2::new(center.x, center.y - 220.0 * s),
+        Pos2::new(center.x, center.y + title_y * s),
         Align2::CENTER_CENTER,
         title,
         FontId::proportional(64.0 * s),
@@ -453,8 +460,8 @@ pub(crate) fn menu(
     let mut chosen = input.enter.then_some(selected);
     for (i, item) in items.iter().enumerate() {
         let rect = Rect::from_center_size(
-            Pos2::new(center.x, center.y - 60.0 * s + i as f32 * 100.0 * s),
-            Vec2::new(720.0 * s, 80.0 * s),
+            Pos2::new(center.x, center.y + (first_y + i as f32 * step) * s),
+            Vec2::new(720.0 * s, height * s),
         );
         let response = ui.interact(
             rect,

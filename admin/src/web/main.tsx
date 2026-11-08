@@ -663,7 +663,9 @@ function HomeTab({ config, setConfig }: ScreenProps) {
 }
 
 function GamesTab({ config, setConfig }: ScreenProps) {
-  const { pong, bricks } = config.games;
+  const { pong, bricks, blocks } = config.games;
+  const setBlocks = (patch: Partial<typeof blocks>) =>
+    setConfig({ ...config, games: { ...config.games, blocks: { ...blocks, ...patch } } });
   const setPong = (patch: Partial<typeof pong>) =>
     setConfig({ ...config, games: { ...config.games, pong: { ...pong, ...patch } } });
   const setBricks = (patch: Partial<typeof bricks>) =>
@@ -740,6 +742,37 @@ function GamesTab({ config, setConfig }: ScreenProps) {
           <span>
             Sound
             <small>Short beeps for the ball, bricks and lost paddles. Can also be switched on the TV in the game's menu.</small>
+          </span>
+        </label>
+      </section>
+      <section className="card">
+        <label className="toggle">
+          <input type="checkbox" checked={blocks.enabled} onChange={(e) => setBlocks({ enabled: e.target.checked })} />
+          <span>
+            Block Stacker
+            <small>
+              Falling blocks: fill complete rows to clear them. For 1 player (endless, or clear 25 lines), or 2 players
+              side by side. Brick Breaker and Block Stacker keep high score lists with the players' names.
+            </small>
+          </span>
+        </label>
+        <label className="field inline" style={{ marginTop: 10 }}>
+          <span>Start level</span>
+          <input
+            type="number"
+            min={0}
+            max={9}
+            value={blocks.start_level}
+            disabled={!blocks.enabled}
+            onChange={(e) => setBlocks({ start_level: Math.min(9, Math.max(0, Math.round(Number(e.target.value) || 0))) })}
+          />
+          <small className="hint">0 is the slowest. Can also be changed on the TV in the game's menu.</small>
+        </label>
+        <label className="toggle">
+          <input type="checkbox" checked={blocks.sound} disabled={!blocks.enabled} onChange={(e) => setBlocks({ sound: e.target.checked })} />
+          <span>
+            Sound
+            <small>Can also be switched on the TV in the game's menu.</small>
           </span>
         </label>
       </section>

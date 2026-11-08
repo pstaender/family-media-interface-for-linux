@@ -216,8 +216,19 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   steps, down one row per paddle hit — too low bricks vanish without points) + a bonus
   stage after every three (ball passes through, no life lost, timer 60 s − 5 s each, ≥ 30 s,
   clearing gives 500 + 250 each, ≤ 1500); 32 stages then over again; 5 paddles, +1 per
-  1000 points up to 10 000 (max 9); 6 paddle hits without a brick change the angle; high
-  score in memory. No names, characters, levels or look of the original.
+  1000 points up to 10 000 (max 9); 6 paddle hits without a brick change the angle. No names, characters, levels or look of the original.
+- **Block Stacker (`games.blocks`, `src/blocks.rs`):** our own falling-block game (own name
+  and look, no name, music or look of the original) with the classic hand-held's rules:
+  10 × 18, one preview, no hold / hard drop / wall kicks, frames of 1/59.73 s, gravity table
+  by level, soft drop 1 row / 3 frames (+1 point per row), auto-repeat 24 then 9 frames, 2
+  frames entry, 93 with a line clear, 40/100/300/1200 × (level + 1), level up after (start ×
+  10 + 10) lines then every 10. The piece randomizer is only similar to the original (fewer
+  repeats of the last two). Modes: endless, 25 lines (height × 2 random rows), 2 players
+  side by side (same pieces; double/triple/four send 1/2/4 rows with a common hole; 30 lines
+  or the other topping out wins a round; first to 4 rounds).
+- **High scores (`src/highscores.rs`, `$XDG_DATA_HOME/curator/highscores.json`):** top 10 per
+  game (Brick Breaker, Block Stacker endless), shared by all home screens. Name entry: up /
+  down letter, left / right position, OK done; keyboards type; starts with the last name.
 - **Gamepads (implemented, `src/gamepad.rs`, read in `remote.rs`):** devices with joystick/
   gamepad buttons (`EVIOCGBIT`, 0x120–0x13f) also report `PadEvent`s: buttons and the
   axes X/Y/HAT0X/HAT0Y normalized with `EVIOCGABS` (SNES-style 0…255 d-pads, Xbox/PS sticks
@@ -511,6 +522,8 @@ src/
   power.rs        power button: press / hold 3 s (log out) / hold 8 s (shut down); logind
   gamepad.rs      gamepad state and menu navigation (events from remote.rs)
   inhibit.rs      keeps the computer from blanking the screen (D-Bus inhibit)
+  blocks.rs       Block Stacker (rules, 2 players, drawing)
+  highscores.rs   the games' high score lists and name entry
   stats.rs        usage statistics (what was used when; day files, pruning)
   sound.rs        game sounds (generated WAV files, played with pw-play / paplay / aplay)
   makemkv.rs      makemkvcon robot-output parser, main title selection

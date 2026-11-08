@@ -240,6 +240,18 @@ impl Default for ParentalV1 {
 pub struct GameSettings {
     pub pong: PongSettings,
     pub bricks: BricksSettings,
+    pub blocks: BlocksSettings,
+}
+
+/// Block Stacker (`src/blocks.rs`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct BlocksSettings {
+    pub enabled: bool,
+    /// Level the menu starts with (0–9; can be changed in the game's menu).
+    pub start_level: u32,
+    /// Sound on at the start (can be switched in the game's menu).
+    pub sound: bool,
 }
 
 /// Brick Breaker (`src/bricks.rs`).
@@ -677,7 +689,7 @@ fn screen_sections_are_objects(value: &serde_json::Value, at: &str) -> Result<()
     for key in ["home", "discs", "games"] {
         object(value.get(key), &format!("{at}{key}"))?;
     }
-    for path in ["games/pong", "games/bricks"] {
+    for path in ["games/pong", "games/bricks", "games/blocks"] {
         object(
             value.pointer(&format!("/{path}")),
             &format!("{at}{}", path.replace('/', ".")),
@@ -846,6 +858,9 @@ fn validate_screen(screen: &HomeScreen) -> Result<(), String> {
     }
     if !(1..=9).contains(&screen.games.bricks.lives) {
         return Err("games.bricks.lives must be 1 to 9".into());
+    }
+    if screen.games.blocks.start_level > 9 {
+        return Err("games.blocks.start_level must be 0 to 9".into());
     }
     if screen.folders.len() > MAX_FOLDERS {
         return Err(format!("folders: at most {MAX_FOLDERS} folders"));
@@ -1304,6 +1319,10 @@ mod tests {
             "[1]",
             "not json",
             // Version 2: home screens.
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"games":{"blocks":{"start_level":10}}}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"games":{"blocks":{"enabled":1}}}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"games":{"blocks":{"speed":1}}}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"games":{"blocks":[]}}]}"#,
             r#"{"version":2}"#,
             r#"{"version":2,"home_screens":[]}"#,
             r#"{"version":2,"home_screens":[{"id":"a","name":"A"}]}"#,

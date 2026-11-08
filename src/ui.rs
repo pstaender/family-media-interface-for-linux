@@ -129,6 +129,8 @@ enum Screen {
     Pong(Box<PongView>),
     /// Brick Breaker ("Games" row).
     Bricks(Box<crate::bricks::BricksView>),
+    /// Block Stacker ("Games" row).
+    Blocks(Box<crate::blocks::BlocksView>),
     /// "Exit the media center?" (exit button / Ctrl+Q).
     ConfirmExit {
         selected: usize,
@@ -727,6 +729,7 @@ impl App {
             )),
             Screen::Pong(_) => Some(Activity::new(Category::Game, "Ping Pong", "")),
             Screen::Bricks(_) => Some(Activity::new(Category::Game, "Brick Breaker", "")),
+            Screen::Blocks(_) => Some(Activity::new(Category::Game, "Block Stacker", "")),
             _ => None,
         }
     }
@@ -991,7 +994,9 @@ impl App {
             || matches!(self.screen, Screen::Playing { .. } | Screen::Calibrate(_))
             || matches!(&self.screen, Screen::Pong(v) if matches!(v.state, PongState::Playing(_)))
             || matches!(&self.screen, Screen::Bricks(v)
-                if matches!(v.state, crate::bricks::BricksState::Playing(_)));
+                if matches!(v.state, crate::bricks::BricksState::Playing(_)))
+            || matches!(&self.screen, Screen::Blocks(v)
+                if matches!(v.state, crate::blocks::BlocksState::Playing(_)));
         if activity || blocked {
             self.last_activity = Instant::now();
             if self.saver.is_some() {
@@ -1175,17 +1180,120 @@ impl App {
                 _ => 0.0,
             })
             .sum();
+        let (typed, erase, space) = typed_letters(ui.ctx());
+        let naming = matches!(&self.screen, Screen::Bricks(v)
+            if matches!(v.state, crate::bricks::BricksState::EnterName { .. }));
         let input = crate::bricks::BricksInput {
             x: self.pads.horizontal() + keys_x + remote,
             fast: keys_fast || self.pads.button_held() || self.ok_held(ui.ctx()),
             up: keys.up || nav.up,
             down: keys.down || nav.down,
-            enter: keys.enter || nav.enter || nav.pause,
+            // While typing a name, Space is a letter.
+            enter: (keys.enter && !(naming && space)) || nav.enter || nav.pause,
             back: keys.back || nav.back,
             pause: nav.pause,
             clicks: !self.just_opened(),
+            left: keys.left || nav.left,
+            right: keys.right || nav.right,
+            typed,
+            erase,
         };
         let Screen::Bricks(view) = &mut self.screen else {
+            return;
+        };
+        if view.show(ui, painter, screen_rect, s, dt, &input) {
+            self.screen = Screen::Home;
+        }
+    }
+
+    /// Block Stacker. 1 player: everything controls the field. 2 players: 1st gamepad and
+    /// W/A/S/D on the left field, 2nd gamepad, the arrow keys and the remote on the right one.
+    fn blocks_screen(
+        &mut self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        screen_rect: Rect,
+        s: f32,
+        keys: &Keys,
+        nav: PadNav,
+    ) {
+        use crate::blocks::{BlocksState, Held, Mode};
+        let dt = self.pong_tick.elapsed().as_secs_f32();
+        self.pong_tick = Instant::now();
+        let ctx = ui.ctx();
+        let (typed, erase, space) = typed_letters(ctx);
+        let remote = |wanted: Action| {
+            self.remote_down
+                .iter()
+                .any(|c| self.remote_map.device_action(*c) == Some(wanted))
+        };
+        // Arrow keys, the remote, OK / up to rotate.
+        let arrows = ctx.input(|i| Held {
+            left: i.key_down(Key::ArrowLeft) || remote(Action::Left),
+            right: i.key_down(Key::ArrowRight) || remote(Action::Right),
+            down: i.key_down(Key::ArrowDown) || remote(Action::Down),
+            rotate_right: keys.up || keys.enter,
+            rotate_left: i.key_pressed(Key::Z),
+        });
+        let letters = ctx.input(|i| Held {
+            left: i.key_down(Key::A),
+            right: i.key_down(Key::D),
+            down: i.key_down(Key::S),
+            rotate_right: i.key_pressed(Key::W),
+            rotate_left: i.key_pressed(Key::Q),
+        });
+        let or = |a: Held, b: Held| Held {
+            left: a.left || b.left,
+            right: a.right || b.right,
+            down: a.down || b.down,
+            rotate_right: a.rotate_right || b.rotate_right,
+            rotate_left: a.rotate_left || b.rotate_left,
+        };
+        let pads: Vec<Held> = self
+            .pads
+            .players()
+            .iter()
+            .map(|p| Held {
+                left: p.x <= -0.5,
+                right: p.x >= 0.5,
+                down: p.y >= 0.5,
+                rotate_right: p.rotate_right,
+                rotate_left: p.rotate_left,
+            })
+            .collect();
+        let clicks = !self.just_opened();
+        let Screen::Blocks(view) = &mut self.screen else {
+            return;
+        };
+        let versus = matches!(&view.state, BlocksState::Playing(g) if g.mode == Mode::Versus);
+        let held = if versus {
+            [
+                or(pads.first().copied().unwrap_or_default(), letters),
+                or(pads.get(1).copied().unwrap_or_default(), arrows),
+            ]
+        } else {
+            [
+                pads.iter().fold(or(arrows, letters), |a, b| or(a, *b)),
+                Held::default(),
+            ]
+        };
+        let playing = matches!(view.state, BlocksState::Playing(_));
+        let naming = matches!(view.state, BlocksState::EnterName { .. });
+        let input = crate::blocks::BlocksInput {
+            held,
+            up: keys.up || nav.up,
+            down: keys.down || nav.down,
+            left: keys.left || nav.left,
+            right: keys.right || nav.right,
+            enter: (keys.enter && !(naming && space)) || nav.enter || nav.pause,
+            // While playing, B / circle rotates; only Start / Select pause on a gamepad.
+            back: keys.back || (nav.back && !playing),
+            pause: nav.pause,
+            clicks,
+            typed,
+            erase,
+        };
+        let Screen::Blocks(view) = &mut self.screen else {
             return;
         };
         if view.show(ui, painter, screen_rect, s, dt, &input) {
@@ -2328,7 +2436,12 @@ impl eframe::App for App {
             self.pads.apply(e);
         }
         let nav = self.pads.frame();
-        if ctx.input(|i| i.focused) && !matches!(self.screen, Screen::Pong(_) | Screen::Bricks(_)) {
+        if ctx.input(|i| i.focused)
+            && !matches!(
+                self.screen,
+                Screen::Pong(_) | Screen::Bricks(_) | Screen::Blocks(_)
+            )
+        {
             keys.up |= nav.up;
             keys.down |= nav.down;
             keys.left |= nav.left;
@@ -2437,6 +2550,7 @@ impl eframe::App for App {
             }
             Screen::Pong(_) => self.pong_screen(ui, &painter, screen_rect, s, &keys, nav),
             Screen::Bricks(_) => self.bricks_screen(ui, &painter, screen_rect, s, &keys, nav),
+            Screen::Blocks(_) => self.blocks_screen(ui, &painter, screen_rect, s, &keys, nav),
             _ => self.home_screen(ui, &painter, screen_rect, s, &keys),
         }
         self.paint_time_warning(&painter, screen_rect, s);
@@ -2654,6 +2768,7 @@ impl App {
                     RowKind::Games => match games[i] {
                         GameTile::Pong => paint_pong_tile(painter, rect, s, focus),
                         GameTile::Bricks => paint_bricks_tile(painter, rect, s, focus),
+                        GameTile::Blocks => paint_blocks_tile(painter, rect, s, focus),
                     },
                 }
                 if home && response.clicked() {
@@ -2792,6 +2907,18 @@ impl App {
                                 b.lives, b.sound,
                             )));
                         }
+                        Some(GameTile::Blocks) => {
+                            log::info!("starting Block Stacker");
+                            let b = &config.games.blocks;
+                            let seed = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(1, |d| d.as_nanos() as u64);
+                            self.screen = Screen::Blocks(Box::new(crate::blocks::BlocksView::new(
+                                b.start_level,
+                                b.sound,
+                                seed,
+                            )));
+                        }
                         None => {}
                     }
                 }
@@ -2814,6 +2941,7 @@ impl App {
             | Screen::Music(_)
             | Screen::Pong(_)
             | Screen::Bricks(_)
+            | Screen::Blocks(_)
             | Screen::VideoChoose { .. } => {}
             Screen::SwitchHome { selected } => {
                 let count = config.screens.len() + 1;
@@ -3977,6 +4105,7 @@ fn paint_folder_tile(
 enum GameTile {
     Pong,
     Bricks,
+    Blocks,
 }
 
 fn game_tiles(games: &crate::config::GameSettings) -> Vec<GameTile> {
@@ -3987,7 +4116,96 @@ fn game_tiles(games: &crate::config::GameSettings) -> Vec<GameTile> {
     if games.bricks.enabled {
         tiles.push(GameTile::Bricks);
     }
+    if games.blocks.enabled {
+        tiles.push(GameTile::Blocks);
+    }
     tiles
+}
+
+/// Letters typed this frame (for a player's name), Backspace, and whether Space was pressed.
+fn typed_letters(ctx: &egui::Context) -> (Vec<char>, bool, bool) {
+    ctx.input(|i| {
+        let typed = i
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                egui::Event::Text(t) => Some(t.chars()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        (
+            typed,
+            i.key_pressed(Key::Backspace),
+            i.key_pressed(Key::Space),
+        )
+    })
+}
+
+/// The Block Stacker tile: a stack of round tiles and a falling piece.
+fn paint_blocks_tile(painter: &egui::Painter, rect: Rect, s: f32, focus: f32) {
+    let rect = rect.expand(focus * 12.0 * s);
+    let radius = CornerRadius::same((18.0 * s) as u8);
+    painter.rect_filled(rect, radius, TILE_BG);
+    if focus > 0.0 {
+        painter.rect_stroke(
+            rect,
+            radius,
+            Stroke::new(4.0 * s, ACCENT.gamma_multiply(focus)),
+            StrokeKind::Outside,
+        );
+    }
+    let w = rect.width() * 0.62;
+    let field = Rect::from_center_size(
+        Pos2::new(rect.center().x, rect.min.y + rect.height() * 0.36),
+        Vec2::new(w, w * 9.0 / 16.0),
+    );
+    painter.rect_filled(
+        field,
+        CornerRadius::same((8.0 * s) as u8),
+        Color32::from_rgb(0x1d, 0x1a, 0x30),
+    );
+    let unit = field.height() / 7.0;
+    let (teal, gold, violet) = (
+        Color32::from_rgb(0x4f, 0xd1, 0xc5),
+        Color32::from_rgb(0xf6, 0xc4, 0x5a),
+        Color32::from_rgb(0xb3, 0x88, 0xff),
+    );
+    let cells = [
+        (0.0, 6.0, teal),
+        (1.0, 6.0, teal),
+        (2.0, 6.0, violet),
+        (3.0, 6.0, violet),
+        (5.0, 6.0, gold),
+        (6.0, 6.0, gold),
+        (7.0, 6.0, teal),
+        (2.0, 5.0, violet),
+        (6.0, 5.0, gold),
+        (4.0, 1.0, gold),
+        (4.0, 2.0, gold),
+        (5.0, 2.0, gold),
+        (4.0, 3.0, gold),
+    ];
+    let left = field.center().x - 4.0 * unit;
+    for (x, y, color) in cells {
+        painter.rect_filled(
+            Rect::from_min_size(
+                Pos2::new(left + x * unit, field.min.y + y * unit),
+                Vec2::splat(unit),
+            )
+            .shrink(unit * 0.08),
+            CornerRadius::same((unit * 0.28) as u8),
+            color,
+        );
+    }
+    paint_tile_texts(
+        painter,
+        rect,
+        s,
+        tr!("Block Stacker"),
+        tr!("Game for 1 or 2 players"),
+        1.0,
+    );
 }
 
 /// The Brick Breaker tile: rows of bricks, a paddle and the ball.

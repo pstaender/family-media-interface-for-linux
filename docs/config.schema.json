@@ -489,6 +489,30 @@
                   "description": "Sound on at the start; can be switched in the game's menu."
                 }
               }
+            },
+            "blocks": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Block Stacker: falling blocks for 1 player, or 2 players side by side.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Show the game in the \"Games\" row."
+                },
+                "start_level": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9,
+                  "default": 0,
+                  "description": "Start level preselected in the game's menu."
+                },
+                "sound": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Sound on at the start; can be switched in the game's menu."
+                }
+              }
             }
           }
         },

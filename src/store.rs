@@ -107,6 +107,11 @@ pub fn statistics_dir() -> Option<PathBuf> {
     Some(dirs::data_dir()?.join(APP).join("statistics"))
 }
 
+/// `$XDG_DATA_HOME/curator/highscores.json`: the games' high score lists.
+pub fn highscores_path() -> Option<PathBuf> {
+    Some(dirs::data_dir()?.join(APP).join("highscores.json"))
+}
+
 /// `$XDG_CACHE_HOME/curator/sounds`: the games' sound files (made by `sound.rs`).
 pub fn sounds_dir() -> Option<PathBuf> {
     Some(dirs::cache_dir()?.join(APP).join("sounds"))

@@ -13,17 +13,16 @@
 //!   paddle hit (bricks that come too low disappear without points). After every three stages
 //!   a bonus stage: the ball goes through the bricks, a lost ball costs nothing, a timer runs,
 //!   and clearing it gives bonus points. 32 stages, then it starts over.
-//! - 5 paddles; one more every 1000 points up to 10 000 (at most 9). The high score is kept
-//!   while the media center runs.
+//! - 5 paddles; one more every 1000 points up to 10 000 (at most 9). The high scores are kept
+//!   on this computer, with the players' names (`highscores`).
 //! - A ball that keeps bouncing without hitting a brick gets another angle.
 //!
 //! The rules (`Game`) are pure and tested; `BricksView` turns input into paddle movement,
 //! shows menus and paints.
 
-use std::sync::atomic::{AtomicU32, Ordering};
-
 use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, Vec2};
 
+use crate::highscores::{self, Board, NameEntry, NameInput, Scores};
 use crate::sound::Sound;
 use crate::tr;
 
@@ -59,13 +58,6 @@ pub const MAX_LIVES: u32 = 9;
 const LOW_LIMIT: f32 = PADDLE_Y - 2.5;
 /// Moving stages: a step sideways every … seconds.
 const SCROLL_STEP: f32 = 0.8;
-
-/// The best score since the media center started.
-static HIGH_SCORE: AtomicU32 = AtomicU32::new(0);
-
-pub fn high_score() -> u32 {
-    HIGH_SCORE.load(Ordering::Relaxed)
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Brick {
@@ -387,7 +379,6 @@ impl Game {
             self.lives = (self.lives + 1).min(MAX_LIVES);
             self.next_extra += 1000;
         }
-        HIGH_SCORE.fetch_max(self.score, Ordering::Relaxed);
     }
 
     /// Advance by `dt` seconds. `x`: paddle input -1 (left) … 1 (right); `fast`: a button is
@@ -640,13 +631,19 @@ pub struct BricksInput {
     pub back: bool,
     pub pause: bool,
     pub clicks: bool,
+    pub left: bool,
+    pub right: bool,
+    pub typed: Vec<char>,
+    pub erase: bool,
 }
 
 pub enum BricksState {
     Menu { selected: usize },
     Playing(Game),
     Paused { game: Game, selected: usize },
+    EnterName { game: Game, entry: NameEntry },
     Over { game: Game, selected: usize },
+    Scores,
 }
 
 pub struct BricksView {
@@ -654,6 +651,7 @@ pub struct BricksView {
     /// Paddles per game (setting), and sound on / off (setting; switchable in the menus).
     lives: u32,
     pub sound: bool,
+    scores: Scores,
 }
 
 impl BricksView {
@@ -662,6 +660,7 @@ impl BricksView {
             state: BricksState::Menu { selected: 0 },
             lives,
             sound,
+            scores: Scores::load(),
         }
     }
 
@@ -698,7 +697,12 @@ impl BricksView {
         let state = std::mem::replace(&mut self.state, BricksState::Menu { selected: 0 });
         let (next, quit) = match state {
             BricksState::Menu { selected } => {
-                let items = [tr!("Play"), self.sound_item(), tr!("Back")];
+                let items = [
+                    tr!("Play"),
+                    self.sound_item(),
+                    tr!("High scores"),
+                    tr!("Back"),
+                ];
                 let (selected, chosen) = crate::pong::menu(
                     ui,
                     painter,
@@ -711,7 +715,7 @@ impl BricksView {
                 );
                 let hint = tr!(
                     "Left / right: move · hold a button: faster · best: {score}",
-                    score = high_score()
+                    score = self.scores.best(Board::Bricks)
                 );
                 crate::pong::paint_hint(painter, screen, s, &hint);
                 match chosen {
@@ -720,6 +724,7 @@ impl BricksView {
                         self.sound = !self.sound;
                         (BricksState::Menu { selected }, false)
                     }
+                    Some(2) => (BricksState::Scores, false),
                     Some(_) => (BricksState::Menu { selected }, true),
                     None => (BricksState::Menu { selected }, input.back),
                 }
@@ -731,10 +736,15 @@ impl BricksView {
                         crate::sound::play(sound);
                     }
                 }
-                paint_game(painter, screen, s, &game);
+                paint_game(painter, screen, s, &game, self.scores.best(Board::Bricks));
                 ui.ctx().request_repaint();
                 if game.phase == Phase::Over {
-                    (BricksState::Over { game, selected: 0 }, false)
+                    if self.scores.qualifies(Board::Bricks, game.score) {
+                        let entry = self.scores.name_entry(game.score);
+                        (BricksState::EnterName { game, entry }, false)
+                    } else {
+                        (BricksState::Over { game, selected: 0 }, false)
+                    }
                 } else if input.pause || input.back {
                     (BricksState::Paused { game, selected: 0 }, false)
                 } else {
@@ -742,7 +752,7 @@ impl BricksView {
                 }
             }
             BricksState::Paused { game, selected } => {
-                paint_game(painter, screen, s, &game);
+                paint_game(painter, screen, s, &game, self.scores.best(Board::Bricks));
                 crate::pong::dim(painter, screen);
                 let items = [tr!("Continue"), self.sound_item(), tr!("End the game")];
                 let (selected, chosen) = crate::pong::menu(
@@ -766,8 +776,43 @@ impl BricksView {
                     None => (BricksState::Paused { game, selected }, false),
                 }
             }
+            BricksState::EnterName { game, mut entry } => {
+                paint_game(painter, screen, s, &game, self.scores.best(Board::Bricks));
+                entry.paint(painter, screen, s);
+                let name_input = NameInput {
+                    up: input.up,
+                    down: input.down,
+                    left: input.left,
+                    right: input.right,
+                    enter: input.enter,
+                    typed: input.typed.clone(),
+                    erase: input.erase,
+                };
+                if entry.update(&name_input) {
+                    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+                    self.scores
+                        .add(Board::Bricks, &entry.name(), entry.score, &today);
+                    (BricksState::Scores, false)
+                } else {
+                    (BricksState::EnterName { game, entry }, false)
+                }
+            }
+            BricksState::Scores => {
+                highscores::paint_list(
+                    painter,
+                    screen,
+                    s,
+                    tr!("Brick Breaker"),
+                    self.scores.list(Board::Bricks),
+                );
+                if input.enter || input.back {
+                    (BricksState::Menu { selected: 0 }, false)
+                } else {
+                    (BricksState::Scores, false)
+                }
+            }
             BricksState::Over { game, selected } => {
-                paint_game(painter, screen, s, &game);
+                paint_game(painter, screen, s, &game, self.scores.best(Board::Bricks));
                 crate::pong::dim(painter, screen);
                 let title = tr!("Game over · {score} points", score = game.score);
                 let items = [tr!("Play again"), tr!("Back")];
@@ -821,7 +866,7 @@ fn shades(stage_index: u32) -> [Color32; 3] {
     HUES[((stage_index / 4) % 4) as usize]
 }
 
-fn paint_game(painter: &egui::Painter, screen: Rect, s: f32, game: &Game) {
+fn paint_game(painter: &egui::Painter, screen: Rect, s: f32, game: &Game, best: u32) {
     let scale = ((screen.height() - 80.0 * s) / H).min((screen.width() - 600.0 * s) / W);
     let field = Rect::from_center_size(screen.center(), Vec2::new(W * scale, H * scale));
     let at = |x: f32, y: f32| field.min + Vec2::new(x * scale, y * scale);
@@ -915,7 +960,7 @@ fn paint_game(painter: &egui::Painter, screen: Rect, s: f32, game: &Game) {
     label(
         right + Vec2::new(0.0, 132.0 * s),
         Align2::LEFT_TOP,
-        high_score().max(game.score).to_string(),
+        best.max(game.score).to_string(),
         32.0,
         crate::ui::TEXT,
     );
@@ -1127,7 +1172,6 @@ mod tests {
         assert_eq!(g.lives, 8);
         g.add_points(20_000);
         assert_eq!(g.lives, MAX_LIVES);
-        assert!(high_score() >= 23_500);
     }
 
     #[test]

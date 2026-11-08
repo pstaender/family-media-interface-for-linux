@@ -43,6 +43,8 @@ struct Pad {
     /// Buttons pressed since the last frame, and those held down now.
     pressed: Vec<u16>,
     held: Vec<u16>,
+    /// The buttons of the last `Pads::frame`.
+    last_pressed: Vec<u16>,
     /// The menu direction last frame (for edges).
     direction: (i8, i8),
 }
@@ -61,6 +63,17 @@ impl Pad {
         };
         (pick(self.hat_x, self.x), pick(self.hat_y, self.y))
     }
+}
+
+/// One gamepad as a player's controls (Block Stacker).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct PadPlayer {
+    pub x: f32,
+    pub y: f32,
+    /// B / circle.
+    pub rotate_left: bool,
+    /// Any other button (except start / select).
+    pub rotate_right: bool,
 }
 
 /// Navigation from all gamepads for one frame.
@@ -117,6 +130,22 @@ impl Pads {
         self.pads.len()
     }
 
+    /// Each pad as a player, in a stable order; buttons as of the last `frame`.
+    pub fn players(&self) -> Vec<PadPlayer> {
+        self.pads
+            .values()
+            .map(|p| {
+                let (x, y) = p.position();
+                PadPlayer {
+                    x,
+                    y,
+                    rotate_left: p.last_pressed.contains(&BTN_EAST),
+                    rotate_right: p.last_pressed.iter().any(|c| !is_back(*c) && !is_pause(*c)),
+                }
+            })
+            .collect()
+    }
+
     /// Left / right of all pads together (-1 … 1).
     pub fn horizontal(&self) -> f32 {
         self.pads
@@ -162,6 +191,7 @@ impl Pads {
                 nav.down |= now.1 == 1;
             }
             pad.direction = now;
+            pad.last_pressed = pad.pressed.clone();
             for code in pad.pressed.drain(..) {
                 if is_pause(code) {
                     nav.pause = true;
@@ -243,6 +273,36 @@ mod tests {
         assert!(
             !pads.button_held(),
             "start / select / back don't count as held"
+        );
+    }
+
+    #[test]
+    fn pads_as_players() {
+        let mut pads = Pads::default();
+        let button = |pad, code| {
+            event(
+                pad,
+                PadInput::Button {
+                    code,
+                    pressed: true,
+                },
+            )
+        };
+        pads.apply(event(9, PadInput::Axis(PadAxis::HatX, 1.0)));
+        pads.apply(button(9, 0x130));
+        pads.apply(button(4, BTN_EAST));
+        pads.frame();
+        let players = pads.players();
+        assert!(
+            players[0].rotate_left && !players[0].rotate_right,
+            "pad 4 first"
+        );
+        assert!(players[1].rotate_right && !players[1].rotate_left);
+        assert_eq!(players[1].x, 1.0);
+        pads.frame();
+        assert!(
+            !pads.players()[1].rotate_right,
+            "a press counts for one frame"
         );
     }
 

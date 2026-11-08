@@ -109,11 +109,12 @@ export type PongLevel = (typeof PONG_LEVELS)[number];
 export interface GameSettings {
   pong: { enabled: boolean; computer_level: PongLevel; points_to_win: number };
   bricks: { enabled: boolean; lives: number; sound: boolean };
+  blocks: { enabled: boolean; start_level: number; sound: boolean };
 }
 
 function validateGames(input: unknown, where: string): GameSettings | string {
   if (!isObject(input)) return `${where}: must be an object`;
-  const extra = unknownKey(input, ["pong", "bricks"], where);
+  const extra = unknownKey(input, ["pong", "bricks", "blocks"], where);
   if (extra) return extra;
   const games = newHomeScreen("x", "x").games;
   if (input.pong !== undefined) {
@@ -151,6 +152,22 @@ function validateGames(input: unknown, where: string): GameSettings | string {
       const n = b.lives;
       if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > 9) return `${where}.bricks.lives must be 1 to 9`;
       games.bricks.lives = n;
+    }
+  }
+  if (input.blocks !== undefined) {
+    const b = input.blocks;
+    if (!isObject(b)) return `${where}.blocks: must be an object`;
+    const extraBlocks = unknownKey(b, ["enabled", "start_level", "sound"], `${where}.blocks`);
+    if (extraBlocks) return extraBlocks;
+    for (const key of ["enabled", "sound"] as const) {
+      if (b[key] === undefined) continue;
+      if (typeof b[key] !== "boolean") return `${where}.blocks.${key}: must be true or false`;
+      games.blocks[key] = b[key];
+    }
+    if (b.start_level !== undefined) {
+      const n = b.start_level;
+      if (typeof n !== "number" || !Number.isInteger(n) || n < 0 || n > 9) return `${where}.blocks.start_level must be 0 to 9`;
+      games.blocks.start_level = n;
     }
   }
   return games;
@@ -193,7 +210,7 @@ export function newHomeScreen(id: string, name: string): HomeScreen {
     discs: { enabled: true, allow_disc_menu: true, audio_languages: [], subtitle_languages: [] },
     folders: [],
     websites: [],
-    games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false } },
+    games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false }, blocks: { enabled: false, start_level: 0, sound: false } },
     limits: [],
   };
 }

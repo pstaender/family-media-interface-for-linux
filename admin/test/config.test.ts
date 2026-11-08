@@ -27,9 +27,9 @@ test("the screensaver settings", () => {
 
 test("the games settings, also from their old place", () => {
   const v = validateConfig(example);
-  expect(v.ok && v.config.home_screens[0]!.games).toEqual({ pong: { enabled: true, computer_level: "easy", points_to_win: 5 }, bricks: { enabled: true, lives: 3, sound: true } });
+  expect(v.ok && v.config.home_screens[0]!.games).toEqual({ pong: { enabled: true, computer_level: "easy", points_to_win: 5 }, bricks: { enabled: true, lives: 3, sound: true }, blocks: { enabled: true, start_level: 2, sound: false } });
   const d = validateConfig({ version: 1 });
-  expect(d.ok && d.config.home_screens[0]!.games).toEqual({ pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false } });
+  expect(d.ok && d.config.home_screens[0]!.games).toEqual({ pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false }, blocks: { enabled: false, start_level: 0, sound: false } });
   const old = validateConfig({ version: 1, programs: { pong: { enabled: true, points_to_win: 9 } } });
   expect(old.ok && old.config.home_screens[0]!.games.pong).toEqual({ enabled: true, computer_level: "normal", points_to_win: 9 });
   expect(old.ok && "programs" in old.config).toBe(false);
@@ -254,6 +254,10 @@ const BAD: unknown[] = [
   { version: 1, parental: { limits: [["budget", 60]] } },
   { version: 1, parental: { limits: [{ type: "budget", minutes: 60, scope: ["every_day"] }] } },
   // Version 2: home screens.
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, games: { blocks: { start_level: 10 } } }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, games: { blocks: { enabled: 1 } } }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, games: { blocks: { speed: 1 } } }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, games: { blocks: [] } }] },
   { version: 2 },
   { version: 2, home_screens: [] },
   { version: 2, home_screens: [{ id: "a", name: "A" }] },

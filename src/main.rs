@@ -1,10 +1,12 @@
 mod audio;
+mod blocks;
 mod bricks;
 mod config;
 mod control;
 mod cover;
 mod disc;
 mod gamepad;
+mod highscores;
 mod i18n;
 mod inhibit;
 mod library;
