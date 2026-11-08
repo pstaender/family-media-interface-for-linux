@@ -61,6 +61,8 @@ struct Pad {
     last_pressed: Vec<u16>,
     /// The menu direction last frame (for edges).
     direction: (i8, i8),
+    /// Up was pushed in the last `Pads::frame`.
+    up_pushed: bool,
 }
 
 impl Pad {
@@ -86,7 +88,7 @@ pub struct PadPlayer {
     pub y: f32,
     /// B / circle.
     pub rotate_left: bool,
-    /// Any other button (except start / select).
+    /// Any other button (except start / select), or pushing up.
     pub rotate_right: bool,
 }
 
@@ -158,7 +160,8 @@ impl Pads {
                     x,
                     y,
                     rotate_left: p.last_pressed.contains(&BTN_EAST),
-                    rotate_right: p.last_pressed.iter().any(|c| !is_back(*c) && !is_pause(*c)),
+                    rotate_right: p.up_pushed
+                        || p.last_pressed.iter().any(|c| !is_back(*c) && !is_pause(*c)),
                 }
             })
             .collect()
@@ -212,6 +215,7 @@ impl Pads {
                 nav.left |= now.0 == -1;
                 nav.right |= now.0 == 1;
             }
+            pad.up_pushed = now.1 == -1 && pad.direction.1 != -1;
             if now.1 != pad.direction.1 {
                 nav.up |= now.1 == -1;
                 nav.down |= now.1 == 1;
@@ -359,6 +363,21 @@ mod tests {
             !pads.players()[1].rotate_right,
             "a press counts for one frame"
         );
+    }
+
+    #[test]
+    fn pushing_up_rotates_once_per_push() {
+        let mut pads = Pads::default();
+        pads.apply(event(3, PadInput::Axis(PadAxis::HatY, -1.0)));
+        pads.frame();
+        assert!(pads.players()[0].rotate_right);
+        pads.frame();
+        assert!(!pads.players()[0].rotate_right, "held: only once");
+        pads.apply(event(3, PadInput::Axis(PadAxis::HatY, 0.0)));
+        pads.frame();
+        pads.apply(event(3, PadInput::Axis(PadAxis::HatY, 1.0)));
+        pads.frame();
+        assert!(!pads.players()[0].rotate_right, "down doesn't rotate");
     }
 
     #[test]
