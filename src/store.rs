@@ -153,6 +153,23 @@ pub fn started_by_orphaned_kiosk(proc: &Path, pid: u32) -> bool {
     matches!(parent(&session_pid), Some((name, _)) if name == "systemd")
 }
 
+/// Were we started by the kiosk session's `familynovice-kiosk` loop (which restarts us)?
+pub fn started_by_kiosk(proc: &Path, pid: u32) -> bool {
+    let status = |pid: &str| std::fs::read_to_string(proc.join(pid).join("status")).ok();
+    let field = |status: &str, name: &str| {
+        status
+            .lines()
+            .find_map(|l| l.strip_prefix(name)?.strip_prefix(':'))
+            .map(|v| v.trim().to_string())
+    };
+    let Some(parent) = status(&pid.to_string()).and_then(|s| field(&s, "PPid")) else {
+        return false;
+    };
+    status(&parent)
+        .and_then(|s| field(&s, "Name"))
+        .is_some_and(|n| n.starts_with("familynovice-ki"))
+}
+
 /// Take the single-instance lock. `Ok(None)`: another media center of this user runs.
 /// The lock lasts as long as the returned file stays open (also released by `exec`, as
 /// files are opened close-on-exec, so a restart takes it again).
@@ -267,6 +284,9 @@ mod tests {
         assert!(started_by_orphaned_kiosk(&proc, 30001));
         assert!(!started_by_orphaned_kiosk(&proc, 501));
         assert!(!started_by_orphaned_kiosk(&proc, 99999));
+        assert!(started_by_kiosk(&proc, 21714));
+        assert!(started_by_kiosk(&proc, 21785));
+        assert!(!started_by_kiosk(&proc, 501));
         std::fs::remove_dir_all(&proc).unwrap();
     }
 

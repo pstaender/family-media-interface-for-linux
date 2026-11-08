@@ -28,6 +28,10 @@ pub struct LockView {
     pub message: Option<String>,
     /// After a correct PIN: the selected unlock choice (`UNLOCK_CHOICES`, then "Cancel").
     pub unlock_menu: Option<usize>,
+    /// Asking for the PIN to exit the media center (not a lock): back cancels, a correct
+    /// PIN exits.
+    exit: bool,
+    exit_ok: bool,
 }
 
 /// Navigation keys this frame, from the window, calibrated remote buttons and buttons only
@@ -50,6 +54,10 @@ pub enum LockAction {
     CheckPin(String),
     /// Unlock for minutes / rest of today.
     Unlock(Option<u32>),
+    /// Exit mode: the PIN was right.
+    Exit,
+    /// Exit mode: cancelled.
+    Cancel,
 }
 
 /// What the lock screen needs to show.
@@ -70,13 +78,25 @@ impl LockView {
             checking: false,
             message: None,
             unlock_menu: None,
+            exit: false,
+            exit_ok: false,
+        }
+    }
+
+    /// The PIN pad for exiting the media center.
+    pub fn for_exit() -> Self {
+        Self {
+            exit: true,
+            ..Self::new(LockReason::Parent)
         }
     }
 
     pub fn pin_checked(&mut self, ok: bool) {
         self.checking = false;
         self.entered.clear();
-        if ok {
+        if ok && self.exit {
+            self.exit_ok = true;
+        } else if ok {
             self.message = None;
             self.unlock_menu = Some(0);
         } else {
@@ -93,12 +113,21 @@ impl LockView {
         info: &LockInfo,
         nav: &Nav,
     ) -> LockAction {
+        if self.exit_ok {
+            return LockAction::Exit;
+        }
         painter.rect_filled(screen, 0.0, Color32::from_rgb(0x0c, 0x0e, 0x14));
         let center = screen.center();
         let (title, color) = match self.reason {
+            _ if self.exit => (tr!("Exit the media center"), crate::ui::TEXT),
             LockReason::Parent => (tr!("Locked"), crate::ui::TEXT),
             LockReason::BudgetUsed => (tr!("Time is up"), crate::ui::TEXT),
             LockReason::OutsideWindow { .. } => (tr!("Not now"), crate::ui::TEXT),
+        };
+        let subtitle = if self.exit {
+            tr!("Enter the PIN to exit. Back: cancel.").to_string()
+        } else {
+            limits::reason_text_with(&self.reason, crate::i18n::tr)
         };
         painter.text(
             Pos2::new(center.x, screen.min.y + 120.0 * s),
@@ -110,7 +139,7 @@ impl LockView {
         painter.text(
             Pos2::new(center.x, screen.min.y + 210.0 * s),
             Align2::CENTER_TOP,
-            limits::reason_text_with(&self.reason, crate::i18n::tr),
+            subtitle,
             FontId::proportional(30.0 * s),
             crate::ui::TEXT_DIM,
         );
@@ -292,6 +321,10 @@ impl LockView {
         }
         if enter {
             press = Some(self.focus);
+        }
+        // Exiting: back with nothing entered cancels (also while waiting after wrong PINs).
+        if self.exit && (back || clear) && self.entered.is_empty() {
+            return LockAction::Cancel;
         }
         if disabled {
             return LockAction::None;

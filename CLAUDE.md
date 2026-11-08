@@ -533,7 +533,7 @@ scripts/setup.sh
 ```
 
 Development keys: arrows to move, Enter/Space to select, Esc/Backspace to go back,
-Ctrl+Q to quit (to be protected by the PIN).
+Ctrl+Q to quit (asks first, like the power button; with a PIN set, asks for the PIN).
 
 Admin web interface (from `admin/`):
 
@@ -617,8 +617,10 @@ Before you consider a change done, run the formatter, linter and tests for every
 - **File watching** (`notify` crate, debounced) is a fallback, for example for hand-edited JSON.
 - **Restart (implemented):** admin panel → Home screen → "Restart media center"
   (`POST /api/restart` → control socket `restart`): players/music/screensaver are stopped,
-  usage saved, then the app `exec`s its own path (after `install.sh --update` the old file is
-  `… (deleted)`, so the new one starts); the screen is dark for a moment. No dependency on systemd's graphical-session support, which
+  usage saved, then the app `exec`s `argv[0]` (the kiosk starts it by its installed path).
+  Not `/proc/self/exe`: after `install.sh --update` that names the deleted old file in its
+  old folder (`/opt/familynovice.old/… (deleted)`), so the restart failed with ENOENT. If
+  `exec` fails under the kiosk loop, the app exits 1 and the loop starts it again. No dependency on systemd's graphical-session support, which
   isn't equally reliable on every desktop. Only needed for changes that can't be applied live
   (e.g. switching the playback backend).
 - **Crash recovery:** a small supervisor mode (`familynovice --supervise`, started at login)
@@ -639,7 +641,11 @@ Before you consider a change done, run the formatter, linter and tests for every
 - **Account hardening:** normal user without admin rights (not in `sudo`/`wheel`), strong
   password even with autologin. Ctrl+Alt+F1–F6 lead to the other text consoles, which ask for a
   password.
-- **Leaving the media center:** with the PIN, it logs out to the login screen, where parents log
+- **Leaving the media center (implemented):** power button left of the padlock (top right;
+  "up" from the top row, left/right between the two) or Ctrl+Q → "Exit the media center?"
+  (Cancel preselected) → with a PIN set, the PIN pad (`LockView::for_exit`, same wrong-PIN
+  waiting; back with nothing entered cancels) → players/music stopped, usage saved, window
+  closed (exit 0: the kiosk session ends). Before: with the PIN, it logs out to the login screen, where parents log
   into their own account.
 - **Installer / setup script:** autologin works differently per display manager (GDM, SDDM,
   LightDM). Handle that in a setup script that supports all three, not in the app, so the app

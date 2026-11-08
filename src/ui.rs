@@ -126,6 +126,17 @@ enum Screen {
     },
     /// The built-in Ping Pong game ("Programs" row).
     Pong(Box<PongView>),
+    /// "Exit the media center?" (exit button / Ctrl+Q).
+    ConfirmExit {
+        selected: usize,
+    },
+}
+
+/// The round buttons at the top right of the home screen ("up" from the top row).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TopButton {
+    Exit,
+    Lock,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -496,7 +507,9 @@ pub struct App {
     /// Focused tile on the home screen: (row, column). Row 0: discs, row 1: folders.
     focus: (usize, usize),
     /// The lock button (top right) has the focus instead of a tile.
-    lock_button_focused: bool,
+    top_focus: Option<TopButton>,
+    /// Asking for the PIN to exit the media center.
+    exit_view: Option<LockView>,
     /// Horizontal scroll per row kind, vertical scroll of the rows.
     row_scroll_x: [f32; 4],
     rows_scroll_y: f32,
@@ -596,7 +609,8 @@ impl App {
             config,
             screen: Screen::Home,
             focus: (0, 0),
-            lock_button_focused: false,
+            top_focus: None,
+            exit_view: None,
             row_scroll_x: [0.0; 4],
             rows_scroll_y: 0.0,
             web_helper: find_web_helper(),
@@ -1533,6 +1547,27 @@ impl App {
     /// running; the screen is dark for a moment). Returns only if that failed.
     fn restart(&mut self) {
         log::info!("restarting (asked by the admin panel)");
+        self.stop_all_now();
+        let error = exec_self();
+        log::error!("restart failed: {error}");
+        // In the kiosk session its loop starts us again; elsewhere keep running.
+        if store::started_by_kiosk(std::path::Path::new("/proc"), std::process::id()) {
+            log::error!("exiting, so the kiosk session starts the media center again");
+            std::process::exit(1);
+        }
+    }
+
+    /// Exit the media center (exit button / Ctrl+Q, after asking): in the kiosk session this
+    /// ends the session, back to the login screen.
+    fn exit_now(&mut self) {
+        log::info!("exiting (exit button)");
+        self.stop_all_now();
+        self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// Before restarting / exiting: end the screensaver, players and music (waiting for
+    /// them, so none is left behind) and save the usage.
+    fn stop_all_now(&mut self) {
         self.stop_screensaver();
         match std::mem::replace(&mut self.screen, Screen::Home) {
             Screen::Playing { mut child, .. } => {
@@ -1551,8 +1586,6 @@ impl App {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .save_now();
-        let error = exec_self();
-        log::error!("restart failed: {error}");
     }
 
     /// Time is up: stop players, music and websites, close viewers.
@@ -1582,6 +1615,7 @@ impl App {
         }
     }
 
+    /// The PIN pad: the lock screen (`exit` false), or asking for the PIN to exit.
     fn lock_screen(
         &mut self,
         ui: &egui::Ui,
@@ -1589,6 +1623,7 @@ impl App {
         screen_rect: Rect,
         s: f32,
         keys: &Keys,
+        exit: bool,
     ) {
         let (config, _) = self.config();
         let now = chrono::Local::now();
@@ -1602,7 +1637,12 @@ impl App {
                 log::info!("wrong PIN, waiting {wait} s");
             }
             drop(tracker);
-            if let Some(view) = &mut self.lock {
+            let view = if exit {
+                &mut self.exit_view
+            } else {
+                &mut self.lock
+            };
+            if let Some(view) = view {
                 view.pin_checked(ok);
             }
         }
@@ -1615,7 +1655,12 @@ impl App {
                 .unwrap_or_else(|p| p.into_inner())
                 .pin_wait(now.timestamp()),
         };
-        let Some(view) = &mut self.lock else { return };
+        let slot = if exit {
+            &mut self.exit_view
+        } else {
+            &mut self.lock
+        };
+        let Some(view) = slot else { return };
         let nav = Nav {
             enter: keys.enter,
             back: keys.back,
@@ -1644,6 +1689,11 @@ impl App {
                     .unlock(now, minutes);
                 self.lock = None;
             }
+            LockAction::Exit => {
+                self.exit_view = None;
+                self.exit_now();
+            }
+            LockAction::Cancel => self.exit_view = None,
         }
     }
 
@@ -2061,9 +2111,9 @@ impl eframe::App for App {
             Screen::Playing { kind, .. } if *kind != PlayKind::Website => PlayStatus::Playing,
             _ => PlayStatus::Stopped,
         });
-        // TODO: protect leaving the media center with the PIN.
-        if keys.quit {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        // Ctrl+Q: like the exit button (asks first; with a PIN, the PIN).
+        if keys.quit && matches!(self.screen, Screen::Home) {
+            self.screen = Screen::ConfirmExit { selected: 1 };
         }
 
         // Buttons only the device reports (e.g. OK = KEY_SELECT), while our window is in
@@ -2112,7 +2162,11 @@ impl eframe::App for App {
         self.paint_volume(ui, screen_rect, s);
 
         if self.lock.is_some() {
-            self.lock_screen(ui, &painter, screen_rect, s, &keys);
+            self.lock_screen(ui, &painter, screen_rect, s, &keys, false);
+            return;
+        }
+        if self.exit_view.is_some() {
+            self.lock_screen(ui, &painter, screen_rect, s, &keys, true);
             return;
         }
         self.home_button(ui, screen_rect, s);
@@ -2185,17 +2239,26 @@ impl App {
             RowKind::Programs => 1,
         };
 
-        // The lock button (only with a PIN, so nobody gets locked out): "up" from the top row.
+        // The buttons at the top right ("up" from the top row): exit, and lock (only with a
+        // PIN, so nobody gets locked out).
         let has_pin = config.parental.pin_hash.is_some();
-        if !has_pin {
-            self.lock_button_focused = false;
+        if !has_pin && self.top_focus == Some(TopButton::Lock) {
+            self.top_focus = Some(TopButton::Exit);
         }
-        if home && self.lock_button_focused {
+        if home && self.top_focus.is_some() {
             if keys.down {
-                self.lock_button_focused = false;
+                self.top_focus = None;
+            } else if keys.left {
+                self.top_focus = Some(TopButton::Exit);
+            } else if keys.right && has_pin {
+                self.top_focus = Some(TopButton::Lock);
             }
-        } else if home && keys.up && self.focus.0 == 0 && has_pin {
-            self.lock_button_focused = true;
+        } else if home && keys.up && self.focus.0 == 0 {
+            self.top_focus = Some(if has_pin {
+                TopButton::Lock
+            } else {
+                TopButton::Exit
+            });
         } else if home {
             let (mut row, mut col) = self.focus;
             if keys.up && row > 0 {
@@ -2297,7 +2360,7 @@ impl App {
                 let response = ui.interact(rect, id, Sense::click());
                 let focus = ctx.animate_bool_with_time(
                     ui.make_persistent_id(("focus", kind as usize, i)),
-                    home && !self.lock_button_focused && self.focus == (r, i),
+                    home && self.top_focus.is_none() && self.focus == (r, i),
                     0.15,
                 );
                 match kind {
@@ -2349,22 +2412,40 @@ impl App {
             }
         }
 
-        if has_pin {
-            let size = 76.0 * s;
-            let rect = Rect::from_min_size(
+        let size = 76.0 * s;
+        let button = |right: f32| {
+            Rect::from_min_size(
                 Pos2::new(
-                    screen_rect.max.x - margin - size,
+                    screen_rect.max.x - margin - right - size,
                     screen_rect.min.y + 34.0 * s,
                 ),
                 Vec2::splat(size),
-            );
+            )
+        };
+        // Exit: left of the lock button (or in its place without a PIN).
+        {
+            let rect = button(if has_pin { size + 24.0 * s } else { 0.0 });
+            let response = ui.interact(rect, ui.make_persistent_id("exit-button"), Sense::click());
+            let focused = home && (self.top_focus == Some(TopButton::Exit) || response.hovered());
+            paint_power_button(ui.painter(), rect, focused, s);
+            let pressed = response.clicked()
+                || (home && self.top_focus == Some(TopButton::Exit) && keys.enter);
+            if home && pressed {
+                self.screen = Screen::ConfirmExit { selected: 1 };
+                self.ctx.request_repaint();
+                return;
+            }
+        }
+        if has_pin {
+            let rect = button(0.0);
             let response = ui.interact(rect, ui.make_persistent_id("lock-button"), Sense::click());
-            let focused = home && (self.lock_button_focused || response.hovered());
+            let focused = home && (self.top_focus == Some(TopButton::Lock) || response.hovered());
             paint_lock_button(ui.painter(), rect, focused, s);
-            let pressed = response.clicked() || (home && self.lock_button_focused && keys.enter);
+            let pressed = response.clicked()
+                || (home && self.top_focus == Some(TopButton::Lock) && keys.enter);
             if home && pressed {
                 log::info!("locked with the lock button");
-                self.lock_button_focused = false;
+                self.top_focus = None;
                 self.tracker
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
@@ -2374,7 +2455,7 @@ impl App {
             }
         }
 
-        if home && keys.enter && !self.lock_button_focused {
+        if home && keys.enter && self.top_focus.is_none() {
             activate = Some(self.focus);
         }
         if let Some((row, col)) = activate {
@@ -2428,6 +2509,44 @@ impl App {
             | Screen::Music(_)
             | Screen::Pong(_)
             | Screen::VideoChoose { .. } => {}
+            Screen::ConfirmExit { selected } => {
+                let mut selected = *selected;
+                if keys.prev() {
+                    selected = selected.saturating_sub(1);
+                }
+                if keys.next() {
+                    selected = (selected + 1).min(1);
+                }
+                let items = [
+                    MenuItem::new(
+                        tr!("Exit"),
+                        tr!("Ends the media center and goes back to the login screen"),
+                    ),
+                    MenuItem::new(tr!("Cancel"), ""),
+                ];
+                let clicked = paint_menu(
+                    ui,
+                    painter,
+                    screen_rect,
+                    s,
+                    tr!("Exit the media center?"),
+                    &items,
+                    selected,
+                )
+                .filter(|_| !self.just_opened());
+                match clicked.or(keys.enter.then_some(selected)) {
+                    _ if keys.back => self.screen = Screen::Home,
+                    // With a PIN, only a parent may leave.
+                    Some(0) if has_pin => {
+                        self.screen = Screen::Home;
+                        self.top_focus = None;
+                        self.exit_view = Some(LockView::for_exit());
+                    }
+                    Some(0) => self.exit_now(),
+                    Some(_) => self.screen = Screen::Home,
+                    None => self.screen = Screen::ConfirmExit { selected },
+                }
+            }
             Screen::Choose { selected, resume } => {
                 let (mut selected, resume) = (*selected, *resume);
                 let list = choices(resume, config.discs.allow_disc_menu);
@@ -3266,6 +3385,36 @@ fn paint_lock_button(painter: &egui::Painter, rect: Rect, focused: bool, s: f32)
     );
 }
 
+/// The exit button: the power-off symbol (a ring open at the top, a line through the gap).
+fn paint_power_button(painter: &egui::Painter, rect: Rect, focused: bool, s: f32) {
+    let r = rect.width() / 2.0;
+    let c = rect.center();
+    painter.circle_filled(c, r, if focused { ACCENT } else { TILE_BG });
+    if focused {
+        painter.circle_stroke(c, r, Stroke::new(3.0 * s, TEXT));
+    }
+    let stroke = Stroke::new(r * 0.13, TEXT);
+    let ring = r * 0.45;
+    // From 1 o'clock clockwise round to 11 o'clock (the gap is at the top).
+    let gap = 0.75_f32;
+    let points: Vec<Pos2> = (0..=40)
+        .map(|k| {
+            let t = -std::f32::consts::FRAC_PI_2
+                + gap
+                + (std::f32::consts::TAU - 2.0 * gap) * k as f32 / 40.0;
+            c + Vec2::new(t.cos() * ring, t.sin() * ring)
+        })
+        .collect();
+    painter.add(egui::Shape::line(points, stroke));
+    painter.line_segment(
+        [
+            c + Vec2::new(0.0, -ring * 1.25),
+            c + Vec2::new(0.0, -ring * 0.05),
+        ],
+        stroke,
+    );
+}
+
 /// A large "‹ Back" button for mouse/touch (no keyboard needed). Register it (`back_button`)
 /// after other click areas so it lies on top of them; paint it (`paint_back_button`) last.
 fn back_button(ui: &egui::Ui, screen_rect: Rect, s: f32) -> (Rect, egui::Response) {
@@ -3295,22 +3444,29 @@ fn paint_back_button(painter: &egui::Painter, rect: Rect, hovered: bool, s: f32)
 
 /// Ask a player to quit (SIGTERM): mpv/VLC exit cleanly, so mpv still reports its last
 /// position to the resume monitor. `poll_background` kills it if it doesn't exit in time.
-/// Replace this process with the program at our path, same arguments. After an update the
-/// running file is gone (`… (deleted)`), so the new one at the same path starts.
+/// Replace this process with the program we were started as, same arguments.
 fn exec_self() -> std::io::Error {
     use std::os::unix::process::CommandExt;
-    let exe = match std::env::current_exe() {
-        Ok(path) => path,
-        Err(e) => return e,
+    let program = match restart_program(std::env::args_os().next(), std::env::current_exe().ok()) {
+        Some(p) => p,
+        None => return std::io::Error::other("don't know which program to start"),
     };
-    let exe = exe
-        .to_str()
-        .and_then(|s| s.strip_suffix(" (deleted)"))
-        .map(PathBuf::from)
-        .unwrap_or(exe);
-    std::process::Command::new(exe)
+    log::info!("restarting as {}", program.to_string_lossy());
+    std::process::Command::new(program)
         .args(std::env::args_os().skip(1))
         .exec()
+}
+
+/// The program to start again: how we were started (`argv[0]`: the kiosk uses the installed
+/// path; a bare name is looked up in `PATH` again). Not `/proc/self/exe`: after an update
+/// it names the deleted old file, in its old folder (`/opt/familynovice.old/… (deleted)`).
+fn restart_program(
+    argv0: Option<std::ffi::OsString>,
+    current_exe: Option<PathBuf>,
+) -> Option<std::ffi::OsString> {
+    argv0
+        .filter(|a| !a.is_empty())
+        .or_else(|| current_exe.map(PathBuf::into_os_string))
 }
 
 fn stop_player(pid: u32) {
@@ -3769,5 +3925,30 @@ fn elide(text: &str, max_chars: usize) -> String {
     } else {
         let cut: String = text.chars().take(max_chars - 1).collect();
         format!("{}…", cut.trim_end())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restart_uses_how_we_were_started() {
+        let installed = std::ffi::OsString::from("/opt/familynovice/bin/familynovice");
+        let deleted = PathBuf::from("/opt/familynovice.old/bin/familynovice (deleted)");
+        assert_eq!(
+            restart_program(Some(installed.clone()), Some(deleted.clone())),
+            Some(installed)
+        );
+        // Started by name: found in PATH again.
+        assert_eq!(
+            restart_program(Some("familynovice".into()), Some(deleted.clone())),
+            Some("familynovice".into())
+        );
+        assert_eq!(
+            restart_program(Some("".into()), Some(deleted.clone())),
+            Some(deleted.into_os_string())
+        );
+        assert_eq!(restart_program(None, None), None);
     }
 }

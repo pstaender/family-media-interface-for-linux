@@ -212,7 +212,7 @@ previous, volume up / down, mute):
 | Hold Esc for 3 s | close a website |
 | Volume up / down, mute (remote, keyboard) | system volume of the sound output (e.g. HDMI to the TV or receiver), in 5 % steps up to 100 %; also while a video or website is in front. Set the TV / receiver fairly loud once. On a normal desktop, the desktop handles the standard volume keys itself |
 | Hold the remote's home button for 3 s | stop what is playing (music, video, website) and show the home screen |
-| Ctrl+Q | quit the media center (development; will be PIN-protected) |
+| Ctrl+Q, or the power button at the top right | exit the media center after asking ("Exit the media center?"); with a PIN set, only with the PIN. In the kiosk session: back to the login screen |
 
 Everything also works with the mouse: tiles, menus, the "‹ Back" buttons and the PIN pad are
 clickable.

@@ -370,6 +370,17 @@ const DE: &[(&str, &str)] = &[
     ("Previous", "Zurück (Titel)"),
     ("Volume up", "Lauter"),
     ("Programs", "Programme"),
+    ("Exit", "Beenden"),
+    ("Exit the media center?", "Mediencenter beenden?"),
+    ("Exit the media center", "Mediencenter beenden"),
+    (
+        "Ends the media center and goes back to the login screen",
+        "Beendet das Mediencenter und geht zurück zur Anmeldung",
+    ),
+    (
+        "Enter the PIN to exit. Back: cancel.",
+        "Zum Beenden die PIN eingeben. Zurück: abbrechen.",
+    ),
     ("Ping Pong", "Ping Pong"),
     ("Game for 1 or 2 players", "Spiel für 1 oder 2 Personen"),
     (
