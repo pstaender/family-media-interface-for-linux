@@ -28,6 +28,10 @@ pub const KEY_HOMEPAGE: u16 = 172;
 /// `KEY_OK` / `KEY_SELECT`: OK of remotes outside pointer mode; invisible to X11 windows.
 pub const KEY_OK: u16 = 352;
 pub const KEY_SELECT: u16 = 353;
+/// `KEY_NEXT` / `KEY_PREVIOUS`: next/previous of remotes outside pointer mode (the HAOBO
+/// remote); invisible to X11 windows and so to the desktop's media keys.
+pub const KEY_NEXT: u16 = 407;
+pub const KEY_PREVIOUS: u16 = 412;
 
 /// What a remote button does in the media center.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -109,8 +113,8 @@ impl RemoteMap {
         store::save(&path, self)
     }
 
-    /// The action of a device code the window doesn't get. Without calibration: OK/Select
-    /// (invisible to X11 windows) mean OK.
+    /// The action of a device code the window doesn't get. Without calibration, codes above
+    /// 247 (invisible to X11 windows) have defaults: OK/Select = OK, Next/Previous.
     pub fn device_action(&self, code: u16) -> Option<Action> {
         let learned = self
             .buttons
@@ -119,7 +123,10 @@ impl RemoteMap {
             .map(|(a, _)| *a);
         let known_elsewhere = self.buttons.values().any(|b| b.codes.contains(&code));
         learned.or(match code {
-            KEY_OK | KEY_SELECT if !known_elsewhere => Some(Action::Ok),
+            _ if known_elsewhere => None,
+            KEY_OK | KEY_SELECT => Some(Action::Ok),
+            KEY_NEXT => Some(Action::Next),
+            KEY_PREVIOUS => Some(Action::Previous),
             _ => None,
         })
     }
@@ -486,6 +493,8 @@ mod tests {
         let empty = RemoteMap::default();
         assert_eq!(empty.device_action(KEY_SELECT), Some(Action::Ok));
         assert_eq!(empty.device_action(KEY_OK), Some(Action::Ok));
+        assert_eq!(empty.device_action(KEY_NEXT), Some(Action::Next));
+        assert_eq!(empty.device_action(KEY_PREVIOUS), Some(Action::Previous));
         assert_eq!(empty.device_action(28), None); // Enter reaches the window
         let mut map = RemoteMap::default();
         map.buttons.insert(
