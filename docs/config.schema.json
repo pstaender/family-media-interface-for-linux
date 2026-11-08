@@ -206,7 +206,7 @@
                 "required": ["letter", "path"],
                 "properties": {
                   "letter": { "type": "string", "pattern": "^[A-Y]$", "description": "Z: is DOSBox's own drive." },
-                  "path": { "type": "string", "description": "A folder or a disk image (.img, .ima, .iso, .cue). Folders and floppy/hard disk images run from a private copy." }
+                  "path": { "type": "string", "description": "A folder, a zip file (unpacked into a private folder) or a disk image (.img, .ima, .iso, .cue). Folders and floppy/hard disk images run from a private copy." }
                 }
               }
             },

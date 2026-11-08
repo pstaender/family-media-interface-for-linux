@@ -552,7 +552,7 @@ pub struct App {
     /// The power button being held (log out / shut down).
     power_hold: crate::power::PowerHold,
     /// Horizontal scroll per row kind, vertical scroll of the rows.
-    row_scroll_x: [f32; 4],
+    row_scroll_x: HashMap<usize, f32>,
     rows_scroll_y: f32,
     /// The browser window program (`curator-web`), if installed.
     web_helper: Option<PathBuf>,
@@ -661,7 +661,7 @@ impl App {
             exit_view: None,
             pad_close_since: None,
             power_hold: Default::default(),
-            row_scroll_x: [0.0; 4],
+            row_scroll_x: HashMap::new(),
             rows_scroll_y: 0.0,
             web_helper: find_web_helper(),
             folder_ok: HashMap::new(),
@@ -1897,7 +1897,7 @@ impl App {
                 self.go_home();
                 self.focus = (0, 0);
                 self.top_focus = None;
-                self.row_scroll_x = [0.0; 4];
+                self.row_scroll_x.clear();
                 self.rows_scroll_y = 0.0;
                 self.folder_checked = None; // its folders are checked right away
             }
@@ -3112,7 +3112,7 @@ impl App {
                 TEXT,
             );
             // Horizontal scroll: keep the focused tile on screen.
-            let sx = &mut self.row_scroll_x[kind as usize];
+            let sx = self.row_scroll_x.entry(kind as usize).or_insert(0.0);
             if self.focus.0 == r {
                 let left = self.focus.1 as f32 * step;
                 let right = left + tile_size.x;

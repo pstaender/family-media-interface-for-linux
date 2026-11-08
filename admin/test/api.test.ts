@@ -184,6 +184,7 @@ test("game files are uploaded into our own folder only", async () => {
   const again = (await (await upload("kind=snes&name=evil%20game.sfc", "other")).json()) as { path: string };
   expect(again.path).toBe(join(library, "snes", "evil game-2.sfc"));
   expect(readFileSync(path, "utf8")).toBe("rom-data");
+  expect((await upload("kind=dos&name=game.zip", "zip-data")).status).toBe(200);
   for (const query of ["kind=snes&name=a.exe", "kind=dos&name=a.cue", "kind=dos&name=a.sfc", "kind=c64&name=a.img", "kind=snes&name=.sfc", "kind=snes"]) {
     expect((await upload(query, "x")).status).toBe(400);
   }

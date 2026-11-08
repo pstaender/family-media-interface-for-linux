@@ -459,7 +459,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   and supervised as `PlayKind::Program`, always fullscreen, from a configuration we generate
   in `$XDG_CACHE_HOME/curator/emulators/`. DOS: up to 8 drive mappings (A–Y; Z: is DOSBox's
   own, `mount z` is refused), folder or image; type from the file (`classify`: ≤ 2.88 MB
-  floppy, larger hard disk with `-size 512,63,16,<cyl>` because `imgmount -t hdd` can't
+  floppy, larger hard disk with `-size 512,63,16,<cyl>`; `.zip` unpacked into the private copy (`zip` crate; names outside and links skipped, at most 16 GB, counted while unpacking) and mounted as a folder, or as the image if it holds only one because `imgmount -t hdd` can't
   detect it, .iso/.cue CD); autostart, startup script, 4:3 correction. **DOSBox 0.74 ignores
   `mount -ro`**, so folders and floppy/hard disk images run from a private copy, made once in
   `$XDG_DATA_HOME/curator/emulators/dos/<id>/` (thread, `Screen::PreparingEmulator`), where the

@@ -19,6 +19,9 @@ const HDD_SECTOR: u64 = 512;
 const HDD_SECTORS: u64 = 63;
 const HDD_HEADS: u64 = 16;
 const MAX_COPY_DEPTH: u32 = 32;
+/// What a zip file may unpack to: a damaged or malicious one must not fill the disk.
+const MAX_UNZIP_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+const MAX_UNZIP_ENTRIES: usize = 200_000;
 
 /// Installed by `scripts/setup.sh`: `shaders/` and `autoconfig/`.
 const ASSET_DIRS: [&str; 2] = [
@@ -54,6 +57,8 @@ pub fn classify(path: &Path, is_dir: bool, size: u64) -> Option<Source> {
         return Some(Source::Folder);
     }
     match extension(path).as_str() {
+        // Unpacked, it is a folder (`prepare_dos`).
+        "zip" => Some(Source::Folder),
         "iso" | "cue" => Some(Source::Cd),
         "img" | "ima" if size <= FLOPPY_MAX_BYTES => Some(Source::Floppy),
         "img" | "ima" => Some(Source::HardDisk {
@@ -194,6 +199,66 @@ fn copy_image(from: &Path, to: &Path) -> std::io::Result<()> {
     done
 }
 
+fn unpack_zip_into(from: &Path, to: &Path, limit: u64) -> std::io::Result<()> {
+    use std::io::Read;
+    let mut archive =
+        zip::ZipArchive::new(std::fs::File::open(from)?).map_err(std::io::Error::other)?;
+    if archive.len() > MAX_UNZIP_ENTRIES {
+        return Err(std::io::Error::other("too many files in the zip file"));
+    }
+    let mut left = limit;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(std::io::Error::other)?;
+        // None: a name pointing outside ("../x"). Links are never created.
+        let Some(name) = entry.enclosed_name() else {
+            continue;
+        };
+        if entry.is_symlink() {
+            continue;
+        }
+        let target = to.join(name);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&target)?;
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut out = std::fs::File::create(&target)?;
+        // Counted while unpacking: the sizes in a zip file's header can lie.
+        let written = std::io::copy(&mut (&mut entry).take(left + 1), &mut out)?;
+        if written > left {
+            return Err(std::io::Error::other(
+                "the zip file unpacks to too much data",
+            ));
+        }
+        left -= written;
+    }
+    Ok(())
+}
+
+/// Unpack a zip file as a whole: an unfinished folder is never used.
+fn unpack_zip(from: &Path, to: &Path, limit: u64) -> std::io::Result<()> {
+    let part = part_path(to);
+    let done = std::fs::create_dir_all(&part)
+        .and_then(|()| unpack_zip_into(from, &part, limit))
+        .and_then(|()| std::fs::rename(&part, to));
+    if done.is_err() {
+        let _ = std::fs::remove_dir_all(&part);
+    }
+    done
+}
+
+/// A zip file holding nothing but one disk image: that image is the drive.
+fn only_image_in(folder: &Path) -> Option<PathBuf> {
+    let mut items = std::fs::read_dir(folder).ok()?;
+    let path = items.next()?.ok()?.path();
+    let image = items.next().is_none()
+        && path.is_file()
+        && matches!(extension(&path).as_str(), "img" | "ima" | "iso");
+    image.then_some(path)
+}
+
 /// Check the drives and make the private copies in `root`, our folder for this game. They
 /// are made once, so saved games survive and the game still starts if the original is gone
 /// (`keep_saves` off: a fresh copy every time). This can take a while: call it in a thread.
@@ -206,6 +271,7 @@ pub fn prepare_dos(
     for drive in drives {
         let original = Path::new(&drive.path);
         let letter = drive.letter.chars().next().unwrap_or('C');
+        let is_zip = extension(original) == "zip";
         let name = format!("{:016x}", fnv(&drive.path));
         let folder_copy = root.join(&name);
         let image_copy = root.join(format!("{name}.{}", extension(original)));
@@ -239,7 +305,11 @@ pub fn prepare_dos(
             std::fs::create_dir_all(root)
                 .and_then(|()| {
                     if source == Source::Folder {
-                        copy_folder(original, &copy)
+                        if is_zip {
+                            unpack_zip(original, &copy, MAX_UNZIP_BYTES)
+                        } else {
+                            copy_folder(original, &copy)
+                        }
                     } else {
                         copy_image(original, &copy)
                     }
@@ -247,6 +317,12 @@ pub fn prepare_dos(
                 .map_err(|e| tr!("The game could not be copied: {error}", error = e))?;
             copy
         };
+        let packed_image = is_zip.then(|| only_image_in(&path)).flatten();
+        let packed = packed_image.and_then(|image| {
+            let size = std::fs::metadata(&image).ok()?.len();
+            Some((image.clone(), classify(&image, false, size)?))
+        });
+        let (path, source) = packed.unwrap_or((path, source));
         mounts.push(Mount {
             letter,
             path,
@@ -451,6 +527,7 @@ mod tests {
             Some(Source::HardDisk { cylinders: 40 })
         );
         assert_eq!(c("/g/a.iso", false, 650_000_000), Some(Source::Cd));
+        assert_eq!(c("/g/a.ZIP", false, 10), Some(Source::Folder));
         assert_eq!(c("/g/a.exe", false, 10), None);
     }
 
@@ -549,6 +626,81 @@ mod tests {
             )
             .is_err()
         );
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    fn make_zip(path: &Path, files: &[(&str, &[u8])]) {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        for (name, data) in files {
+            zip.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(data).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    fn drive(path: &Path) -> [DriveMapping; 1] {
+        [DriveMapping {
+            letter: "C".into(),
+            path: path.to_string_lossy().into_owned(),
+        }]
+    }
+
+    #[test]
+    fn a_zip_file_is_a_drive() {
+        let base = scratch("zip");
+        let game = base.join("game.zip");
+        make_zip(&game, &[("GAME/START.EXE", b"exe"), ("README.TXT", b"hi")]);
+        let (drives, root) = (drive(&game), base.join("ours"));
+        let mounts = prepare_dos(&drives, &root, true).unwrap();
+        assert_eq!(mounts[0].source, Source::Folder);
+        assert!(mounts[0].path.starts_with(&root));
+        let exe = mounts[0].path.join("GAME/START.EXE");
+        assert_eq!(std::fs::read(&exe).unwrap(), b"exe");
+        // Saved games stay; the option off unpacks it fresh; the zip gone still plays.
+        std::fs::write(&exe, "saved").unwrap();
+        prepare_dos(&drives, &root, true).unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"saved");
+        prepare_dos(&drives, &root, false).unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"exe");
+        std::fs::remove_file(&game).unwrap();
+        assert_eq!(prepare_dos(&drives, &root, true).unwrap(), mounts);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_zip_with_only_a_disk_image_mounts_the_image() {
+        let base = scratch("zipimg");
+        let game = base.join("game.zip");
+        make_zip(&game, &[("DISK.IMG", &[0u8; 2048])]);
+        let (drives, root) = (drive(&game), base.join("ours"));
+        for _ in 0..2 {
+            let mounts = prepare_dos(&drives, &root, true).unwrap();
+            assert_eq!(mounts[0].source, Source::Floppy);
+            assert!(mounts[0].path.ends_with("DISK.IMG"));
+        }
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn zip_files_cannot_escape_or_fill_the_disk() {
+        let base = scratch("zipbad");
+        let evil = base.join("evil.zip");
+        make_zip(&evil, &[("../../outside.txt", b"x"), ("OK.TXT", b"y")]);
+        let target = base.join("a/b/out");
+        unpack_zip(&evil, &target, 1024).unwrap();
+        assert!(target.join("OK.TXT").is_file());
+        assert!(!base.join("a/outside.txt").exists());
+        assert!(!base.join("a/b/outside.txt").exists());
+        let big = base.join("big.zip");
+        make_zip(&big, &[("BIG.DAT", &[0u8; 4096])]);
+        let refused = base.join("refused");
+        assert!(unpack_zip(&big, &refused, 4095).is_err());
+        assert!(!refused.exists(), "nothing half-done stays");
+        let broken = base.join("broken.zip");
+        std::fs::write(&broken, "not a zip").unwrap();
+        assert!(prepare_dos(&drive(&broken), &base.join("ours"), true).is_err());
         std::fs::remove_dir_all(base).unwrap();
     }
 

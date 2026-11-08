@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# DOS games usually come as zip files; "legacy-zip" for the old PKZIP methods of that era.
+zip = { version = "9", default-features = false, features = ["deflate-flate2", "legacy-zip"] }
 argon2 = "0.6.0"
 chrono = "0.4.45"
 dirs = "7.0.0"

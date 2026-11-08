@@ -2331,7 +2331,7 @@ function EmulatorEditor(props: { emulator: EmulatorSettings; onChange: (e: Emula
                       <option key={l} value={l}>{l}:</option>
                     ))}
                   </select>
-                  <input type="text" style={{ flex: 1, minWidth: 0 }} value={drive.path} placeholder="/home/media/dos/game   or   /home/media/dos/disk.img" onChange={(e) => setDrive(i, { path: e.target.value.trim() })} />
+                  <input type="text" style={{ flex: 1, minWidth: 0 }} value={drive.path} placeholder="/home/media/dos/game   or   /home/media/dos/game.zip" onChange={(e) => setDrive(i, { path: e.target.value.trim() })} />
                   <button className="small" onClick={() => setPicking(picking === i ? null : i)}>Choose…</button>
                   <UploadButton kind="dos" onDone={(path) => setDrive(i, { path })} />
                   <button className="small" aria-label={`Remove drive ${drive.letter}`} onClick={() => setDos({ drives: drives.filter((_, j) => j !== i) })}>Remove</button>
@@ -2351,7 +2351,7 @@ function EmulatorEditor(props: { emulator: EmulatorSettings; onChange: (e: Emula
             ))}
             {drives.length < 8 && <button className="small" onClick={addDrive}>Add drive</button>}
             <small className="hint">
-              A folder on this computer, or a disk image (.img, .ima, .iso, .cue; chosen here or uploaded). Floppy, hard disk or CD is recognized by itself. Drive Z: belongs to DOSBox. At its first start the game is copied into the media center's own folder and runs from there, so your files are never changed.
+              A folder on this computer, a zip file with the game, or a disk image (.img, .ima, .iso, .cue; chosen here or uploaded). Floppy, hard disk or CD is recognized by itself. Drive Z: belongs to DOSBox. At its first start the game is copied into the media center's own folder and runs from there, so your files are never changed.
             </small>
           </div>
           <label className="field">

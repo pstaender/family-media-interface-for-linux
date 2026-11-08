@@ -47,9 +47,9 @@ export interface FolderSettings {
 /** A website tile. Rules: src/sites.rs (pages only on its domain; media from anywhere). */
 /** Z: is DOSBox's own drive. */
 export const DOS_DRIVE_LETTERS = [..."ABCDEFGHIJKLMNOPQRSTUVWXY"];
-export const DOS_IMAGE_EXTENSIONS = ["img", "ima", "iso", "cue"];
+export const DOS_IMAGE_EXTENSIONS = ["img", "ima", "iso", "cue", "zip"];
 /** A .cue file needs its data file next to it, so it can't be uploaded alone. */
-export const DOS_UPLOAD_EXTENSIONS = ["img", "ima", "iso"];
+export const DOS_UPLOAD_EXTENSIONS = ["img", "ima", "iso", "zip"];
 export const MAX_ALLOWED_HOSTS = 32;
 export const HOST_NAME = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/;
 
