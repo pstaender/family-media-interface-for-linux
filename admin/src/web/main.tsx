@@ -560,6 +560,11 @@ function RemoteTab(props: { status: Status | null; reload: () => void; setNotice
           learns the other buttons (OK outside pointer mode, home, play/pause, next, previous): the TV asks for
           one button after the other; a button the remote doesn't have is skipped after 10 seconds.
         </p>
+        <p className="hint">
+          <strong>Switch the remote's mouse / pointer mode off before the setup.</strong> In that mode many
+          remotes send different buttons (clicks instead of OK, other media keys), so the setup would learn the
+          wrong ones.
+        </p>
         {remote && remote.devices.length > 0 ? (
           <p>
             <Icon name="circle-check" /> Read directly: {remote.devices.join(", ")}

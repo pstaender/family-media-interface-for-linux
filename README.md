@@ -179,7 +179,8 @@ previous):
    choose the remote from the list. It lets the logged-in user read **only that device**, so
    the media center gets every button, also those X11 never delivers to any window (many
    remotes send OK as `KEY_SELECT`). Undo: `scripts/remote-access.sh --remove`.
-2. Admin panel → **Home screen & media → Remote → Set up the remote on the TV**. The TV asks
+2. Admin panel → **Home screen & media → Remote → Set up the remote on the TV**. Switch the
+   remote's mouse / pointer mode off first (in that mode it sends other buttons). The TV asks
    for one button after the other; a button your remote doesn't have is skipped after 10 s.
    The result is saved in `~/.local/share/familynovice/remote.json` and shown in the admin
    panel.

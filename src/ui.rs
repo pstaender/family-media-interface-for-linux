@@ -603,6 +603,14 @@ impl App {
         let Some(action) = view.calibration.current() else {
             return;
         };
+        // In mouse mode many remotes send other codes (clicks, desktop media keys).
+        painter.text(
+            Pos2::new(center.x, screen_rect.min.y + 175.0 * s),
+            Align2::CENTER_CENTER,
+            "Switch the remote's mouse / pointer mode off first.",
+            font(28.0),
+            Color32::from_rgb(0xff, 0xb4, 0x5c),
+        );
         painter.text(
             Pos2::new(center.x, center.y - 150.0 * s),
             Align2::CENTER_CENTER,
