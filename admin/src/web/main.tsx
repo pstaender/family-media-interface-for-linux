@@ -750,11 +750,35 @@ function GamesTab({ config, setConfig }: ScreenProps) {
           <input
             type="checkbox"
             checked={dodger.enabled}
-            onChange={(e) => setConfig({ ...config, games: { ...config.games, dodger: { enabled: e.target.checked } } })}
+            onChange={(e) => setConfig({ ...config, games: { ...config.games, dodger: { ...dodger, enabled: e.target.checked } } })}
           />
           <span>
             Star Dodger
-            <small>For 1 player: steer the ball left and right past the balls coming down. It gets faster every 6 balls; one hit ends the game.</small>
+            <small>For 1 player: steer the ball left and right past the balls coming down. It gets faster every 10 balls; one hit ends the game. Keeps a high score list with 3-letter names.</small>
+          </span>
+        </label>
+        <label className="toggle">
+          <input
+            type="checkbox"
+            checked={dodger.sound}
+            disabled={!dodger.enabled}
+            onChange={(e) => setConfig({ ...config, games: { ...config.games, dodger: { ...dodger, sound: e.target.checked } } })}
+          />
+          <span>
+            Sound
+            <small>Can also be switched on the TV in the game's menu.</small>
+          </span>
+        </label>
+        <label className="toggle">
+          <input
+            type="checkbox"
+            checked={dodger.music}
+            disabled={!dodger.enabled}
+            onChange={(e) => setConfig({ ...config, games: { ...config.games, dodger: { ...dodger, music: e.target.checked } } })}
+          />
+          <span>
+            Music
+            <small>Three retro tunes in random order while playing. Can also be switched on the TV in the game's menu.</small>
           </span>
         </label>
       </section>

@@ -1212,14 +1212,22 @@ impl App {
                 _ => 0.0,
             })
             .sum();
+        let (typed, erase, space) = typed_letters(ui.ctx());
+        let naming = matches!(&self.screen, Screen::Dodger(v)
+            if matches!(v.state, crate::dodger::DodgerState::EnterName { .. }));
         let input = crate::dodger::DodgerInput {
             x: self.pads.horizontal() + keys_x + remote,
             up: keys.up || nav.up,
             down: keys.down || nav.down,
-            enter: keys.enter || nav.enter || nav.pause,
+            // While typing a name, Space is a letter.
+            enter: (keys.enter && !(naming && space)) || nav.enter || nav.pause,
             back: keys.back || nav.back,
             pause: nav.pause,
             clicks: !self.just_opened(),
+            left: keys.left || nav.left,
+            right: keys.right || nav.right,
+            typed,
+            erase,
         };
         let Screen::Dodger(view) = &mut self.screen else {
             return;
@@ -2995,8 +3003,11 @@ impl App {
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map_or(1, |d| d.as_nanos() as u64);
                             log::info!("starting Star Dodger");
-                            self.screen =
-                                Screen::Dodger(Box::new(crate::dodger::DodgerView::new(seed)));
+                            self.screen = Screen::Dodger(Box::new(crate::dodger::DodgerView::new(
+                                seed,
+                                config.games.dodger.sound,
+                                config.games.dodger.music,
+                            )));
                         }
                         Some(GameTile::Blocks) => {
                             log::info!("starting Block Stacker");

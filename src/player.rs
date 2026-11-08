@@ -166,6 +166,39 @@ pub fn video_file_command(file: &Path, movie: &MovieOptions) -> Command {
     cmd
 }
 
+/// The games' music: mpv without a window, the tunes in random order, looping. It ends with
+/// the thread that starts it (parent-death signal), so a crashed media center can't leave
+/// music playing.
+pub fn game_music_command(files: &[PathBuf], cache_dir: Option<&Path>) -> Option<Command> {
+    use std::os::unix::process::CommandExt;
+    if files.is_empty() {
+        return None;
+    }
+    let mut cmd = Command::new("mpv");
+    cmd.args([
+        "--no-video",
+        "--force-window=no",
+        "--audio-display=no",
+        "--no-terminal",
+        "--idle=no",
+        "--shuffle",
+        "--loop-playlist=inf",
+    ]);
+    mpv_no_writes(&mut cmd, cache_dir);
+    cmd.arg("--").args(files);
+    cmd.stdin(Stdio::null()).stdout(Stdio::null());
+    // SAFETY: prctl is async-signal-safe and touches only the new process.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Some(cmd)
+}
+
 /// Music from a folder: mpv without any window, controlled by curator over its IPC
 /// socket (curator shows the player screen). Plays `files` from `start` to the end.
 pub fn audio_command(
@@ -760,6 +793,22 @@ mod tests {
             1003,
             None
         ));
+    }
+
+    #[test]
+    fn game_music_mpv() {
+        assert!(game_music_command(&[], None).is_none());
+        let files = [PathBuf::from("/c/music/a.wav")];
+        let a = args(&game_music_command(&files, Some(Path::new("/c"))).unwrap());
+        for arg in [
+            "--no-video",
+            "--force-window=no",
+            "--shuffle",
+            "--loop-playlist=inf",
+        ] {
+            assert!(a.contains(&arg.to_string()), "{arg}");
+        }
+        assert_eq!(&a[a.len() - 2..], ["--", "/c/music/a.wav"]);
     }
 
     #[test]

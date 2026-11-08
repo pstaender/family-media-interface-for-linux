@@ -15,6 +15,7 @@ mod limits;
 mod lock;
 mod makemkv;
 mod mpris;
+mod music;
 mod pictures;
 mod pin;
 mod player;

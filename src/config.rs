@@ -249,6 +249,10 @@ pub struct GameSettings {
 #[serde(deny_unknown_fields, default)]
 pub struct DodgerSettings {
     pub enabled: bool,
+    /// Sound on at the start (can be switched in the game's menu).
+    pub sound: bool,
+    /// Music on at the start (can be switched in the game's menu).
+    pub music: bool,
 }
 
 /// Block Stacker (`src/blocks.rs`).
@@ -1333,6 +1337,8 @@ mod tests {
             r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"games":{"blocks":[]}}]}"#,
             r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"games":{"dodger":[]}}]}"#,
             r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"games":{"dodger":{"enabled":1}}}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"games":{"dodger":{"sound":"on"}}}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"games":{"dodger":{"music":"on"}}}]}"#,
             r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"games":{"dodger":{"speed":1}}}]}"#,
             r#"{"version":2}"#,
             r#"{"version":2,"home_screens":[]}"#,

@@ -112,6 +112,11 @@ pub fn highscores_path() -> Option<PathBuf> {
     Some(dirs::data_dir()?.join(APP).join("highscores.json"))
 }
 
+/// `$XDG_CACHE_HOME/curator/music`: the games' tunes as WAV files (made by `music.rs`).
+pub fn music_dir() -> Option<PathBuf> {
+    Some(dirs::cache_dir()?.join(APP).join("music"))
+}
+
 /// `$XDG_CACHE_HOME/curator/sounds`: the games' sound files (made by `sound.rs`).
 pub fn sounds_dir() -> Option<PathBuf> {
     Some(dirs::cache_dir()?.join(APP).join("sounds"))

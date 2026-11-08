@@ -59,7 +59,7 @@ anything outside its own folders:
 
 - `$XDG_CONFIG_HOME/curator/` (config, admin password hash),
 - `$XDG_DATA_HOME/curator/` (resume positions, later usage data),
-- `$XDG_CACHE_HOME/curator/` (disc info, build files, player screenshots),
+- `$XDG_CACHE_HOME/curator/` (disc info, build files, player screenshots, game sounds and music),
 - `$XDG_RUNTIME_DIR` / temp dir (sockets).
 
 Media (discs, shared folders, everything else) is only ever **read**. Code that touches media
@@ -227,15 +227,23 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   side by side (same pieces; double/triple/four send 1/2/4 rows with a common hole; 30 lines
   or the other topping out wins a round; first to 4 rounds).
 - **High scores (`src/highscores.rs`, `$XDG_DATA_HOME/curator/highscores.json`):** top 10 per
-  game (Brick Breaker, Block Stacker endless), shared by all home screens. Name entry: up /
+  game (Brick Breaker, Block Stacker endless, Star Dodger), shared by all home screens. Name entry: up /
   down letter, left / right position, OK done; keyboards type; starts with the last name.
 - **Star Dodger (`games.dodger`, `src/dodger.rs`):** our own game: 288 × 216 big-pixel
   picture at a whole number of screen pixels per game pixel, objects move in screen pixels
   (smooth), all drawn in code. Striped ball left/right past single balls coming down (each
   in another place and color than the one before; every 3rd aimed at the player); +1 level
-  every 6 balls passed (1–9, fall speed 90 + 18 per level); one hit ends it; `m:ss.t`
-  top right, level digit bottom right; three star layers + moving grid. Not a copy of any
-  original's name or screens.
+  every 10 balls passed (1–99, fall speed 90 + 18 per level up to 9, then + 3 per level); one hit ends it. Beside the
+  field, without labels: balls passed on the left, `m:ss.t` top right, the level big at the bottom right. High score list by
+  balls passed with 3-letter names (`Scores::name_entry_of`); sound off by default
+  (`games.dodger.sound`, switchable in the game's menus); music likewise
+  (`games.dodger.music`, `src/music.rs`: our own tunes in `assets/music/*.mid`, built into
+  the program; a small MIDI reader and chip-style synth make WAV files once in
+  `$XDG_CACHE_HOME/curator/music/`, because Linux has no MIDI player without a synthesizer
+  and sound bank; mpv loops them shuffled, without a window, through pauses, ending with
+  the game; a parent-death signal stops it if the media center crashes); three star layers
+  + moving grid.
+  Not a copy of any original's name or screens.
 - **Gamepads (implemented, `src/gamepad.rs`, read in `remote.rs`):** devices with joystick/
   gamepad buttons (`EVIOCGBIT`, 0x120–0x13f) also report `PadEvent`s: buttons and the
   axes X/Y/HAT0X/HAT0Y normalized with `EVIOCGABS` (SNES-style 0…255 d-pads, Xbox/PS sticks
@@ -535,6 +543,7 @@ src/
   highscores.rs   the games' high score lists and name entry
   stats.rs        usage statistics (what was used when; day files, pruning)
   sound.rs        game sounds (generated WAV files, played with pw-play / paplay / aplay)
+  music.rs        game music: MIDI reader, chip-style synth, looping with mpv
   makemkv.rs      makemkvcon robot-output parser, main title selection
   player.rs       builds the player commands (mpv / VLC with libmmbd)
   resume.rs       resume positions via mpv IPC

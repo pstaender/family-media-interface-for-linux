@@ -19,6 +19,7 @@ const LETTERS: &str = " ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ0123456789";
 pub enum Board {
     Bricks,
     Blocks,
+    Dodger,
 }
 
 impl Board {
@@ -26,6 +27,7 @@ impl Board {
         match self {
             Board::Bricks => "bricks",
             Board::Blocks => "blocks",
+            Board::Dodger => "dodger",
         }
     }
 }
@@ -101,7 +103,12 @@ impl Scores {
     }
 
     pub fn name_entry(&self, score: u32) -> NameEntry {
-        NameEntry::new(&self.last_name, score)
+        self.name_entry_of(score, NAME_LEN)
+    }
+
+    /// A name entry for names of `letters` letters.
+    pub fn name_entry_of(&self, score: u32, letters: usize) -> NameEntry {
+        NameEntry::new(&self.last_name, score, letters)
     }
 }
 
@@ -141,10 +148,9 @@ pub struct NameEntry {
 }
 
 impl NameEntry {
-    fn new(last: &str, score: u32) -> Self {
+    fn new(last: &str, score: u32, len: usize) -> Self {
         let mut letters: Vec<char> = last.chars().filter(|c| LETTERS.contains(*c)).collect();
-        letters.resize(NAME_LEN, ' ');
-        letters.truncate(NAME_LEN);
+        letters.resize(len, ' ');
         Self {
             letters,
             at: 0,
@@ -159,6 +165,7 @@ impl NameEntry {
     /// True when the name is confirmed.
     pub fn update(&mut self, input: &NameInput) -> bool {
         let all: Vec<char> = LETTERS.chars().collect();
+        let last = self.letters.len() - 1;
         let index = all
             .iter()
             .position(|c| *c == self.letters[self.at])
@@ -173,12 +180,12 @@ impl NameEntry {
             self.at = self.at.saturating_sub(1);
         }
         if input.right {
-            self.at = (self.at + 1).min(NAME_LEN - 1);
+            self.at = (self.at + 1).min(last);
         }
         for c in input.typed.iter().flat_map(|c| c.to_uppercase()) {
             if LETTERS.contains(c) {
                 self.letters[self.at] = c;
-                self.at = (self.at + 1).min(NAME_LEN - 1);
+                self.at = (self.at + 1).min(last);
             }
         }
         if input.erase {
@@ -208,7 +215,7 @@ impl NameEntry {
             crate::ui::TEXT_DIM,
         );
         let (w, gap) = (78.0 * s, 14.0 * s);
-        let left = center.x - (NAME_LEN as f32 * (w + gap) - gap) / 2.0;
+        let left = center.x - (self.letters.len() as f32 * (w + gap) - gap) / 2.0;
         for (i, letter) in self.letters.iter().enumerate() {
             let rect = Rect::from_min_size(
                 Pos2::new(left + i as f32 * (w + gap), center.y - 60.0 * s),
@@ -359,7 +366,7 @@ mod tests {
         }); // N → M
         assert_eq!(e.name(), "BMN");
         // Keyboard: typing replaces and moves on, backspace removes.
-        let mut k = NameEntry::new("", 1);
+        let mut k = NameEntry::new("", 1, NAME_LEN);
         k.update(&NameInput {
             typed: vec!['t', 'i', 'm'],
             ..Default::default()
@@ -375,12 +382,35 @@ mod tests {
             ..Default::default()
         }));
         // Letters wrap around.
-        let mut w = NameEntry::new("", 1);
+        let mut w = NameEntry::new("", 1, NAME_LEN);
         w.update(&NameInput {
             down: true,
             ..Default::default()
         });
         assert_eq!(w.name(), "9");
+    }
+
+    #[test]
+    fn short_names() {
+        let mut s = Scores::default();
+        s.insert(Board::Bricks, "MAXIMILI", 5, "2026-11-08");
+        let mut e = s.name_entry_of(7, 3);
+        assert_eq!(e.name(), "MAX", "the last name, cut to fit");
+        e.update(&NameInput {
+            typed: "ABCDE".chars().collect(),
+            ..Default::default()
+        });
+        assert_eq!(e.name(), "ABE", "stays on the last letter");
+        for _ in 0..5 {
+            e.update(&NameInput {
+                right: true,
+                ..Default::default()
+            });
+        }
+        assert_eq!(e.name(), "ABE");
+        s.insert(Board::Dodger, &e.name(), e.score, "2026-11-08");
+        assert_eq!(s.list(Board::Dodger)[0].name, "ABE");
+        assert!(s.list(Board::Bricks).len() == 1, "a list of its own");
     }
 
     #[test]

@@ -77,7 +77,9 @@
           "sound": false
         },
         "dodger": {
-          "enabled": true
+          "enabled": true,
+          "sound": true,
+          "music": true
         }
       },
       "limits": [

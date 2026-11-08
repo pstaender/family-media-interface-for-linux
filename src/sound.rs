@@ -84,6 +84,11 @@ pub fn wav(notes: &[(f32, u32)]) -> Vec<u8> {
             samples.push((square * envelope * 6000.0) as i16);
         }
     }
+    wav_bytes(&samples)
+}
+
+/// A 16-bit mono WAV file (22 050 Hz) from samples.
+pub fn wav_bytes(samples: &[i16]) -> Vec<u8> {
     let data_len = (samples.len() * 2) as u32;
     let mut out = Vec::with_capacity(44 + data_len as usize);
     out.extend_from_slice(b"RIFF");

@@ -110,7 +110,7 @@ export interface GameSettings {
   pong: { enabled: boolean; computer_level: PongLevel; points_to_win: number };
   bricks: { enabled: boolean; lives: number; sound: boolean };
   blocks: { enabled: boolean; start_level: number; sound: boolean };
-  dodger: { enabled: boolean };
+  dodger: { enabled: boolean; sound: boolean; music: boolean };
 }
 
 function validateGames(input: unknown, where: string): GameSettings | string {
@@ -158,11 +158,12 @@ function validateGames(input: unknown, where: string): GameSettings | string {
   if (input.dodger !== undefined) {
     const d = input.dodger;
     if (!isObject(d)) return `${where}.dodger: must be an object`;
-    const extraDodger = unknownKey(d, ["enabled"], `${where}.dodger`);
+    const extraDodger = unknownKey(d, ["enabled", "sound", "music"], `${where}.dodger`);
     if (extraDodger) return extraDodger;
-    if (d.enabled !== undefined) {
-      if (typeof d.enabled !== "boolean") return `${where}.dodger.enabled: must be true or false`;
-      games.dodger.enabled = d.enabled;
+    for (const key of ["enabled", "sound", "music"] as const) {
+      if (d[key] === undefined) continue;
+      if (typeof d[key] !== "boolean") return `${where}.dodger.${key}: must be true or false`;
+      games.dodger[key] = d[key];
     }
   }
   if (input.blocks !== undefined) {
@@ -221,7 +222,7 @@ export function newHomeScreen(id: string, name: string): HomeScreen {
     discs: { enabled: true, allow_disc_menu: true, audio_languages: [], subtitle_languages: [] },
     folders: [],
     websites: [],
-    games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false }, blocks: { enabled: false, start_level: 0, sound: false }, dodger: { enabled: false } },
+    games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false }, blocks: { enabled: false, start_level: 0, sound: false }, dodger: { enabled: false, sound: false, music: false } },
     limits: [],
   };
 }
