@@ -114,7 +114,7 @@ Start both parts (two terminals):
 
 ```sh
 # Admin panel → http://127.0.0.1:8787/ (prints its network addresses too)
-cd admin && bun run start           # or: bun run dev (reloads on code changes)
+cd admin && bun run start           # or: bun run dev (port 8686, reloads on code changes)
 
 # Media center
 ./target/release/familynovice               # fullscreen

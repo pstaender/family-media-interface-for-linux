@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun --hot src/server.ts",
+    "dev": "bun --hot src/server.ts --port 8686",
     "start": "NODE_ENV=production bun src/server.ts",
     "build": "bun build src/server.ts --target=bun --outdir=dist",
     "typecheck": "tsc --noEmit",

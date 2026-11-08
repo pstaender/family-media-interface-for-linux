@@ -473,7 +473,7 @@ Admin web interface (from `admin/`):
 
 ```sh
 bun install          # install dependencies
-bun run dev          # start the server with hot reload → http://127.0.0.1:8787/
+bun run dev          # start the server with hot reload → http://127.0.0.1:8686/ (8787 stays free for the installed service)
 bun run start        # start in production mode
 bun run typecheck    # tsc --noEmit
 bun test             # run tests

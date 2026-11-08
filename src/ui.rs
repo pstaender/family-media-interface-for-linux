@@ -17,7 +17,7 @@ use crate::control::UiRequest;
 use crate::disc::{self, DriveReport, DriveState, MediaKind};
 use crate::library::{self, Entry, EntryKind, Filter};
 use crate::limits::{self, Status};
-use crate::lock::{LockAction, LockInfo, LockView};
+use crate::lock::{LockAction, LockInfo, LockView, Nav};
 use crate::makemkv::{self, DiscInfo, ScanProgress};
 use crate::mpris::{MediaCommand, Mpris, Status as PlayStatus};
 use crate::pictures::{self, Picture};
@@ -1117,7 +1117,14 @@ impl App {
         }
     }
 
-    fn lock_screen(&mut self, ui: &egui::Ui, painter: &egui::Painter, screen_rect: Rect, s: f32) {
+    fn lock_screen(
+        &mut self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        screen_rect: Rect,
+        s: f32,
+        keys: &Keys,
+    ) {
         let (config, _) = self.config();
         let now = chrono::Local::now();
         let doubling = config.parental.pin_backoff_doubling;
@@ -1144,7 +1151,15 @@ impl App {
                 .pin_wait(now.timestamp()),
         };
         let Some(view) = &mut self.lock else { return };
-        match view.show(ui, painter, screen_rect, s, &info) {
+        let nav = Nav {
+            enter: keys.enter,
+            back: keys.back,
+            up: keys.up,
+            down: keys.down,
+            left: keys.left,
+            right: keys.right,
+        };
+        match view.show(ui, painter, screen_rect, s, &info, &nav) {
             LockAction::None => {}
             LockAction::CheckPin(pin) => match config.parental.pin_hash.clone() {
                 Some(hash) => {
@@ -1563,8 +1578,26 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
+        // Buttons only the device reports (e.g. OK = KEY_SELECT), while our window is in
+        // front (not while a player or website is, or the desktop is used in development).
+        if ctx.input(|i| i.focused) {
+            for e in &remote_events {
+                let repeat_ok = e.value == 2;
+                if (e.value == 1 || repeat_ok)
+                    && let Some(action) = self.remote_map.device_action(e.code)
+                    && (!repeat_ok
+                        || matches!(
+                            action,
+                            Action::Up | Action::Down | Action::Left | Action::Right
+                        ))
+                {
+                    keys.apply(action);
+                }
+            }
+        }
+
         if self.lock.is_some() {
-            self.lock_screen(ui, &painter, screen_rect, s);
+            self.lock_screen(ui, &painter, screen_rect, s, &keys);
             return;
         }
         self.home_button(ui, screen_rect, s);
@@ -1585,23 +1618,6 @@ impl eframe::App for App {
                 &desktop_media,
             );
             return;
-        }
-        // Buttons only the device reports (e.g. OK = KEY_SELECT), while our window is in
-        // front (not while a player or website is, or the desktop is used in development).
-        if ctx.input(|i| i.focused) {
-            for e in &remote_events {
-                let repeat_ok = e.value == 2;
-                if (e.value == 1 || repeat_ok)
-                    && let Some(action) = self.remote_map.device_action(e.code)
-                    && (!repeat_ok
-                        || matches!(
-                            action,
-                            Action::Up | Action::Down | Action::Left | Action::Right
-                        ))
-                {
-                    keys.apply(action);
-                }
-            }
         }
 
         match self.screen {

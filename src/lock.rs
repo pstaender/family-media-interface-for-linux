@@ -30,6 +30,19 @@ pub struct LockView {
     pub unlock_menu: Option<usize>,
 }
 
+/// Navigation keys this frame, from the window, calibrated remote buttons and buttons only
+/// the remote's input device reports (e.g. OK = `KEY_SELECT`).
+#[derive(Default, Clone, Copy)]
+pub struct Nav {
+    pub enter: bool,
+    /// Esc, Backspace, browser back, right click, the remote's back button.
+    pub back: bool,
+    pub up: bool,
+    pub down: bool,
+    pub left: bool,
+    pub right: bool,
+}
+
 /// What the lock screen wants the app to do.
 pub enum LockAction {
     None,
@@ -78,6 +91,7 @@ impl LockView {
         screen: Rect,
         s: f32,
         info: &LockInfo,
+        nav: &Nav,
     ) -> LockAction {
         painter.rect_filled(screen, 0.0, Color32::from_rgb(0x0c, 0x0e, 0x14));
         let center = screen.center();
@@ -102,7 +116,7 @@ impl LockView {
         );
 
         if let Some(selected) = self.unlock_menu {
-            return self.unlock_menu(ui, painter, screen, s, selected);
+            return self.unlock_menu(ui, painter, screen, s, selected, nav);
         }
         if !info.has_pin {
             painter.text(
@@ -114,7 +128,7 @@ impl LockView {
             );
             return LockAction::None;
         }
-        self.pin_pad(ui, painter, screen, s, info)
+        self.pin_pad(ui, painter, screen, s, info, nav)
     }
 
     fn unlock_menu(
@@ -124,15 +138,14 @@ impl LockView {
         screen: Rect,
         s: f32,
         mut selected: usize,
+        nav: &Nav,
     ) -> LockAction {
-        let (up, down, enter, back) = ui.ctx().input(|i| {
-            (
-                i.key_pressed(Key::ArrowUp) || i.key_pressed(Key::ArrowLeft),
-                i.key_pressed(Key::ArrowDown) || i.key_pressed(Key::ArrowRight),
-                i.key_pressed(Key::Enter) || i.key_pressed(Key::Space),
-                i.key_pressed(Key::Escape) || i.key_pressed(Key::Backspace),
-            )
-        });
+        let (up, down, enter, back) = (
+            nav.up || nav.left,
+            nav.down || nav.right,
+            nav.enter,
+            nav.back,
+        );
         let count = UNLOCK_CHOICES.len() + 1;
         if up {
             selected = selected.saturating_sub(1);
@@ -169,6 +182,7 @@ impl LockView {
         screen: Rect,
         s: f32,
         info: &LockInfo,
+        nav: &Nav,
     ) -> LockAction {
         let disabled = self.checking || info.wait_secs > 0;
         let center = screen.center();
@@ -208,7 +222,7 @@ impl LockView {
         // Keyboard and remote input.
         let mut press: Option<usize> = None;
         let mut typed: Vec<char> = Vec::new();
-        let (back, clear, enter, dx, dy) = ui.ctx().input(|i| {
+        let clear = ui.ctx().input(|i| {
             for (k, c) in [
                 (Key::Num0, '0'),
                 (Key::Num1, '1'),
@@ -225,15 +239,13 @@ impl LockView {
                     typed.push(c);
                 }
             }
-            (
-                i.key_pressed(Key::Backspace),
-                i.key_pressed(Key::Escape),
-                i.key_pressed(Key::Enter) || i.key_pressed(Key::Space),
-                i32::from(i.key_pressed(Key::ArrowRight))
-                    - i32::from(i.key_pressed(Key::ArrowLeft)),
-                i32::from(i.key_pressed(Key::ArrowDown)) - i32::from(i.key_pressed(Key::ArrowUp)),
-            )
+            i.key_pressed(Key::Escape)
         });
+        // Esc clears everything; the other back keys (Backspace, remote) delete one digit.
+        let back = nav.back && !clear;
+        let enter = nav.enter;
+        let dx = i32::from(nav.right) - i32::from(nav.left);
+        let dy = i32::from(nav.down) - i32::from(nav.up);
         let (col, row) = ((self.focus % 3) as i32, (self.focus / 3) as i32);
         self.focus = (((row + dy).clamp(0, 3)) * 3 + (col + dx).clamp(0, 2)) as usize;
 
