@@ -510,6 +510,8 @@ pub struct App {
     top_focus: Option<TopButton>,
     /// Asking for the PIN to exit the media center.
     exit_view: Option<LockView>,
+    /// The power button being held (log out / shut down).
+    power_hold: crate::power::PowerHold,
     /// Horizontal scroll per row kind, vertical scroll of the rows.
     row_scroll_x: [f32; 4],
     rows_scroll_y: f32,
@@ -611,6 +613,7 @@ impl App {
             focus: (0, 0),
             top_focus: None,
             exit_view: None,
+            power_hold: Default::default(),
             row_scroll_x: [0.0; 4],
             rows_scroll_y: 0.0,
             web_helper: find_web_helper(),
@@ -1565,6 +1568,47 @@ impl App {
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
+    /// Shut the computer down (power button held 8 s, or the menu; with a PIN, after it).
+    fn shut_down(&mut self) {
+        log::info!("shutting the computer down (power button)");
+        self.stop_all_now();
+        if let Err(e) = crate::power::power_off() {
+            log::warn!("shutting down failed: {e}");
+            self.screen = Screen::Message {
+                text: tr!("The computer could not be shut down: {error}", error = e),
+                back: None,
+            };
+        }
+    }
+
+    /// Log out / shut down from the power button: with a PIN set, only after the PIN.
+    fn power_action(&mut self, shutdown: bool, has_pin: bool) {
+        self.top_focus = None;
+        if has_pin {
+            self.screen = Screen::Home;
+            self.exit_view = Some(LockView::for_exit(shutdown));
+        } else if shutdown {
+            self.shut_down();
+        } else {
+            self.exit_now();
+        }
+    }
+
+    /// Is OK held down right now (Enter / Space, a learned key, or the remote's OK that only
+    /// its input device reports)?
+    fn ok_held(&self, ctx: &egui::Context) -> bool {
+        ctx.input(|i| {
+            i.key_down(Key::Enter)
+                || i.key_down(Key::Space)
+                || self.remote_map.window_keys().any(|(name, action)| {
+                    action == Action::Ok && Key::from_name(name).is_some_and(|k| i.key_down(k))
+                })
+        }) || self
+            .remote_down
+            .iter()
+            .any(|c| self.remote_map.device_action(*c) == Some(Action::Ok))
+    }
+
     /// Before restarting / exiting: end the screensaver, players and music (waiting for
     /// them, so none is left behind) and save the usage.
     fn stop_all_now(&mut self) {
@@ -1689,9 +1733,13 @@ impl App {
                     .unlock(now, minutes);
                 self.lock = None;
             }
-            LockAction::Exit => {
+            LockAction::Exit { shutdown } => {
                 self.exit_view = None;
-                self.exit_now();
+                if shutdown {
+                    self.shut_down();
+                } else {
+                    self.exit_now();
+                }
             }
             LockAction::Cancel => self.exit_view = None,
         }
@@ -2428,12 +2476,29 @@ impl App {
             let response = ui.interact(rect, ui.make_persistent_id("exit-button"), Sense::click());
             let focused = home && (self.top_focus == Some(TopButton::Exit) || response.hovered());
             paint_power_button(ui.painter(), rect, focused, s);
-            let pressed = response.clicked()
-                || (home && self.top_focus == Some(TopButton::Exit) && keys.enter);
-            if home && pressed {
-                self.screen = Screen::ConfirmExit { selected: 1 };
-                self.ctx.request_repaint();
-                return;
+            // Short press: ask; held 3 s: log out; held 8 s: shut down.
+            let down = home
+                && ((self.top_focus == Some(TopButton::Exit) && self.ok_held(&ctx))
+                    || response.is_pointer_button_down_on());
+            match self.power_hold.update(down, Instant::now()) {
+                crate::power::Hold::Nothing => {}
+                crate::power::Hold::Holding(held) => {
+                    paint_power_hold(&ctx, ui, rect, screen_rect, s, held);
+                    ctx.request_repaint_after(Duration::from_millis(30));
+                }
+                crate::power::Hold::Ask => {
+                    self.screen = Screen::ConfirmExit { selected: 2 };
+                    self.ctx.request_repaint();
+                    return;
+                }
+                crate::power::Hold::LogOut => {
+                    self.power_action(false, has_pin);
+                    return;
+                }
+                crate::power::Hold::ShutDown => {
+                    self.power_action(true, has_pin);
+                    return;
+                }
             }
         }
         if has_pin {
@@ -2515,12 +2580,16 @@ impl App {
                     selected = selected.saturating_sub(1);
                 }
                 if keys.next() {
-                    selected = (selected + 1).min(1);
+                    selected = (selected + 1).min(2);
                 }
                 let items = [
                     MenuItem::new(
                         tr!("Exit"),
                         tr!("Ends the media center and goes back to the login screen"),
+                    ),
+                    MenuItem::new(
+                        tr!("Shut down the computer"),
+                        tr!("Tip: hold the power button for 8 seconds"),
                     ),
                     MenuItem::new(tr!("Cancel"), ""),
                 ];
@@ -2536,13 +2605,9 @@ impl App {
                 .filter(|_| !self.just_opened());
                 match clicked.or(keys.enter.then_some(selected)) {
                     _ if keys.back => self.screen = Screen::Home,
-                    // With a PIN, only a parent may leave.
-                    Some(0) if has_pin => {
-                        self.screen = Screen::Home;
-                        self.top_focus = None;
-                        self.exit_view = Some(LockView::for_exit());
-                    }
-                    Some(0) => self.exit_now(),
+                    // With a PIN, only a parent may leave or shut down.
+                    Some(0) => self.power_action(false, has_pin),
+                    Some(1) => self.power_action(true, has_pin),
                     Some(_) => self.screen = Screen::Home,
                     None => self.screen = Screen::ConfirmExit { selected },
                 }
@@ -3383,6 +3448,70 @@ fn paint_lock_button(painter: &egui::Painter, rect: Rect, focused: bool, s: f32)
         r * 0.09,
         if focused { ACCENT } else { TILE_BG },
     );
+}
+
+/// Holding the power button: a ring fills around it until "log out" (3 s); then a hint with
+/// a progress bar until "shut down" (8 s).
+fn paint_power_hold(
+    ctx: &egui::Context,
+    ui: &egui::Ui,
+    button: Rect,
+    screen_rect: Rect,
+    s: f32,
+    held: Duration,
+) {
+    use crate::power::{LOG_OUT_AFTER, SHUT_DOWN_AFTER};
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        ui.make_persistent_id("power-hold"),
+    ));
+    let t = held.as_secs_f32();
+    let log_out = LOG_OUT_AFTER.as_secs_f32();
+    let ring = (t / log_out).min(1.0);
+    let r = button.width() / 2.0 + 8.0 * s;
+    let points: Vec<Pos2> = (0..=60)
+        .map(|k| {
+            let a = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * ring * k as f32 / 60.0;
+            button.center() + Vec2::new(a.cos() * r, a.sin() * r)
+        })
+        .collect();
+    painter.add(egui::Shape::line(points, Stroke::new(6.0 * s, ACCENT)));
+    if held < LOG_OUT_AFTER {
+        return;
+    }
+    let progress = ((t - log_out) / (SHUT_DOWN_AFTER.as_secs_f32() - log_out)).clamp(0.0, 1.0);
+    let rect = Rect::from_center_size(
+        Pos2::new(screen_rect.center().x, screen_rect.max.y - 150.0 * s),
+        Vec2::new(900.0 * s, 150.0 * s),
+    );
+    painter.rect_filled(
+        rect,
+        CornerRadius::same((16.0 * s) as u8),
+        Color32::from_black_alpha(225),
+    );
+    painter.text(
+        Pos2::new(rect.center().x, rect.min.y + 36.0 * s),
+        Align2::CENTER_CENTER,
+        tr!("Release now: log out"),
+        FontId::proportional(30.0 * s),
+        TEXT,
+    );
+    painter.text(
+        Pos2::new(rect.center().x, rect.min.y + 76.0 * s),
+        Align2::CENTER_CENTER,
+        tr!("Keep holding: the computer will be shut down"),
+        FontId::proportional(26.0 * s),
+        Color32::from_rgb(0xff, 0xb4, 0x5c),
+    );
+    let bar = Rect::from_min_size(
+        Pos2::new(rect.min.x + 40.0 * s, rect.max.y - 38.0 * s),
+        Vec2::new(rect.width() - 80.0 * s, 14.0 * s),
+    );
+    let radius = CornerRadius::same((7.0 * s) as u8);
+    painter.rect_filled(bar, radius, Color32::from_white_alpha(40));
+    let mut filled = bar;
+    filled.set_width(bar.width() * progress);
+    painter.rect_filled(filled, radius, Color32::from_rgb(0xff, 0x6b, 0x5c));
 }
 
 /// The exit button: the power-off symbol (a ring open at the top, a line through the gap).

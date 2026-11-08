@@ -473,6 +473,7 @@ src/
   volume.rs       system volume for the remote's volume buttons (wpctl / pactl)
   screensaver.rs  screensaver timing, title motion/colors, aerial files
   pong.rs         the Ping Pong game (rules, computer player, menus, drawing)
+  power.rs        power button: press / hold 3 s (log out) / hold 8 s (shut down); logind
   gamepad.rs      gamepad state and menu navigation (events from remote.rs)
   inhibit.rs      keeps the computer from blanking the screen (D-Bus inhibit)
   makemkv.rs      makemkvcon robot-output parser, main title selection
@@ -642,10 +643,16 @@ Before you consider a change done, run the formatter, linter and tests for every
   password even with autologin. Ctrl+Alt+F1–F6 lead to the other text consoles, which ask for a
   password.
 - **Leaving the media center (implemented):** power button left of the padlock (top right;
-  "up" from the top row, left/right between the two) or Ctrl+Q → "Exit the media center?"
-  (Cancel preselected) → with a PIN set, the PIN pad (`LockView::for_exit`, same wrong-PIN
-  waiting; back with nothing entered cancels) → players/music stopped, usage saved, window
-  closed (exit 0: the kiosk session ends). Before: with the PIN, it logs out to the login screen, where parents log
+  "up" from the top row, left/right between the two) or Ctrl+Q. `src/power.rs`
+  (`PowerHold`, tested): released before 3 s → "Exit the media center?" (Exit / Shut down the
+  computer / Cancel, Cancel preselected); released after 3 s → log out; held 8 s → shut
+  down. While held (OK keys, the remote's device-only OK, or the mouse on it): a ring fills
+  around the button, from 3 s a hint ("Release now: log out" / "Keep holding: … shut down")
+  with a progress bar. With a PIN set, log out and shut down ask for it first
+  (`LockView::for_exit(shutdown)`, same wrong-PIN waiting; back with nothing entered
+  cancels). Exit: players/music stopped, usage saved, window closed (exit 0: the kiosk
+  session ends). Shut down: logind `PowerOff(false)` over D-Bus (polkit allows it for the
+  active session; not while other users are logged in, then a message is shown). Before: with the PIN, it logs out to the login screen, where parents log
   into their own account.
 - **Installer / setup script:** autologin works differently per display manager (GDM, SDDM,
   LightDM). Handle that in a setup script that supports all three, not in the app, so the app

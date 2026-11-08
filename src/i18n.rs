@@ -371,6 +371,24 @@ const DE: &[(&str, &str)] = &[
     ("Volume up", "Lauter"),
     ("Programs", "Programme"),
     ("Exit", "Beenden"),
+    ("Shut down the computer", "Computer ausschalten"),
+    (
+        "Tip: hold the power button for 8 seconds",
+        "Tipp: den Ein/Aus-Knopf 8 Sekunden gedrückt halten",
+    ),
+    (
+        "Enter the PIN to shut down. Back: cancel.",
+        "Zum Ausschalten die PIN eingeben. Zurück: abbrechen.",
+    ),
+    ("Release now: log out", "Jetzt loslassen: abmelden"),
+    (
+        "Keep holding: the computer will be shut down",
+        "Weiter gedrückt halten: der Computer wird ausgeschaltet",
+    ),
+    (
+        "The computer could not be shut down: {error}",
+        "Der Computer konnte nicht ausgeschaltet werden: {error}",
+    ),
     ("Exit the media center?", "Mediencenter beenden?"),
     ("Exit the media center", "Mediencenter beenden"),
     (

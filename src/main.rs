@@ -15,6 +15,7 @@ mod pictures;
 mod pin;
 mod player;
 mod pong;
+mod power;
 mod recent;
 mod remote;
 mod resume;

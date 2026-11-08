@@ -32,6 +32,8 @@ pub struct LockView {
     /// PIN exits.
     exit: bool,
     exit_ok: bool,
+    /// Exit mode: shut the computer down instead of only exiting.
+    shutdown: bool,
 }
 
 /// Navigation keys this frame, from the window, calibrated remote buttons and buttons only
@@ -54,8 +56,10 @@ pub enum LockAction {
     CheckPin(String),
     /// Unlock for minutes / rest of today.
     Unlock(Option<u32>),
-    /// Exit mode: the PIN was right.
-    Exit,
+    /// Exit mode: the PIN was right (`shutdown`: shut the computer down).
+    Exit {
+        shutdown: bool,
+    },
     /// Exit mode: cancelled.
     Cancel,
 }
@@ -80,13 +84,15 @@ impl LockView {
             unlock_menu: None,
             exit: false,
             exit_ok: false,
+            shutdown: false,
         }
     }
 
-    /// The PIN pad for exiting the media center.
-    pub fn for_exit() -> Self {
+    /// The PIN pad for exiting the media center, or for shutting the computer down.
+    pub fn for_exit(shutdown: bool) -> Self {
         Self {
             exit: true,
+            shutdown,
             ..Self::new(LockReason::Parent)
         }
     }
@@ -114,17 +120,22 @@ impl LockView {
         nav: &Nav,
     ) -> LockAction {
         if self.exit_ok {
-            return LockAction::Exit;
+            return LockAction::Exit {
+                shutdown: self.shutdown,
+            };
         }
         painter.rect_filled(screen, 0.0, Color32::from_rgb(0x0c, 0x0e, 0x14));
         let center = screen.center();
         let (title, color) = match self.reason {
+            _ if self.exit && self.shutdown => (tr!("Shut down the computer"), crate::ui::TEXT),
             _ if self.exit => (tr!("Exit the media center"), crate::ui::TEXT),
             LockReason::Parent => (tr!("Locked"), crate::ui::TEXT),
             LockReason::BudgetUsed => (tr!("Time is up"), crate::ui::TEXT),
             LockReason::OutsideWindow { .. } => (tr!("Not now"), crate::ui::TEXT),
         };
-        let subtitle = if self.exit {
+        let subtitle = if self.exit && self.shutdown {
+            tr!("Enter the PIN to shut down. Back: cancel.").to_string()
+        } else if self.exit {
             tr!("Enter the PIN to exit. Back: cancel.").to_string()
         } else {
             limits::reason_text_with(&self.reason, crate::i18n::tr)
