@@ -83,7 +83,9 @@ build_makemkv() {
 check() {
     info "Checking installation"
     command -v makemkvcon >/dev/null || die "makemkvcon not found in PATH"
-    ldconfig -p | grep -q 'libmmbd.so.0' || die "libmmbd.so.0 not found by the dynamic linker"
+    # Not `ldconfig -p | grep -q`: grep stops at the first match, ldconfig dies of SIGPIPE
+    # while still writing, and with pipefail that counts as "not found".
+    grep -q 'libmmbd.so.0' <<<"$(ldconfig -p)" || die "libmmbd.so.0 not found by the dynamic linker"
     command -v mpv >/dev/null || die "mpv not found"
     command -v vlc >/dev/null || die "vlc not found"
     echo "makemkvcon: $(command -v makemkvcon)"

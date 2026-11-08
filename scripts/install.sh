@@ -104,7 +104,7 @@ This turns the account '$TARGET_USER' into a media center account:
   * Installs to $PREFIX, $SESSION_FILE and $UNIT_DIR/$SERVICE_NAME.
   * No personal files are changed. Undo with scripts/uninstall.sh.
 EOF
-if id -nG "$TARGET_USER" | tr ' ' '\n' | grep -qxE 'sudo|admin|wheel'; then
+if grep -qxE 'sudo|admin|wheel' <<<"$(id -nG "$TARGET_USER" | tr ' ' '\n')"; then
     cat <<EOF
 
   ! '$TARGET_USER' is an administrator (sudo). For children, use a separate account without
