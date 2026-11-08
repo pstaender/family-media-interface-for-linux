@@ -31,7 +31,8 @@ fn mpv_no_writes(cmd: &mut Command, cache_dir: Option<&Path>) {
 }
 
 /// Extra mpv key bindings (written into our cache dir by `store::prepare_player_cache`):
-/// Esc, Backspace and the back keys of remotes, gamepads and mice close the video. The
+/// Esc, Backspace and the back keys of remotes, gamepads and mice close the video, and so
+/// does a right click (the "return" button of air-mouse remotes). The
 /// position is kept: the resume monitor saves it when mpv closes. mpv's defaults stay active,
 /// except the console (` and :), whose `run` command could start any program (kiosk escape).
 /// The remote's next/previous keys jump between chapters (as via MPRIS, see `mpv_media_key`).
@@ -41,12 +42,37 @@ BS quit
 BACK quit
 GAMEPAD_BACK quit
 MBTN_BACK quit
+MBTN_RIGHT quit
 ` ignore
 : ignore
 NEXT add chapter 1
 PREV add chapter -1
 ";
 pub const MPV_INPUT_CONF_NAME: &str = "mpv-input.conf";
+
+/// Exit code of a player / the website window when the remote's home button was held for
+/// 3 s: the media center then shows the home screen (instead of the folder the video came
+/// from). Same value in `web/src/main.rs`.
+pub const EXIT_GO_HOME: i32 = 4;
+
+/// mpv script (written next to `MPV_INPUT_CONF`): holding the home button (`HOMEPAGE`,
+/// XF86HomePage) for 3 s quits with `EXIT_GO_HOME`. Plain input.conf bindings can't tell a
+/// held key from a press.
+pub const MPV_HOME_SCRIPT: &str = r#"-- familynovice: hold the remote's home button for 3 s to go to the home screen.
+local timer = nil
+mp.add_forced_key_binding("HOMEPAGE", "familynovice-home", function(e)
+    if e.event == "down" then
+        if timer then timer:kill() end
+        mp.osd_message("Keep holding to go to the home screen…", 3)
+        timer = mp.add_timeout(3, function() mp.commandv("quit", "4") end)
+    elseif e.event == "up" then
+        if timer then timer:kill() end
+        timer = nil
+        mp.osd_message("")
+    end
+end, { complex = true })
+"#;
+pub const MPV_HOME_SCRIPT_NAME: &str = "familynovice-home.lua";
 
 /// Forward a media key to the running video (mpv's IPC socket, see `resume`): play/pause,
 /// next/previous chapter. Does nothing if mpv isn't listening (VLC, already closed).
@@ -85,6 +111,10 @@ fn mpv_movie(movie: &MovieOptions) -> Command {
         cmd.arg(format!(
             "--input-conf={}",
             dir.join(MPV_INPUT_CONF_NAME).display()
+        ))
+        .arg(format!(
+            "--script={}",
+            dir.join(MPV_HOME_SCRIPT_NAME).display()
         ));
     }
     if let Some(start) = movie.start_secs {
@@ -274,6 +304,21 @@ mod tests {
         cmd.get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn home_script_quits_with_the_go_home_code() {
+        let quit = format!(r#"mp.commandv("quit", "{EXIT_GO_HOME}")"#);
+        assert!(MPV_HOME_SCRIPT.contains(&quit));
+        assert!(MPV_HOME_SCRIPT.contains(r#""HOMEPAGE""#));
+        let a = args(&video_file_command(
+            Path::new("/m/a.mkv"),
+            &MovieOptions {
+                cache_dir: Some(Path::new("/c")),
+                ..Default::default()
+            },
+        ));
+        assert!(a.contains(&"--script=/c/familynovice-home.lua".to_string()));
     }
 
     #[test]

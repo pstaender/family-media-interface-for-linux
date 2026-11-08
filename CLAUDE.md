@@ -116,6 +116,17 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   session the keys reach the window directly (egui `Key::Media*`). Music: next/previous
   track, pause, stop; pictures: next/previous; videos (mpv, via its IPC socket): chapters,
   pause; Stop closes the player. mpv's own NEXT/PREV bindings also jump chapters.
+- **Air-mouse remotes** (tested: "HAOBO Technology USB Composite Device"): arrows are arrow
+  keys, OK is a left click, **return is a right click**. So a right click means "back":
+  media center (`Keys.back`), mpv (`MBTN_RIGHT quit`), website window (leave page
+  fullscreen → previous page → close on the first page; WebKit's context menu is off).
+- **Home button (implemented):** holding the remote's home button (XF86HomePage; egui
+  `Key::BrowserHome`, mpv `HOMEPAGE`, GDK `HomePage`) for 3 s stops everything and shows the
+  home screen. Media center window: `App::home_button` / `go_home` (hint while held). mpv:
+  `player::MPV_HOME_SCRIPT` (Lua, `--script`, tested via IPC `keydown`) quits with
+  `player::EXIT_GO_HOME` (4); familynovice-web exits with the same code; the "Playing"
+  screen then goes home instead of back to the folder. VLC (disc menus) has no hold
+  detection. Not yet confirmed which key the tested remote sends for home.
 - **Touch/mouse:** folder browser, picture viewer and music player have a "‹ Back" button
   (no keyboard needed); the lock screen's number pad is clickable.
 - **10-foot UI:** usable from the couch with a remote, gamepad or keyboard (mouse optional).

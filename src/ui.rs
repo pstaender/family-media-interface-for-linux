@@ -24,6 +24,8 @@ use crate::player::{self, MovieOptions, PlayMode};
 use crate::usage::SharedTracker;
 use crate::{cover, resume, sites, store};
 
+/// How long the remote's home button must be held to go to the home screen.
+const HOME_HOLD: Duration = Duration::from_secs(3);
 const BG: Color32 = Color32::from_rgb(0x12, 0x14, 0x1c);
 const TILE_BG: Color32 = Color32::from_rgb(0x22, 0x26, 0x34);
 pub const TEXT: Color32 = Color32::from_rgb(0xf2, 0xf4, 0xf8);
@@ -262,9 +264,11 @@ impl Keys {
     fn read(ctx: &egui::Context) -> Self {
         ctx.input(|i| Keys {
             enter: i.key_pressed(Key::Enter) || i.key_pressed(Key::Space),
+            // Right click: the "return" button of air-mouse remotes.
             back: i.key_pressed(Key::Escape)
                 || i.key_pressed(Key::Backspace)
-                || i.key_pressed(Key::BrowserBack),
+                || i.key_pressed(Key::BrowserBack)
+                || i.pointer.secondary_clicked(),
             up: i.key_pressed(Key::ArrowUp),
             down: i.key_pressed(Key::ArrowDown),
             left: i.key_pressed(Key::ArrowLeft),
@@ -362,6 +366,10 @@ pub struct App {
     /// Whether each folder (by id) can be read; refreshed every few seconds.
     folder_ok: HashMap<String, bool>,
     folder_checked: Option<Instant>,
+    /// Since when the remote's home button is held; `home_done` once it went home (until
+    /// the button is released).
+    home_since: Option<Instant>,
+    home_done: bool,
     /// Website logos by website id: file time of the loaded logo and its texture.
     logos: HashMap<String, (std::time::SystemTime, Option<egui::TextureHandle>)>,
     logo_tx: Sender<(String, std::time::SystemTime, Result<Picture, String>)>,
@@ -417,6 +425,8 @@ impl App {
             web_helper: find_web_helper(),
             folder_ok: HashMap::new(),
             folder_checked: None,
+            home_since: None,
+            home_done: false,
             logos: HashMap::new(),
             logo_tx,
             logo_rx,
@@ -440,6 +450,78 @@ impl App {
     }
 
     /// Pull updates from background threads.
+    /// Holding the remote's home button (XF86HomePage) for 3 s stops what is playing and
+    /// shows the home screen. While a player or website is in front, they handle it
+    /// themselves (`player::MPV_HOME_SCRIPT`, `familynovice-web`).
+    fn home_button(&mut self, ui: &egui::Ui, screen_rect: Rect, s: f32) {
+        let ctx = ui.ctx();
+        if !ctx.input(|i| i.key_down(Key::BrowserHome)) {
+            self.home_since = None;
+            self.home_done = false;
+            return;
+        }
+        if self.home_done {
+            return;
+        }
+        let since = *self.home_since.get_or_insert_with(Instant::now);
+        if since.elapsed() >= HOME_HOLD {
+            self.home_done = true;
+            self.go_home();
+            return;
+        }
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            ui.make_persistent_id("home-hint"),
+        ));
+        let rect = Rect::from_center_size(
+            Pos2::new(screen_rect.center().x, screen_rect.max.y - 120.0 * s),
+            Vec2::new(620.0 * s, 64.0 * s),
+        );
+        painter.rect_filled(
+            rect,
+            CornerRadius::same((14.0 * s) as u8),
+            Color32::from_black_alpha(210),
+        );
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            "Keep holding to go to the home screen…",
+            FontId::proportional(26.0 * s),
+            TEXT,
+        );
+        ctx.request_repaint_after(Duration::from_millis(100));
+    }
+
+    /// Stop whatever runs (music, player, website) and show the home screen.
+    fn go_home(&mut self) {
+        self.screen = match std::mem::replace(&mut self.screen, Screen::Home) {
+            Screen::Music(mut view) => {
+                view.player.stop();
+                Screen::Home
+            }
+            // Stop the player like Esc does; once it's gone, the home screen follows.
+            Screen::Playing {
+                child,
+                started,
+                kind,
+                stopping,
+                ..
+            } => {
+                if stopping.is_none() {
+                    stop_player(child.id());
+                }
+                Screen::Playing {
+                    child,
+                    started,
+                    back: None,
+                    kind,
+                    stopping: Some(stopping.unwrap_or_else(Instant::now)),
+                }
+            }
+            _ => Screen::Home,
+        };
+    }
+
     /// Load website logos that are new or changed (the admin interface writes them), drop
     /// those that are gone or turned off. Read-only; decoding happens in a thread.
     fn check_logos(&mut self, config: &Config) {
@@ -617,6 +699,10 @@ impl App {
         } = &mut self.screen
         {
             match child.try_wait() {
+                // The home button was held in the player / website window.
+                Ok(Some(status)) if status.code() == Some(player::EXIT_GO_HOME) => {
+                    next = Some(Screen::Home)
+                }
                 Ok(None) => {
                     if stopping.is_some_and(|t| t.elapsed() > Duration::from_secs(2)) {
                         log::warn!("player did not quit, killing it");
@@ -1159,6 +1245,7 @@ impl eframe::App for App {
             self.lock_screen(ui, &painter, screen_rect, s);
             return;
         }
+        self.home_button(ui, screen_rect, s);
 
         match self.screen {
             Screen::Browse(_) => self.browse_screen(ui, &painter, screen_rect, s, &keys),

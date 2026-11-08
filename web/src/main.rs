@@ -113,9 +113,16 @@ fn parse_args() -> Result<Args, String> {
     })
 }
 
+#[derive(Debug, Clone, Copy)]
 enum UserEvent {
     Close,
+    /// The remote's home button was held: exit with `EXIT_GO_HOME`.
+    GoHome,
 }
+
+/// Exit code telling the media center to show its home screen (same as
+/// `player::EXIT_GO_HOME` in the media center).
+const EXIT_GO_HOME: i32 = 4;
 
 /// The dialog shown when a page outside the website is opened.
 #[derive(Clone)]
@@ -335,18 +342,44 @@ fn run(args: Args) -> Result<(), String> {
         });
     }
     // Page fullscreen (e.g. a video player): hide our buttons, show them again afterwards.
+    let page_fullscreen: Rc<Cell<bool>> = Rc::default();
     {
-        let (back_c, close_c) = (back.clone(), close.clone());
+        let (back_c, close_c, fs) = (back.clone(), close.clone(), page_fullscreen.clone());
         view.connect_enter_fullscreen(move |_| {
+            fs.set(true);
             back_c.hide();
             close_c.hide();
             false // allow fullscreen
         });
-        let (back_c, close_c) = (back.clone(), close.clone());
+        let (back_c, close_c, fs) = (back.clone(), close.clone(), page_fullscreen.clone());
         view.connect_leave_fullscreen(move |_| {
+            fs.set(false);
             back_c.show();
             close_c.show();
             false
+        });
+    }
+    // Right click = the "return" button of air-mouse remotes: leave the page's fullscreen,
+    // else one page back, else close the website (like a TV's back button). No context menu.
+    view.connect_context_menu(|_, _, _, _| true);
+    {
+        let (p, fs) = (proxy.clone(), page_fullscreen.clone());
+        view.connect_button_press_event(move |view, ev| {
+            if ev.button() != 3 || ev.event_type() != gdk::EventType::ButtonPress {
+                return glib::Propagation::Proceed;
+            }
+            if fs.get() {
+                view.run_javascript(
+                    "document.exitFullscreen && document.exitFullscreen()",
+                    None::<&gtk::gio::Cancellable>,
+                    |_| {},
+                );
+            } else if view.can_go_back() {
+                view.go_back();
+            } else {
+                let _ = p.send_event(UserEvent::Close);
+            }
+            glib::Propagation::Stop
         });
     }
 
@@ -389,27 +422,37 @@ fn run(args: Args) -> Result<(), String> {
         });
     }
 
-    // Holding Esc (or the remote's back key) for 3 s closes the window. Short presses still
-    // reach the page (e.g. to leave a video's fullscreen mode).
-    let esc_since: Rc<Cell<Option<Instant>>> = Rc::default();
-    let is_close_key = |key: gdk::keys::Key| {
-        key == gdk::keys::constants::Escape || key == gdk::keys::constants::Back
+    // Holding Esc (or the remote's back key) for 3 s closes the window; holding the home
+    // button (XF86HomePage) for 3 s closes it and the media center shows its home screen.
+    // Short presses still reach the page (e.g. Esc leaves a video's fullscreen mode).
+    let held: Rc<Cell<Option<(Instant, UserEvent)>>> = Rc::default();
+    let hold_action = |key: gdk::keys::Key| {
+        if key == gdk::keys::constants::Escape || key == gdk::keys::constants::Back {
+            Some((UserEvent::Close, "Keep holding Esc to close…"))
+        } else if key == gdk::keys::constants::HomePage {
+            Some((UserEvent::GoHome, "Keep holding to go to the home screen…"))
+        } else {
+            None
+        }
     };
     {
-        let (esc_since, hint) = (esc_since.clone(), hint.clone());
+        let (held, hint) = (held.clone(), hint.clone());
         window.gtk_window().connect_key_press_event(move |_, ev| {
-            if is_close_key(ev.keyval()) && esc_since.get().is_none() {
-                esc_since.set(Some(Instant::now()));
+            if let Some((action, text)) = hold_action(ev.keyval())
+                && held.get().is_none()
+            {
+                held.set(Some((Instant::now(), action)));
+                hint.set_text(text);
                 hint.show();
             }
             glib::Propagation::Proceed
         });
     }
     {
-        let (esc_since, hint) = (esc_since.clone(), hint.clone());
+        let (held, hint) = (held.clone(), hint.clone());
         window.gtk_window().connect_key_release_event(move |_, ev| {
-            if is_close_key(ev.keyval()) {
-                esc_since.set(None);
+            if hold_action(ev.keyval()).is_some() {
+                held.set(None);
                 hint.hide();
             }
             glib::Propagation::Proceed
@@ -418,8 +461,11 @@ fn run(args: Args) -> Result<(), String> {
     {
         let p = proxy.clone();
         glib::timeout_add_local(Duration::from_millis(100), move || {
-            if esc_since.get().is_some_and(|t| t.elapsed() >= ESC_HOLD) {
-                let _ = p.send_event(UserEvent::Close);
+            if let Some((since, action)) = held.get()
+                && since.elapsed() >= ESC_HOLD
+            {
+                held.set(None);
+                let _ = p.send_event(action);
             }
             glib::ControlFlow::Continue
         });
@@ -435,6 +481,9 @@ fn run(args: Args) -> Result<(), String> {
                 event: WindowEvent::CloseRequested,
                 ..
             } => *control_flow = ControlFlow::Exit,
+            Event::UserEvent(UserEvent::GoHome) => {
+                *control_flow = ControlFlow::ExitWithCode(EXIT_GO_HOME)
+            }
             _ => {}
         }
     })

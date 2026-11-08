@@ -46,11 +46,22 @@ pub fn prepare_player_cache() -> Option<PathBuf> {
     if let Err(e) = std::fs::create_dir_all(dir.join("screenshots")) {
         log::warn!("could not create {}: {e}", dir.display());
     }
-    let conf = dir.join(crate::player::MPV_INPUT_CONF_NAME);
-    if std::fs::read_to_string(&conf).ok().as_deref() != Some(crate::player::MPV_INPUT_CONF)
-        && let Err(e) = std::fs::write(&conf, crate::player::MPV_INPUT_CONF)
-    {
-        log::warn!("could not write {}: {e}", conf.display());
+    for (name, content) in [
+        (
+            crate::player::MPV_INPUT_CONF_NAME,
+            crate::player::MPV_INPUT_CONF,
+        ),
+        (
+            crate::player::MPV_HOME_SCRIPT_NAME,
+            crate::player::MPV_HOME_SCRIPT,
+        ),
+    ] {
+        let path = dir.join(name);
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(content)
+            && let Err(e) = std::fs::write(&path, content)
+        {
+            log::warn!("could not write {}: {e}", path.display());
+        }
     }
     Some(dir)
 }

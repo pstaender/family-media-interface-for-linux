@@ -176,8 +176,10 @@ to itself (`target/release/` or `target/debug/`), otherwise in `PATH`.
 | Arrow keys | move between tiles / entries |
 | Enter, Space | open / select |
 | Esc, Backspace, remote "back" | go back; closes a video |
+| Right click (the "return" button of air-mouse remotes) | like Esc; on websites: leave fullscreen, previous page, or close on the first page |
 | Media keys (remote, keyboard) | music: next / previous / play-pause / stop; pictures: next / previous; video: chapters, play-pause, stop |
 | Hold Esc for 3 s | close a website |
+| Hold the remote's home button for 3 s | stop what is playing (music, video, website) and show the home screen |
 | Ctrl+Q | quit the media center (development; will be PIN-protected) |
 
 Everything also works with the mouse: tiles, menus, the "‹ Back" buttons and the PIN pad are
