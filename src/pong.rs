@@ -498,6 +498,20 @@ pub(crate) fn paint_hint(painter: &egui::Painter, screen: Rect, s: f32, text: &s
     );
 }
 
+/// A popup over a game: the game strongly darkened behind it, and a solid, framed panel, so
+/// what is written on the panel stands out. Paint the panel's content afterwards.
+pub(crate) fn popup(painter: &egui::Painter, screen: Rect, s: f32, panel: Rect) {
+    painter.rect_filled(screen, 0.0, Color32::from_black_alpha(215));
+    let radius = CornerRadius::same((24.0 * s) as u8);
+    painter.rect_filled(panel, radius, Color32::from_rgb(0x1a, 0x1f, 0x2e));
+    painter.rect_stroke(
+        panel,
+        radius,
+        egui::Stroke::new(4.0 * s, crate::ui::ACCENT),
+        egui::StrokeKind::Outside,
+    );
+}
+
 pub(crate) fn dim(painter: &egui::Painter, screen: Rect) {
     painter.rect_filled(screen, 0.0, Color32::from_black_alpha(170));
 }

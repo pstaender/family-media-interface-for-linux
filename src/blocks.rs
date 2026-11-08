@@ -724,7 +724,16 @@ impl BlocksView {
             }
             BlocksState::Over { game, selected } => {
                 paint_game(painter, screen, s, &game, self.scores.best(Board::Blocks));
-                crate::pong::dim(painter, screen);
+                // Around the title and the two buttons of `menu`.
+                crate::pong::popup(
+                    painter,
+                    screen,
+                    s,
+                    Rect::from_center_size(
+                        screen.center() + Vec2::new(0.0, -100.0 * s),
+                        Vec2::new(1000.0 * s, 430.0 * s),
+                    ),
+                );
                 let title = match (game.mode, game.match_winner) {
                     (Mode::Versus, Some(0)) => tr!("Player 1 wins!").to_string(),
                     (Mode::Versus, _) => tr!("Player 2 wins!").to_string(),
@@ -894,12 +903,29 @@ fn paint_game(painter: &egui::Painter, screen: Rect, s: f32, game: &Game, best: 
             Some(_) => tr!("Player 2 wins the round").to_string(),
             None => tr!("Nobody wins this round").to_string(),
         };
+        let center = screen.center();
+        crate::pong::popup(
+            painter,
+            screen,
+            s,
+            Rect::from_center_size(center, Vec2::new(1000.0 * s, 260.0 * s)),
+        );
         text(
-            screen.center(),
+            center + Vec2::new(0.0, -40.0 * s),
             Align2::CENTER_CENTER,
             t,
-            48.0,
+            60.0,
             crate::ui::TEXT,
+        );
+        let standing = [0, 1]
+            .map(|i| tr!("Player {n}: {wins} of 4", n = i + 1, wins = game.wins[i]))
+            .join("   ·   ");
+        text(
+            center + Vec2::new(0.0, 50.0 * s),
+            Align2::CENTER_CENTER,
+            standing,
+            32.0,
+            crate::ui::TEXT_DIM,
         );
     }
 }
