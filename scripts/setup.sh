@@ -6,7 +6,8 @@
 # repository. The legality of circumventing copy protection differs between countries;
 # by running this script you decide that for your installation.
 #
-# Usage:  scripts/setup.sh
+# Usage:  scripts/setup.sh [--no-makemkv]
+#         --no-makemkv: only install the system packages (no Blu-ray support)
 # Env:    MAKEMKV_VERSION (default 2.0.0), PREFIX (default /usr/local),
 #         BUILD_DIR (default ~/.cache/familynovice/build)
 
@@ -105,8 +106,18 @@ EOF
     fi
 }
 
+WITH_MAKEMKV=1
+for arg in "$@"; do
+    case "$arg" in
+        --no-makemkv) WITH_MAKEMKV=0 ;;
+        *) die "unknown option: $arg (see the comment at the top of $0)" ;;
+    esac
+done
+
 install_packages
-build_makemkv
-check
-key_hint
+if [[ $WITH_MAKEMKV == 1 ]]; then
+    build_makemkv
+    check
+    key_hint
+fi
 info "Done"

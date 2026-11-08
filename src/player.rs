@@ -32,13 +32,16 @@ fn mpv_no_writes(cmd: &mut Command, cache_dir: Option<&Path>) {
 
 /// Extra mpv key bindings (written into our cache dir by `store::prepare_player_cache`):
 /// Esc, Backspace and the back keys of remotes, gamepads and mice close the video. The
-/// position is kept: the resume monitor saves it when mpv closes. mpv's defaults stay active.
+/// position is kept: the resume monitor saves it when mpv closes. mpv's defaults stay active,
+/// except the console (` and :), whose `run` command could start any program (kiosk escape).
 pub const MPV_INPUT_CONF: &str = "\
 ESC quit
 BS quit
 BACK quit
 GAMEPAD_BACK quit
 MBTN_BACK quit
+` ignore
+: ignore
 ";
 pub const MPV_INPUT_CONF_NAME: &str = "mpv-input.conf";
 
@@ -246,6 +249,14 @@ mod tests {
         cmd.get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn mpv_console_is_disabled() {
+        // The console's `run` command could start any program (kiosk escape).
+        for key in ["`", ":"] {
+            assert!(MPV_INPUT_CONF.lines().any(|l| l == format!("{key} ignore")));
+        }
     }
 
     #[test]

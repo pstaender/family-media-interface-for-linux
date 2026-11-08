@@ -328,7 +328,9 @@ src/
   resume.rs       resume positions via mpv IPC
   store.rs        JSON files in XDG dirs (disc cache, resume), atomic writes
 scripts/
-  setup.sh        installs players, builds MakeMKV from source
+  setup.sh        installs players, builds MakeMKV from source (--no-makemkv: packages only)
+  install.sh      kiosk install for the current account (cage session, admin service)
+  uninstall.sh    undoes install.sh (--purge: also settings and data)
   config.rs       config.json: types, validation, load/reload (fail closed)
   control.rs      control socket for the admin interface (reload/status)
 web/              familynovice-web: locked-down fullscreen browser window (WebKitGTK via wry),
@@ -480,6 +482,21 @@ Before you consider a change done, run the formatter, linter and tests for every
 - **Installer / setup script:** autologin works differently per display manager (GDM, SDDM,
   LightDM). Handle that in a setup script that supports all three, not in the app, so the app
   itself stays desktop-agnostic.
+- **Implemented (example, `scripts/install.sh` / `scripts/uninstall.sh`, apt + systemd):** for
+  the current account or `--user NAME` (run from an admin account; per-user steps via
+  `sudo -u` / `systemctl --user --machine=NAME@`). It builds and installs to `/opt/familynovice` (root-owned, own copy of
+  `bun`), and adds `/usr/share/wayland-sessions/familynovice.desktop`, which runs
+  `bin/familynovice-session`: `cage -s` (VT switching stays) plus the system keyboard layout
+  from `/etc/default/keyboard`, logging via `systemd-cat -t familynovice`. Inside cage,
+  `bin/familynovice-kiosk` restarts the media center after crashes (exit 0 = Ctrl+Q ends the
+  session; 5 quick crashes end it too). The default session is set via AccountsService
+  (`SetSession`/`SetXSession`/`SetSessionType`, read by GDM and LightDM). The admin panel is a
+  systemd user service (`familynovice-admin.service`) with lingering. `install-state`
+  (KEY=VALUE, read as data, never sourced) keeps the previous session and linger state for
+  the uninstaller. No autologin changes (system settings do that).
+- **Kiosk escapes closed so far:** mpv's console (`` ` `` / `:`, its `run` command starts
+  programs) is unbound in `MPV_INPUT_CONF`. Open: VLC's Qt menus and WebKit file-upload
+  dialogs (file browsing, nothing can be started); no volume control in the session.
 
 ## Decisions made
 

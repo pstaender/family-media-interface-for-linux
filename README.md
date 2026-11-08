@@ -13,8 +13,49 @@ It has two parts:
 familynovice only **reads** media. It never changes, moves or deletes files outside its own
 folders (see [Where files are stored](#where-files-are-stored)).
 
-> Status: early stage, tested on Linux Mint 22 (Cinnamon). Running it as a locked-down kiosk
-> account is planned but not automated yet.
+> Status: early stage, tested on Linux Mint 22 (Cinnamon). The kiosk installer
+> (`scripts/install.sh`) is an example for Ubuntu/Mint.
+
+## Install as a media center account (kiosk)
+
+`scripts/install.sh` turns a user account into a media center account. Run it from your
+own (admin) account; without `--user` it converts the current account:
+
+```sh
+sudo adduser tv                 # recommended: a separate account without admin rights
+scripts/install.sh --user tv    # options: --no-makemkv, --skip-packages, --yes
+```
+
+It installs everything (packages, MakeMKV, Rust, Bun; builds familynovice into
+`/opt/familynovice`). It also adds a login session **"familynovice"** and makes it the
+account's default session. That session runs the media center in the kiosk compositor
+[cage](https://github.com/cage-kiosk/cage), with no desktop, panels, app menu, Alt+Tab or
+notifications. Players and the website window open on top, and the media center comes back
+when they close. If it crashes, it restarts.
+
+- **Next login** of the account: only the media center. **Ctrl+Q** ends the session (back to
+  the login screen). Automatic login can be turned on in the system settings (Users / Login
+  Window).
+- **Admin panel:** runs as a user service of that account, also without a login, at
+  http://127.0.0.1:8787/. Open it from any account on the same computer.
+- **Normal desktop again:** choose it in the session menu of the login screen (only for this
+  login), or uninstall:
+
+```sh
+scripts/uninstall.sh           # restores the previous session, removes /opt/familynovice
+scripts/uninstall.sh --purge   # also deletes familynovice's settings, usage and cache
+```
+
+Run the uninstaller from an account with sudo rights (for `--user tv`: your own account). System packages and
+MakeMKV stay installed.
+
+Limits of the example: made for GDM and LightDM (they read the default session from
+AccountsService). With SDDM, pick the session once at the login screen. Inside the session
+there is no system volume control yet: use the volume of the TV or the players' keys. Website
+file-upload fields and VLC's menus still open file dialogs; you can browse files there, but
+nothing can be started.
+
+The steps below are for development (running from the repository).
 
 ## Setup
 
@@ -157,6 +198,8 @@ Blocked pages are logged as `familynovice-web: blocked …`.
 | "The player stopped right away" for a Blu-ray | MakeMKV missing or no key: run `scripts/setup.sh`, check `~/.MakeMKV/settings.conf`. Test with `makemkvcon -r info disc:0`. |
 | Website tiles say "Not installed" | Build the website window: `cargo build -p familynovice-web` (same profile as the media center). |
 | Video window invisible or slow over remote desktop | No graphics acceleration there; mpv falls back to SDL. Works normally on the machine itself. |
+| Kiosk session goes back to the login screen | The media center crashed 5 times in a row: `journalctl -t familynovice -b`. |
+| Admin panel not reachable after install | `systemctl --user status familynovice-admin` (as the media center account). Port 8787 already used by a development server? |
 | Media center shows "Discs are turned off" / "Settings could not be loaded" | `config.json` is invalid; the admin panel shows the error. The media center then fails closed (locked-down settings). |
 | Locked and no PIN set | Unlock in the admin panel: Parental control → Status. |
 | Admin panel: "Too many wrong passwords" | Wait 60 s. To reset the password: stop the admin panel, delete `admin.json` (see below), open the panel again. |
@@ -170,6 +213,9 @@ Blocked pages are logged as `familynovice-web: blocked …`.
 | `~/.local/share/familynovice/` | resume positions, usage time (`usage.json`) |
 | `~/.cache/familynovice/` | disc info, website cookies, player screenshots, MakeMKV build |
 | `/run/user/<uid>/familynovice*.sock` | control sockets |
+| `/opt/familynovice/` | installed programs (`scripts/install.sh`), `install-state` for the uninstaller |
+| `/usr/share/wayland-sessions/familynovice.desktop` | the kiosk login session |
+| `~/.config/systemd/user/familynovice-admin.service` | admin panel service |
 
 (The standard XDG variables `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` are respected.)
 
