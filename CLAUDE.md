@@ -133,7 +133,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   10 s without a press skips. Saved to `$XDG_DATA_HOME/familynovice/remote.json`. **No double
   actions:** a button whose press also reached the window stays the window's (its key names
   are added as extra bindings); device codes act only for buttons the window doesn't get,
-  and only while our window has focus. Without calibration: KEY_OK/KEY_SELECT = OK, KEY_NEXT/KEY_PREVIOUS (407/412, sent outside pointer mode) = next/previous,
+  and only while our window has focus. Without calibration: KEY_OK/KEY_SELECT = OK, KEY_NEXT/KEY_PREVIOUS (407/412) = next/previous. Calibrated HAOBO remote (non-pointer mode): OK 353, back 158, home 172, play/pause 164, next 163, previous 165; Cinnamon swallowed 163-165 (neither window nor MPRIS got them), so they are read from the device.
   KEY_HOMEPAGE = home. Holding home works through the device also while a player/website
   (including VLC) is in front. `status` reports the readable devices and learned buttons.
 - **Home button (implemented):** holding the remote's home button (XF86HomePage; egui

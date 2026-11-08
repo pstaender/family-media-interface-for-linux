@@ -28,8 +28,8 @@ pub const KEY_HOMEPAGE: u16 = 172;
 /// `KEY_OK` / `KEY_SELECT`: OK of remotes outside pointer mode; invisible to X11 windows.
 pub const KEY_OK: u16 = 352;
 pub const KEY_SELECT: u16 = 353;
-/// `KEY_NEXT` / `KEY_PREVIOUS`: next/previous of remotes outside pointer mode (the HAOBO
-/// remote); invisible to X11 windows and so to the desktop's media keys.
+/// `KEY_NEXT` / `KEY_PREVIOUS`: next/previous of some remotes; invisible to X11 windows and
+/// so to the desktop's media keys.
 pub const KEY_NEXT: u16 = 407;
 pub const KEY_PREVIOUS: u16 = 412;
 
