@@ -11,11 +11,17 @@
 #         scripts/remote-access.sh 4842:0001       by USB id (vendor:product), several allowed
 #         scripts/remote-access.sh --remove        remove the rule again
 #
+# A second rule takes these devices away from systemd-logind, which would otherwise shut the
+# computer down as soon as the remote's power key is pressed (udev tags every device with
+# keys as a "power-switch"). The media center then decides (admin panel: Power off). The
+# computer's own power button stays with logind. It must sort after 70-power-switch.rules.
+#
 # Then calibrate it: admin panel → Home screen & media → Remote.
 
 set -euo pipefail
 
 RULE=/etc/udev/rules.d/70-curator-remote.rules
+POWER_RULE=/etc/udev/rules.d/71-curator-remote-power.rules
 
 info() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -28,7 +34,7 @@ reload() {
 
 if [[ ${1:-} == --remove ]]; then
     if [[ -f $RULE ]]; then
-        sudo rm -f "$RULE"
+        sudo rm -f "$RULE" "$POWER_RULE"
         reload
         echo "Removed $RULE."
     else
@@ -82,6 +88,12 @@ info "Writing $RULE"
 } | awk '!seen[$0]++' | sudo tee "$RULE.new" >/dev/null
 sudo mv "$RULE.new" "$RULE"
 sudo chmod 644 "$RULE"
+{
+    echo "# curator: logind ignores the power keys of these remotes (scripts/remote-access.sh)."
+    sudo grep '^SUBSYSTEM' "$RULE" | sed 's/TAG+="uaccess"/TAG-="power-switch"/'
+} | sudo tee "$POWER_RULE.new" >/dev/null
+sudo mv "$POWER_RULE.new" "$POWER_RULE"
+sudo chmod 644 "$POWER_RULE"
 reload
 
 info "Readable now"

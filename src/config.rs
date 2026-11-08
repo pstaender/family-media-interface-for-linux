@@ -24,6 +24,14 @@ const MAX_FOLDERS: usize = 50;
 const MAX_NAME_CHARS: usize = 60;
 const MAX_PATH_BYTES: usize = 4096;
 const MAX_WEBSITES: usize = 50;
+const MAX_PROGRAMS: usize = 50;
+const MAX_EMULATORS: usize = 50;
+const MAX_DRIVES: usize = 8;
+const MAX_AUTOSTART_CHARS: usize = 260;
+const MAX_STARTUP_SCRIPT_CHARS: usize = 4000;
+const MAX_PROGRAM_ARGS: usize = 64;
+const MAX_COMMAND_CHARS: usize = 1024;
+const MAX_ARG_CHARS: usize = 4096;
 const MAX_URL_BYTES: usize = 2048;
 
 /// The whole config (version 2).
@@ -41,6 +49,9 @@ pub struct Config {
     pub screensaver: ScreensaverSettings,
     #[serde(default)]
     pub statistics: StatisticsSettings,
+    /// For all home screens.
+    #[serde(default)]
+    pub power: PowerSettings,
 }
 
 /// One home screen: its own items and time limits (like a profile).
@@ -61,6 +72,10 @@ pub struct HomeScreen {
     #[serde(default)]
     pub websites: Vec<WebsiteSettings>,
     #[serde(default)]
+    pub programs: Vec<ProgramSettings>,
+    #[serde(default)]
+    pub emulators: Vec<EmulatorSettings>,
+    #[serde(default)]
     pub games: GameSettings,
     #[serde(default)]
     pub limits: Vec<LimitRule>,
@@ -76,6 +91,8 @@ impl HomeScreen {
             discs: DiscSettings::default(),
             folders: Vec::new(),
             websites: Vec::new(),
+            programs: Vec::new(),
+            emulators: Vec::new(),
             games: GameSettings::default(),
             limits: Vec::new(),
         }
@@ -101,6 +118,20 @@ impl Default for StatisticsSettings {
 
 pub const MAX_KEEP_DAYS: u32 = 3650;
 
+/// Turning the computer off from the TV. Off: no power button, Ctrl+Q and the remote's power
+/// key do nothing, only the button on the computer is left (`src/power.rs`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PowerSettings {
+    pub enabled: bool,
+}
+
+impl Default for PowerSettings {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 /// What the media center works with: the active home screen's settings plus the shared
 /// ones (field names as before home screens existed).
 #[derive(Debug, Clone, PartialEq)]
@@ -113,11 +144,14 @@ pub struct View {
     pub discs: DiscSettings,
     pub folders: Vec<FolderSettings>,
     pub websites: Vec<WebsiteSettings>,
+    pub programs: Vec<ProgramSettings>,
+    pub emulators: Vec<EmulatorSettings>,
     pub games: GameSettings,
     pub limits: Vec<LimitRule>,
     pub parental: ParentalSettings,
     pub screensaver: ScreensaverSettings,
     pub statistics: StatisticsSettings,
+    pub power: PowerSettings,
 }
 
 impl Config {
@@ -150,11 +184,14 @@ impl Config {
             discs: s.discs.clone(),
             folders: s.folders.clone(),
             websites: s.websites.clone(),
+            programs: s.programs.clone(),
+            emulators: s.emulators.clone(),
             games: s.games.clone(),
             limits: s.limits.clone(),
             parental: self.parental.clone(),
             screensaver: self.screensaver.clone(),
             statistics: self.statistics.clone(),
+            power: self.power.clone(),
         }
     }
 }
@@ -209,6 +246,7 @@ impl ConfigV1 {
             },
             screensaver: self.screensaver,
             statistics: StatisticsSettings::default(),
+            power: PowerSettings::default(),
         }
     }
 }
@@ -582,6 +620,138 @@ fn yes() -> bool {
     true
 }
 
+/// The picture on a program's tile (painted by us, `ui::paint_program_icon`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgramIcon {
+    #[default]
+    Gamepad,
+    Joystick,
+    Computer,
+    Handheld,
+    Floppy,
+    App,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmulatorSystem {
+    Dos,
+    Snes,
+}
+
+/// A DOS drive: a folder or a disk image. Z: is DOSBox's own drive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DriveMapping {
+    pub letter: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct DosOptions {
+    pub drives: Vec<DriveMapping>,
+    /// What to start, e.g. `GAME\\START.EXE -sound`; on the first drive unless it names one.
+    pub autostart: String,
+    /// DOS commands after mounting and before the game.
+    pub startup_script: String,
+    pub correct_aspect: bool,
+    /// Keep what the game saved between starts; off: fresh from the original every time.
+    pub keep_saves: bool,
+}
+
+impl Default for DosOptions {
+    fn default() -> Self {
+        Self {
+            drives: Vec::new(),
+            autostart: String::new(),
+            startup_script: String::new(),
+            correct_aspect: true,
+            keep_saves: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnesFilter {
+    None,
+    #[default]
+    CrtEasymode,
+    ZfastCrt,
+    CrtGeom,
+    CrtLottes,
+    CrtRoyale,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SnesAspect {
+    /// As on the TV the games were made for.
+    #[default]
+    #[serde(rename = "4_3")]
+    Ratio4x3,
+    /// Square pixels.
+    #[serde(rename = "8_7")]
+    Ratio8x7,
+    #[serde(rename = "fill")]
+    Fill,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SnesOptions {
+    pub rom: String,
+    pub filter: SnesFilter,
+    pub aspect: SnesAspect,
+    pub integer_scale: bool,
+    /// Continue exactly where the game was left (battery saves are always kept).
+    pub resume: bool,
+}
+
+impl Default for SnesOptions {
+    fn default() -> Self {
+        Self {
+            rom: String::new(),
+            filter: SnesFilter::default(),
+            aspect: SnesAspect::default(),
+            integer_scale: false,
+            resume: true,
+        }
+    }
+}
+
+/// A game in the "Emulators" row (`src/emulator.rs`). The options of the other system are
+/// kept, so switching back and forth in the admin panel loses nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmulatorSettings {
+    pub id: String,
+    pub name: String,
+    pub system: EmulatorSystem,
+    #[serde(default)]
+    pub dos: DosOptions,
+    #[serde(default)]
+    pub snes: SnesOptions,
+}
+
+/// A program in the "Programs" row (e.g. an emulator). Started exactly as registered: the
+/// program and each argument as they are, never through a shell (`player::program_command`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProgramSettings {
+    pub id: String,
+    pub name: String,
+    /// An absolute path, or a program name looked up in `PATH`.
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    #[serde(default)]
+    pub icon: ProgramIcon,
+}
+
 /// A folder shown in the "Folders" row. Always accessed read-only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -596,6 +766,9 @@ pub struct FolderSettings {
     pub audio: bool,
     #[serde(default)]
     pub images: bool,
+    /// List the files played last ("Recently played") when the folder is opened.
+    #[serde(default = "yes")]
+    pub remember_recent: bool,
     /// Removed option (extra file types). Still accepted in older config files, but ignored and
     /// never written: only media files are shown.
     #[serde(default, rename = "extensions", skip_serializing)]
@@ -631,6 +804,7 @@ impl Default for Config {
             parental: ParentalSettings::default(),
             screensaver: ScreensaverSettings::default(),
             statistics: StatisticsSettings::default(),
+            power: PowerSettings::default(),
         }
     }
 }
@@ -644,6 +818,7 @@ impl Config {
             allow_disc_menu: false,
             ..DiscSettings::default()
         };
+        config.power.enabled = false;
         config
     }
 }
@@ -707,10 +882,22 @@ fn screen_sections_are_objects(value: &serde_json::Value, at: &str) -> Result<()
             &format!("{at}{}", path.replace('/', ".")),
         )?;
     }
-    for list in ["folders", "websites"] {
+    for list in ["folders", "websites", "programs", "emulators"] {
         if let Some(Value::Array(items)) = value.get(list) {
             for (i, item) in items.iter().enumerate() {
                 object(Some(item), &format!("{at}{list}[{i}]"))?;
+            }
+        }
+    }
+    if let Some(Value::Array(items)) = value.get("emulators") {
+        for (i, item) in items.iter().enumerate() {
+            let at = format!("{at}emulators[{i}]");
+            object(item.get("dos"), &format!("{at}.dos"))?;
+            object(item.get("snes"), &format!("{at}.snes"))?;
+            if let Some(Value::Array(drives)) = item.pointer("/dos/drives") {
+                for (d, drive) in drives.iter().enumerate() {
+                    object(Some(drive), &format!("{at}.dos.drives[{d}]"))?;
+                }
             }
         }
     }
@@ -732,7 +919,7 @@ fn limits_are_objects(rules: Option<&serde_json::Value>, at: &str) -> Result<(),
 fn settings_are_objects(value: &serde_json::Value) -> Result<(), String> {
     use serde_json::Value;
     object(Some(value), "the config")?;
-    for key in ["parental", "screensaver", "statistics"] {
+    for key in ["parental", "screensaver", "statistics", "power"] {
         object(value.get(key), key)?;
     }
     if let Some(Value::Array(screens)) = value.get("home_screens") {
@@ -791,6 +978,28 @@ fn validate(config: &Config) -> Result<(), String> {
                 return Err(format!(
                     "{at}.folders: id \"{}\" is used on another home screen",
                     f.id
+                ));
+            }
+        }
+        for e in &screen.emulators {
+            if screens[..i]
+                .iter()
+                .any(|s| s.emulators.iter().any(|o| o.id == e.id))
+            {
+                return Err(format!(
+                    "{at}.emulators: id \"{}\" is used on another home screen",
+                    e.id
+                ));
+            }
+        }
+        for p in &screen.programs {
+            if screens[..i]
+                .iter()
+                .any(|s| s.programs.iter().any(|o| o.id == p.id))
+            {
+                return Err(format!(
+                    "{at}.programs: id \"{}\" is used on another home screen",
+                    p.id
                 ));
             }
         }
@@ -880,6 +1089,30 @@ fn validate_screen(screen: &HomeScreen) -> Result<(), String> {
     if screen.websites.len() > MAX_WEBSITES {
         return Err(format!("websites: at most {MAX_WEBSITES} websites"));
     }
+    if screen.programs.len() > MAX_PROGRAMS {
+        return Err(format!("programs: at most {MAX_PROGRAMS} programs"));
+    }
+    if screen.emulators.len() > MAX_EMULATORS {
+        return Err(format!("emulators: at most {MAX_EMULATORS}"));
+    }
+    for (i, emulator) in screen.emulators.iter().enumerate() {
+        validate_emulator(emulator).map_err(|e| format!("emulators[{i}]: {e}"))?;
+        if screen.emulators[..i].iter().any(|o| o.id == emulator.id) {
+            return Err(format!(
+                "emulators[{i}]: id \"{}\" is used twice",
+                emulator.id
+            ));
+        }
+    }
+    for (i, program) in screen.programs.iter().enumerate() {
+        validate_program(program).map_err(|e| format!("programs[{i}]: {e}"))?;
+        if screen.programs[..i].iter().any(|p| p.id == program.id) {
+            return Err(format!(
+                "programs[{i}]: id \"{}\" is used twice",
+                program.id
+            ));
+        }
+    }
     for (i, site) in screen.websites.iter().enumerate() {
         validate_website(site).map_err(|e| format!("websites[{i}]: {e}"))?;
         if screen.websites[..i].iter().any(|w| w.id == site.id) {
@@ -932,6 +1165,115 @@ fn validate_website(w: &WebsiteSettings) -> Result<(), String> {
     }
     crate::sites::rules_for(&w.url, w.allow_subdomains)
         .map_err(|e| format!("url \"{}\": {e}", w.url))?;
+    Ok(())
+}
+
+fn has_control_chars(text: &str) -> bool {
+    text.chars().any(|c| c < ' ' || c == '\x7f')
+}
+
+fn validate_program(p: &ProgramSettings) -> Result<(), String> {
+    validate_id_and_name(&p.id, &p.name)?;
+    let command = &p.command;
+    if command.is_empty() || command.chars().count() > MAX_COMMAND_CHARS {
+        return Err(format!("command: 1 to {MAX_COMMAND_CHARS} characters"));
+    }
+    if has_control_chars(command) || command.starts_with('-') {
+        return Err("command: not a program".into());
+    }
+    if command.starts_with('/') {
+        if !is_normalized_absolute_path(command) {
+            return Err("command: the path must not contain '.', '..' or empty parts".into());
+        }
+    } else if command.contains('/') {
+        return Err("command: an absolute path or a program name".into());
+    } else if command.contains(' ') {
+        return Err("command: put arguments into the list of arguments".into());
+    }
+    if p.args.len() > MAX_PROGRAM_ARGS {
+        return Err(format!("args: at most {MAX_PROGRAM_ARGS}"));
+    }
+    for arg in &p.args {
+        if arg.chars().count() > MAX_ARG_CHARS || has_control_chars(arg) {
+            return Err(format!(
+                "args: at most {MAX_ARG_CHARS} characters, no control characters"
+            ));
+        }
+    }
+    if let Some(dir) = &p.working_dir
+        && (!is_normalized_absolute_path(dir) || has_control_chars(dir))
+    {
+        return Err("working_dir: must be an absolute path".into());
+    }
+    Ok(())
+}
+
+const SNES_ROM_EXTENSIONS: [&str; 5] = ["sfc", "smc", "swc", "fig", "zip"];
+
+/// A path we hand to DOSBox or RetroArch, in double quotes in their configuration.
+fn game_path_ok(path: &str) -> bool {
+    is_normalized_absolute_path(path) && !has_control_chars(path) && !path.contains('"')
+}
+
+fn validate_emulator(e: &EmulatorSettings) -> Result<(), String> {
+    validate_id_and_name(&e.id, &e.name)?;
+    let dos = &e.dos;
+    if dos.drives.len() > MAX_DRIVES {
+        return Err(format!("dos.drives: at most {MAX_DRIVES}"));
+    }
+    if e.system == EmulatorSystem::Dos && dos.drives.is_empty() {
+        return Err("dos.drives: add at least one drive".into());
+    }
+    for (i, drive) in dos.drives.iter().enumerate() {
+        let letter_ok =
+            drive.letter.len() == 1 && matches!(drive.letter.as_bytes()[0], b'A'..=b'Y');
+        if !letter_ok {
+            return Err(format!("dos.drives[{i}]: the drive letter must be A to Y"));
+        }
+        if dos.drives[..i].iter().any(|d| d.letter == drive.letter) {
+            return Err(format!(
+                "dos.drives[{i}]: drive {} is used twice",
+                drive.letter
+            ));
+        }
+        if !game_path_ok(&drive.path) {
+            return Err(format!("dos.drives[{i}]: must be an absolute path"));
+        }
+    }
+    if dos.autostart.chars().count() > MAX_AUTOSTART_CHARS
+        || has_control_chars(&dos.autostart)
+        || dos.autostart.contains('"')
+        || dos.autostart.contains("..")
+    {
+        return Err("dos.autostart: not a file inside a drive".into());
+    }
+    if dos.startup_script.chars().count() > MAX_STARTUP_SCRIPT_CHARS {
+        return Err(format!(
+            "dos.startup_script: at most {MAX_STARTUP_SCRIPT_CHARS} characters"
+        ));
+    }
+    for line in dos.startup_script.split('\n') {
+        // A line starting with [ would begin a new section of DOSBox's configuration.
+        if has_control_chars(line) || line.trim_start().starts_with('[') {
+            return Err("dos.startup_script: a line is not a DOS command".into());
+        }
+    }
+    let rom = &e.snes.rom;
+    if rom.is_empty() {
+        if e.system == EmulatorSystem::Snes {
+            return Err("snes.rom: choose a ROM file".into());
+        }
+    } else {
+        let extension = rom.rsplit_once('.').map(|(_, x)| x.to_ascii_lowercase());
+        if !game_path_ok(rom)
+            || !extension.is_some_and(|x| SNES_ROM_EXTENSIONS.contains(&x.as_str()))
+        {
+            return Err(format!(
+                "snes.rom: an absolute path to a {} file",
+                SNES_ROM_EXTENSIONS.join(", ")
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -1040,6 +1382,24 @@ mod tests {
         );
         assert!(config.statistics.enabled);
         assert_eq!(config.statistics.keep_days, 90);
+        assert!(config.power.enabled);
+        let dos = &config.home_screens[1].programs[0];
+        assert_eq!(dos.command, "dosbox");
+        assert_eq!(dos.args.len(), 3);
+        assert_eq!(dos.icon, ProgramIcon::Computer);
+        assert_eq!(view_programs(&config), 1);
+        let games = &config.home_screens[1].emulators;
+        assert_eq!(games[0].system, EmulatorSystem::Dos);
+        assert_eq!(games[0].dos.drives[1].letter, "A");
+        assert_eq!(games[1].snes.filter, SnesFilter::CrtGeom);
+        assert_eq!(games[1].snes.aspect, SnesAspect::Ratio4x3);
+        assert!(games[1].snes.resume, "on by default");
+        assert!(games[0].dos.keep_saves, "on by default");
+        assert!(
+            config.home_screens[0].folders[0].remember_recent,
+            "on by default"
+        );
+        assert!(!Config::locked_down().power.enabled, "fails closed");
         let view = config.view(Some("kids"));
         assert_eq!(view.screen_id, "kids");
         assert_eq!(view.limits.len(), 1);
@@ -1051,6 +1411,7 @@ mod tests {
         assert_eq!(d.home_screens.len(), 1);
         assert!(d.home_screens[0].default);
         assert!(!d.statistics.enabled);
+        assert!(d.power.enabled, "as before the setting existed");
     }
 
     #[test]
@@ -1161,6 +1522,10 @@ mod tests {
         assert!(!written.contains("pin_hash"));
     }
 
+    fn view_programs(config: &Config) -> usize {
+        config.view(Some("kids")).programs.len()
+    }
+
     #[test]
     fn screensaver() {
         let c = parse(r#"{"version":1}"#).unwrap();
@@ -1204,7 +1569,7 @@ mod tests {
         assert!(old.home_screens[0].games.pong.enabled);
         assert_eq!(old.home_screens[0].games.pong.points_to_win, 9);
         let written = serde_json::to_string(&old).unwrap();
-        assert!(!written.contains("programs") && written.contains(r#""games""#));
+        assert!(!written.contains(r#""programs":{"#) && written.contains(r#""games""#));
         // Both: `games` wins.
         let both = parse(
             r#"{"version":1,"programs":{"pong":{"enabled":true}},"games":{"pong":{"enabled":false}}}"#,
@@ -1290,6 +1655,49 @@ mod tests {
             r#"{"version":1,"parental":{"limits":[{"type":"window","until":"24:00","scope":{"kind":"every_day"}}]}}"#,
             r#"{"version":1,"parental":{"limits":[{"type":"nap","scope":{"kind":"every_day"}}]}}"#,
             r#"{"version":1,"parental":{"limits":[{"type":"budget","minutes":60,"scope":{"kind":"every_day","x":1}}]}}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true}],"power":{"enabled":"no"}}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true}],"power":{"x":1}}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true}],"power":[]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"programs":[{"id":"p","name":"P"}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"programs":[{"id":"p","name":"P","command":""}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"programs":[{"id":"p","name":"P","command":"bin/x"}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"programs":[{"id":"p","name":"P","command":"./x"}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"programs":[{"id":"p","name":"P","command":"-x"}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"programs":[{"id":"p","name":"P","command":"dosbox -fullscreen"}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"programs":[{"id":"p","name":"P","command":"/a/../x"}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"programs":[{"id":"p","name":"P","command":"x\ny"}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"programs":[{"id":"p","name":"P","command":"x","args":"-a"}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"programs":[{"id":"p","name":"P","command":"x","args":["a\nb"]}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"programs":[{"id":"p","name":"P","command":"x","working_dir":"games"}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"programs":[{"id":"p","name":"P","command":"x","icon":"dragon"}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"programs":[{"id":"p","name":"P","command":"x","shell":true}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"programs":[{"id":"p","name":"P","command":"x"},{"id":"p","name":"Q","command":"y"}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E"}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"c64"}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"dos"}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"dos","dos":{"drives":[]}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"dos","dos":{"drives":[{"letter":"Z","path":"/g"}]}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"dos","dos":{"drives":[{"letter":"c","path":"/g"}]}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"dos","dos":{"drives":[{"letter":"CC","path":"/g"}]}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"dos","dos":{"drives":[{"letter":"C","path":"g"}]}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"dos","dos":{"drives":[{"letter":"C","path":"/a\"b"}]}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"dos","dos":{"drives":[{"letter":"C","path":"/g"},{"letter":"C","path":"/g"}]}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"dos","dos":{"drives":[{"letter":"C","path":"/g"}],"autostart":"..\\\\x.exe"}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"dos","dos":{"drives":[{"letter":"C","path":"/g"}],"autostart":"a\"b"}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"dos","dos":{"drives":[{"letter":"C","path":"/g"}],"startup_script":"[sdl]"}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"dos","dos":{"drives":[{"letter":"C","path":"/g"}],"startup_script":"a\tb"}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"dos","dos":{"drives":[{"letter":"C","path":"/g"}],"x":1}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"dos","dos":[]}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"snes"}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"snes","snes":{"rom":"/a.exe"}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"snes","snes":{"rom":"a.sfc"}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"snes","snes":{"rom":"/a.sfc","filter":"blur"}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"snes","snes":{"rom":"/a.sfc","aspect":"21_9"}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"snes","snes":{"rom":"/a.sfc","integer_scale":"yes"}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"snes","snes":[]}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"dos","dos":{"drives":[{"letter":"C","path":"/g"}],"keep_saves":"yes"}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"emulators":[{"id":"e","name":"E","system":"snes","snes":{"rom":"/a.sfc","resume":1}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"folders":[{"id":"f","name":"F","path":"/m","video":true,"remember_recent":"no"}]}]}"#,
             r#"{"version":1,"screensaver":{"mode":"matrix"}}"#,
             r#"{"version":1,"screensaver":{"mode":"Title"}}"#,
             r#"{"version":1,"screensaver":{"idle_minutes":0}}"#,

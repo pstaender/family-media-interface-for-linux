@@ -13,6 +13,14 @@ const MAX_FOLDERS = 50;
 const MAX_NAME_CHARS = 60;
 const MAX_PATH_BYTES = 4096;
 const MAX_WEBSITES = 50;
+const MAX_PROGRAMS = 50;
+const MAX_EMULATORS = 50;
+const MAX_DRIVES = 8;
+const MAX_AUTOSTART_CHARS = 260;
+const MAX_STARTUP_SCRIPT_CHARS = 4000;
+const MAX_PROGRAM_ARGS = 64;
+const MAX_COMMAND_CHARS = 1024;
+const MAX_ARG_CHARS = 4096;
 const MAX_URL_LENGTH = 2048;
 
 export interface DiscSettings {
@@ -33,9 +41,90 @@ export interface FolderSettings {
   video: boolean;
   audio: boolean;
   images: boolean;
+  remember_recent: boolean;
 }
 
 /** A website tile. Rules: src/sites.rs (pages only on its domain; media from anywhere). */
+/** Z: is DOSBox's own drive. */
+export const DOS_DRIVE_LETTERS = [..."ABCDEFGHIJKLMNOPQRSTUVWXY"];
+export const DOS_IMAGE_EXTENSIONS = ["img", "ima", "iso", "cue"];
+/** A .cue file needs its data file next to it, so it can't be uploaded alone. */
+export const DOS_UPLOAD_EXTENSIONS = ["img", "ima", "iso"];
+export const MAX_ALLOWED_HOSTS = 32;
+export const HOST_NAME = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/;
+
+/** The admin panel's extra host names, from lines of text (both the browser and the server check). */
+export function checkAllowedHosts(lines: unknown): { ok: true; hosts: string[] } | { ok: false; error: string } {
+  if (!Array.isArray(lines) || !lines.every((l) => typeof l === "string")) return { ok: false, error: "Expected a list of host names." };
+  const hosts: string[] = [];
+  for (const [i, raw] of (lines as string[]).entries()) {
+    const name = raw.trim().toLowerCase();
+    if (name === "") continue;
+    if (!HOST_NAME.test(name)) return { ok: false, error: `Line ${i + 1}: "${raw.trim()}" is not a host name (just the name, without http:// or a port).` };
+    if (!hosts.includes(name)) hosts.push(name);
+  }
+  if (hosts.length > MAX_ALLOWED_HOSTS) return { ok: false, error: `At most ${MAX_ALLOWED_HOSTS} host names.` };
+  return { ok: true, hosts };
+}
+export const SNES_ROM_EXTENSIONS = ["sfc", "smc", "swc", "fig", "zip"];
+export const SNES_FILTERS = ["none", "crt_easymode", "zfast_crt", "crt_geom", "crt_lottes", "crt_royale"] as const;
+export type SnesFilter = (typeof SNES_FILTERS)[number];
+export const SNES_ASPECTS = ["4_3", "8_7", "fill"] as const;
+export type SnesAspect = (typeof SNES_ASPECTS)[number];
+
+export interface DriveMapping {
+  letter: string;
+  path: string;
+}
+
+export interface DosOptions {
+  drives: DriveMapping[];
+  autostart: string;
+  startup_script: string;
+  correct_aspect: boolean;
+  keep_saves: boolean;
+}
+
+export interface SnesOptions {
+  rom: string;
+  filter: SnesFilter;
+  aspect: SnesAspect;
+  integer_scale: boolean;
+  resume: boolean;
+}
+
+export interface EmulatorSettings {
+  id: string;
+  name: string;
+  system: "dos" | "snes";
+  dos: DosOptions;
+  snes: SnesOptions;
+}
+
+export function newEmulator(id: string): EmulatorSettings {
+  return {
+    id,
+    name: "",
+    system: "dos",
+    dos: { drives: [], autostart: "", startup_script: "", correct_aspect: true, keep_saves: true },
+    snes: { rom: "", filter: "crt_easymode", aspect: "4_3", integer_scale: false, resume: true },
+  };
+}
+
+export const PROGRAM_ICONS = ["gamepad", "joystick", "computer", "handheld", "floppy", "app"] as const;
+export type ProgramIcon = (typeof PROGRAM_ICONS)[number];
+
+/** A program in the "Programs" row: started as registered, never through a shell. */
+export interface ProgramSettings {
+  id: string;
+  name: string;
+  /** An absolute path, or a program name looked up in PATH. */
+  command: string;
+  args: string[];
+  working_dir?: string;
+  icon: ProgramIcon;
+}
+
 export interface WebsiteSettings {
   id: string;
   name: string;
@@ -196,6 +285,8 @@ export interface HomeScreen {
   discs: DiscSettings;
   folders: FolderSettings[];
   websites: WebsiteSettings[];
+  programs: ProgramSettings[];
+  emulators: EmulatorSettings[];
   games: GameSettings;
   limits: LimitRule[];
 }
@@ -205,12 +296,18 @@ export interface StatisticsSettings {
   keep_days: number;
 }
 
+/** Off: nothing on the TV turns the computer off, only the button on the computer. */
+export interface PowerSettings {
+  enabled: boolean;
+}
+
 export interface Config {
   version: number;
   home_screens: HomeScreen[];
   parental: ParentalSettings;
   screensaver: ScreensaverSettings;
   statistics: StatisticsSettings;
+  power: PowerSettings;
 }
 
 export function newHomeScreen(id: string, name: string): HomeScreen {
@@ -222,6 +319,8 @@ export function newHomeScreen(id: string, name: string): HomeScreen {
     discs: { enabled: true, allow_disc_menu: true, audio_languages: [], subtitle_languages: [] },
     folders: [],
     websites: [],
+    programs: [],
+    emulators: [],
     games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false }, blocks: { enabled: false, start_level: 0, sound: false }, dodger: { enabled: false, sound: false, music: false } },
     limits: [],
   };
@@ -234,6 +333,7 @@ export function defaultConfig(): Config {
     parental: { pin_backoff_doubling: true },
     screensaver: { mode: "title", idle_minutes: 10, aerial_quality: "1080p_h264", aerial_videos: [] },
     statistics: { enabled: false, keep_days: 90 },
+    power: { enabled: true },
   };
 }
 
@@ -260,9 +360,9 @@ export function cleanScreenName(name: string): string | null {
   return chars >= 1 && chars <= MAX_SCREEN_NAME_CHARS ? clean : null;
 }
 
-/** All folder and website ids (unique across home screens). */
+/** All folder, website and program ids (unique across home screens). */
 export function allItemIds(config: Config): string[] {
-  return config.home_screens.flatMap((s) => [...s.folders.map((f) => f.id), ...s.websites.map((w) => w.id)]);
+  return config.home_screens.flatMap((s) => [...s.folders.map((f) => f.id), ...s.websites.map((w) => w.id), ...s.programs.map((p) => p.id), ...s.emulators.map((e) => e.id)]);
 }
 
 /**
@@ -285,6 +385,8 @@ export function addHomeScreen(config: Config, name: string): { config: Config; i
     default: false,
     folders: source.folders.map((f) => ({ ...f, id: fresh(f.id) })),
     websites: source.websites.map((w) => ({ ...w, id: fresh(w.id) })),
+    programs: source.programs.map((p) => ({ ...p, id: fresh(p.id) })),
+    emulators: source.emulators.map((e) => ({ ...e, id: fresh(e.id) })),
   };
   return { config: { ...config, home_screens: [...config.home_screens, screen] }, id };
 }
@@ -366,6 +468,143 @@ export function websiteDomain(address: string, allowSubdomains: boolean): { host
     return "Addresses in the home network are not allowed";
   }
   return allowSubdomains ? { host: host.replace(/^www\./, ""), subdomains: true } : { host, subdomains: false };
+}
+
+function hasControlChars(text: string): boolean {
+  return /[\u0000-\u001f\u007f]/.test(text);
+}
+
+/** A path we hand to DOSBox or RetroArch, in double quotes in their configuration. */
+function gamePathOk(path: unknown): path is string {
+  return typeof path === "string" && isNormalizedAbsolutePath(path) && !hasControlChars(path) && !path.includes('"');
+}
+
+function validateDos(input: unknown, needed: boolean, out: DosOptions): string | null {
+  if (!isObject(input)) return "dos: must be an object";
+  const extra = unknownKey(input, ["drives", "autostart", "startup_script", "correct_aspect", "keep_saves"], "dos");
+  if (extra) return extra;
+  if (input.drives !== undefined) {
+    if (!Array.isArray(input.drives)) return "dos.drives: must be a list";
+    if (input.drives.length > MAX_DRIVES) return `dos.drives: at most ${MAX_DRIVES}`;
+    for (const [i, drive] of input.drives.entries()) {
+      if (!isObject(drive)) return `dos.drives[${i}]: must be an object`;
+      const unknown = unknownKey(drive, ["letter", "path"], `dos.drives[${i}]`);
+      if (unknown) return unknown;
+      if (typeof drive.letter !== "string" || !DOS_DRIVE_LETTERS.includes(drive.letter)) return `dos.drives[${i}]: the drive letter must be A to Y`;
+      if (out.drives.some((d) => d.letter === drive.letter)) return `dos.drives[${i}]: drive ${drive.letter} is used twice`;
+      if (!gamePathOk(drive.path)) return `dos.drives[${i}]: must be an absolute path`;
+      out.drives.push({ letter: drive.letter, path: drive.path });
+    }
+  }
+  if (needed && out.drives.length === 0) return "dos.drives: add at least one drive";
+  if (input.autostart !== undefined) {
+    const a = input.autostart;
+    if (typeof a !== "string" || [...a].length > MAX_AUTOSTART_CHARS || hasControlChars(a) || a.includes('"') || a.includes("..")) return "dos.autostart: not a file inside a drive";
+    out.autostart = a;
+  }
+  if (input.startup_script !== undefined) {
+    const script = input.startup_script;
+    if (typeof script !== "string" || [...script].length > MAX_STARTUP_SCRIPT_CHARS) return `dos.startup_script: at most ${MAX_STARTUP_SCRIPT_CHARS} characters`;
+    // A line starting with [ would begin a new section of DOSBox's configuration.
+    if (script.split("\n").some((line) => hasControlChars(line) || line.trimStart().startsWith("["))) return "dos.startup_script: a line is not a DOS command";
+    out.startup_script = script;
+  }
+  if (input.correct_aspect !== undefined) {
+    if (typeof input.correct_aspect !== "boolean") return "dos.correct_aspect: must be true or false";
+    out.correct_aspect = input.correct_aspect;
+  }
+  if (input.keep_saves !== undefined) {
+    if (typeof input.keep_saves !== "boolean") return "dos.keep_saves: must be true or false";
+    out.keep_saves = input.keep_saves;
+  }
+  return null;
+}
+
+function validateSnes(input: unknown, needed: boolean, out: SnesOptions): string | null {
+  if (!isObject(input)) return "snes: must be an object";
+  const extra = unknownKey(input, ["rom", "filter", "aspect", "integer_scale", "resume"], "snes");
+  if (extra) return extra;
+  if (input.rom !== undefined) {
+    if (typeof input.rom !== "string") return "snes.rom: must be a path";
+    out.rom = input.rom;
+  }
+  if (out.rom === "") {
+    if (needed) return "snes.rom: choose a ROM file";
+  } else {
+    const extension = out.rom.includes(".") ? out.rom.split(".").pop()!.toLowerCase() : "";
+    if (!gamePathOk(out.rom) || !SNES_ROM_EXTENSIONS.includes(extension)) return `snes.rom: an absolute path to a ${SNES_ROM_EXTENSIONS.join(", ")} file`;
+  }
+  if (input.filter !== undefined) {
+    if (!SNES_FILTERS.includes(input.filter as SnesFilter)) return `snes.filter: one of ${SNES_FILTERS.join(", ")}`;
+    out.filter = input.filter as SnesFilter;
+  }
+  if (input.aspect !== undefined) {
+    if (!SNES_ASPECTS.includes(input.aspect as SnesAspect)) return `snes.aspect: one of ${SNES_ASPECTS.join(", ")}`;
+    out.aspect = input.aspect as SnesAspect;
+  }
+  if (input.integer_scale !== undefined) {
+    if (typeof input.integer_scale !== "boolean") return "snes.integer_scale: must be true or false";
+    out.integer_scale = input.integer_scale;
+  }
+  if (input.resume !== undefined) {
+    if (typeof input.resume !== "boolean") return "snes.resume: must be true or false";
+    out.resume = input.resume;
+  }
+  return null;
+}
+
+function validateEmulator(input: unknown): EmulatorSettings | string {
+  if (!isObject(input)) return "must be an object";
+  const extra = unknownKey(input, ["id", "name", "system", "dos", "snes"], "emulator");
+  if (extra) return extra;
+  const idName = checkIdAndName(input.id, input.name);
+  if (idName) return idName;
+  if (input.system !== "dos" && input.system !== "snes") return "system: dos or snes";
+  const emulator = newEmulator(input.id as string);
+  emulator.name = input.name as string;
+  emulator.system = input.system;
+  const dos = validateDos(input.dos ?? {}, input.system === "dos", emulator.dos);
+  if (dos) return dos;
+  const snes = validateSnes(input.snes ?? {}, input.system === "snes", emulator.snes);
+  if (snes) return snes;
+  return emulator;
+}
+
+function validateProgram(input: unknown): ProgramSettings | string {
+  if (!isObject(input)) return "must be an object";
+  const extra = unknownKey(input, ["id", "name", "command", "args", "working_dir", "icon"], "program");
+  if (extra) return extra;
+  const idName = checkIdAndName(input.id, input.name);
+  if (idName) return idName;
+  const { command } = input;
+  if (typeof command !== "string" || command === "" || [...command].length > MAX_COMMAND_CHARS) return `command: 1 to ${MAX_COMMAND_CHARS} characters`;
+  if (hasControlChars(command) || command.startsWith("-")) return "command: not a program";
+  if (command.startsWith("/")) {
+    if (!isNormalizedAbsolutePath(command)) return "command: the path must not contain '.', '..' or empty parts";
+  } else if (command.includes("/")) {
+    return "command: an absolute path or a program name";
+  } else if (command.includes(" ")) {
+    return "command: put arguments into the list of arguments";
+  }
+  const program: ProgramSettings = { id: input.id as string, name: input.name as string, command, args: [], icon: "gamepad" };
+  if (input.args !== undefined) {
+    if (!Array.isArray(input.args)) return "args: must be a list";
+    if (input.args.length > MAX_PROGRAM_ARGS) return `args: at most ${MAX_PROGRAM_ARGS}`;
+    for (const arg of input.args) {
+      if (typeof arg !== "string" || [...arg].length > MAX_ARG_CHARS || hasControlChars(arg)) return `args: at most ${MAX_ARG_CHARS} characters, no control characters`;
+      program.args.push(arg);
+    }
+  }
+  if (input.working_dir !== undefined) {
+    const dir = input.working_dir;
+    if (typeof dir !== "string" || !isNormalizedAbsolutePath(dir) || hasControlChars(dir)) return "working_dir: must be an absolute path";
+    program.working_dir = dir;
+  }
+  if (input.icon !== undefined) {
+    if (!PROGRAM_ICONS.includes(input.icon as ProgramIcon)) return `icon: one of ${PROGRAM_ICONS.join(", ")}`;
+    program.icon = input.icon as ProgramIcon;
+  }
+  return program;
 }
 
 function validateWebsite(input: unknown): WebsiteSettings | string {
@@ -563,7 +802,7 @@ export function isNormalizedAbsolutePath(path: string): boolean {
 function validateFolder(input: unknown): FolderSettings | string {
   if (!isObject(input)) return "must be an object";
   // "extensions" (removed option) is still accepted from older config files, but ignored.
-  const extra = unknownKey(input, ["id", "name", "path", "video", "audio", "images", "extensions"], "folder");
+  const extra = unknownKey(input, ["id", "name", "path", "video", "audio", "images", "remember_recent", "extensions"], "folder");
   if (extra) return extra;
   const { id, name, path } = input;
   const idName = checkIdAndName(id, name);
@@ -571,11 +810,15 @@ function validateFolder(input: unknown): FolderSettings | string {
   if (typeof path !== "string" || !isNormalizedAbsolutePath(path)) {
     return `path "${String(path)}" must be an absolute path without '.', '..' or empty parts`;
   }
-  const folder: FolderSettings = { id: id as string, name: name as string, path, video: false, audio: false, images: false };
+  const folder: FolderSettings = { id: id as string, name: name as string, path, video: false, audio: false, images: false, remember_recent: true };
   for (const key of ["video", "audio", "images"] as const) {
     if (input[key] === undefined) continue;
     if (typeof input[key] !== "boolean") return `${key}: must be true or false`;
     folder[key] = input[key];
+  }
+  if (input.remember_recent !== undefined) {
+    if (typeof input.remember_recent !== "boolean") return "remember_recent: must be true or false";
+    folder.remember_recent = input.remember_recent;
   }
   if (!(folder.video || folder.audio || folder.images)) {
     return "choose at least one kind of file to show";
@@ -723,11 +966,20 @@ function validateStatistics(input: unknown): StatisticsSettings | string {
   return s;
 }
 
+function validatePower(input: unknown): PowerSettings | string {
+  if (!isObject(input)) return "power: must be an object";
+  const extra = unknownKey(input, ["enabled"], "power");
+  if (extra) return extra;
+  if (input.enabled === undefined) return { enabled: true };
+  if (typeof input.enabled !== "boolean") return "power.enabled: must be true or false";
+  return { enabled: input.enabled };
+}
+
 /** Validate untrusted input and fill in defaults (version 2; version 1 is converted). */
 export function validateConfig(input: unknown): Validation {
   if (!isObject(input)) return { ok: false, error: "config must be an object" };
   if (input.version === 1) return validateV1(input);
-  const top = unknownKey(input, ["version", "home_screens", "parental", "screensaver", "statistics"], "config");
+  const top = unknownKey(input, ["version", "home_screens", "parental", "screensaver", "statistics", "power"], "config");
   if (top) return { ok: false, error: top };
   if (input.version !== CONFIG_VERSION) {
     return { ok: false, error: `unsupported config version ${String(input.version)} (expected ${CONFIG_VERSION})` };
@@ -740,10 +992,12 @@ export function validateConfig(input: unknown): Validation {
   config.home_screens = [];
   const folderIds = new Set<string>();
   const websiteIds = new Set<string>();
+  const programIds = new Set<string>();
+  const emulatorIds = new Set<string>();
   for (const [i, raw] of list.entries()) {
     const at = `home_screens[${i}]`;
     if (!isObject(raw)) return { ok: false, error: `${at}: must be an object` };
-    const extra = unknownKey(raw, ["id", "name", "default", "home", "discs", "folders", "websites", "games", "limits"], at);
+    const extra = unknownKey(raw, ["id", "name", "default", "home", "discs", "folders", "websites", "programs", "emulators", "games", "limits"], at);
     if (extra) return { ok: false, error: extra };
     const idName = checkIdAndName(raw.id, raw.name);
     if (idName) return { ok: false, error: `${at}: ${idName}` };
@@ -762,6 +1016,30 @@ export function validateConfig(input: unknown): Validation {
       const rules = validateLimits(raw.limits, `${at}.limits`);
       if (typeof rules === "string") return { ok: false, error: rules };
       screen.limits = rules;
+    }
+    if (raw.programs !== undefined) {
+      if (!Array.isArray(raw.programs)) return { ok: false, error: `${at}.programs: must be a list` };
+      if (raw.programs.length > MAX_PROGRAMS) return { ok: false, error: `${at}.programs: at most ${MAX_PROGRAMS} programs` };
+      for (const [n, item] of raw.programs.entries()) {
+        const program = validateProgram(item);
+        if (typeof program === "string") return { ok: false, error: `${at}.programs[${n}]: ${program}` };
+        if (screen.programs.some((p) => p.id === program.id)) return { ok: false, error: `${at}.programs[${n}]: id "${program.id}" is used twice` };
+        if (programIds.has(program.id)) return { ok: false, error: `${at}.programs: id "${program.id}" is used on another home screen` };
+        screen.programs.push(program);
+      }
+      for (const p of screen.programs) programIds.add(p.id);
+    }
+    if (raw.emulators !== undefined) {
+      if (!Array.isArray(raw.emulators)) return { ok: false, error: `${at}.emulators: must be a list` };
+      if (raw.emulators.length > MAX_EMULATORS) return { ok: false, error: `${at}.emulators: at most ${MAX_EMULATORS}` };
+      for (const [n, item] of raw.emulators.entries()) {
+        const emulator = validateEmulator(item);
+        if (typeof emulator === "string") return { ok: false, error: `${at}.emulators[${n}]: ${emulator}` };
+        if (screen.emulators.some((e) => e.id === emulator.id)) return { ok: false, error: `${at}.emulators[${n}]: id "${emulator.id}" is used twice` };
+        if (emulatorIds.has(emulator.id)) return { ok: false, error: `${at}.emulators: id "${emulator.id}" is used on another home screen` };
+        screen.emulators.push(emulator);
+      }
+      for (const e of screen.emulators) emulatorIds.add(e.id);
     }
     // Folder and website ids are keys of our own files (recently played, logos).
     for (const f of screen.folders) {
@@ -791,6 +1069,11 @@ export function validateConfig(input: unknown): Validation {
     const s = validateStatistics(input.statistics);
     if (typeof s === "string") return { ok: false, error: s };
     config.statistics = s;
+  }
+  if (input.power !== undefined) {
+    const p = validatePower(input.power);
+    if (typeof p === "string") return { ok: false, error: p };
+    config.power = p;
   }
   return { ok: true, config };
 }

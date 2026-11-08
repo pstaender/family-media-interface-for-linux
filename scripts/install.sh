@@ -44,6 +44,7 @@ OLD_SESSION_FILE=/usr/share/wayland-sessions/$OLD_SESSION_NAME.desktop
 OLD_SERVICE_NAME=familynovice-admin.service
 OLD_REMOTE_RULE=/etc/udev/rules.d/70-familynovice-remote.rules
 NEW_REMOTE_RULE=/etc/udev/rules.d/70-curator-remote.rules
+REMOTE_POWER_RULE=/etc/udev/rules.d/71-curator-remote-power.rules
 KIOSK_PACKAGES=(cage xwayland)
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -295,6 +296,17 @@ if [[ $TAKE_OVER_OLD -eq 1 || -d $OLD_PREFIX ]]; then
         sudo udevadm control --reload-rules || true
     fi
     sudo rm -rf "$OLD_PREFIX"
+fi
+
+# A remote set up before the power setting existed: see scripts/remote-access.sh.
+if [[ -f $NEW_REMOTE_RULE && ! -f $REMOTE_POWER_RULE ]]; then
+    info "Handing the remote's power key to the media center"
+    {
+        echo "# curator: logind ignores the power keys of these remotes (scripts/remote-access.sh)."
+        grep '^SUBSYSTEM' "$NEW_REMOTE_RULE" | sed 's/TAG+="uaccess"/TAG-="power-switch"/'
+    } | sudo tee "$REMOTE_POWER_RULE" >/dev/null
+    sudo udevadm control --reload-rules || true
+    sudo udevadm trigger --action=change --subsystem-match=input || true
 fi
 
 # An update keeps the account's session choice (maybe changed on purpose since), unless it

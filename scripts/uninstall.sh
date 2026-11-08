@@ -105,7 +105,7 @@ fi
 info "Removing $PREFIX, the login session and the remote access rule"
 sudo rm -f "$SESSION_FILE"
 if [[ -f /etc/udev/rules.d/70-curator-remote.rules ]]; then
-    sudo rm -f /etc/udev/rules.d/70-curator-remote.rules
+    sudo rm -f /etc/udev/rules.d/70-curator-remote.rules /etc/udev/rules.d/71-curator-remote-power.rules
     sudo udevadm control --reload-rules || true
 fi
 sudo rm -rf "$PREFIX" "$PREFIX.new" "$PREFIX.old"

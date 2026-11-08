@@ -25,6 +25,12 @@ use crate::store;
 use crate::volume::VolumeCommand;
 use crate::{tr, tr_noop};
 
+/// `KEY_BACK`, and the right click that is "return" on air-mouse remotes. Only devices that
+/// were set up for us are read, so this is never an ordinary mouse.
+pub const KEY_BACK: u16 = 158;
+pub const BTN_RIGHT: u16 = 0x111;
+/// `KEY_POWER`: logind doesn't act on it for remotes set up with `scripts/remote-access.sh`.
+pub const KEY_POWER: u16 = 116;
 /// `KEY_HOMEPAGE`: the home button of most remotes.
 pub const KEY_HOMEPAGE: u16 = 172;
 /// `KEY_OK` / `KEY_SELECT`: OK of remotes outside pointer mode; invisible to X11 windows.
@@ -197,6 +203,20 @@ impl RemoteMap {
             Some(b) if !b.codes.is_empty() => b.codes.contains(&code),
             _ => code == KEY_HOMEPAGE,
         }
+    }
+
+    /// Does this device code close a program? Return or home, also learned ones whose press
+    /// reaches a window, because a program's window would just swallow it.
+    pub fn closes_program(&self, code: u16) -> bool {
+        if self.is_home(code) {
+            return true;
+        }
+        let learned_as_back = self
+            .buttons
+            .get(&Action::Back)
+            .is_some_and(|b| b.codes.contains(&code));
+        let used_otherwise = self.buttons.values().any(|b| b.codes.contains(&code));
+        learned_as_back || (!used_otherwise && matches!(code, KEY_BACK | BTN_RIGHT))
     }
 
     /// Learned window keys (`key:…`) besides the built-in ones, e.g. a remote whose back
@@ -644,6 +664,27 @@ impl Calibration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn return_and_home_close_a_program() {
+        let empty = RemoteMap::default();
+        for code in [KEY_BACK, BTN_RIGHT, KEY_HOMEPAGE] {
+            assert!(empty.closes_program(code));
+        }
+        assert!(!empty.closes_program(KEY_SELECT));
+        let mut map = RemoteMap::default();
+        let button = |codes: Vec<u16>, window: &str| Button {
+            codes,
+            window: vec![window.to_string()],
+        };
+        map.buttons
+            .insert(Action::Back, button(vec![200], "mouse:secondary"));
+        map.buttons
+            .insert(Action::Ok, button(vec![KEY_BACK], "key:Enter"));
+        assert!(map.closes_program(200), "learned, even if a window gets it");
+        assert!(!map.closes_program(KEY_BACK), "this remote's OK button");
+        assert!(map.closes_program(BTN_RIGHT), "pointer mode");
+    }
 
     fn raw(kind: u16, code: u16, value: i32) -> Vec<u8> {
         let mut e = vec![0u8; TIME_SIZE];

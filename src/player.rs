@@ -169,6 +169,72 @@ pub fn video_file_command(file: &Path, movie: &MovieOptions) -> Command {
 /// The games' music: mpv without a window, the tunes in random order, looping. It ends with
 /// the thread that starts it (parent-death signal), so a crashed media center can't leave
 /// music playing.
+pub fn program_command(program: &crate::config::ProgramSettings) -> Command {
+    let mut cmd = Command::new(&program.command);
+    cmd.args(&program.args);
+    if let Some(dir) = &program.working_dir {
+        cmd.current_dir(dir);
+    }
+    cmd.stdin(Stdio::null()).stdout(Stdio::null());
+    supervise(&mut cmd);
+    cmd
+}
+
+/// A program or emulator gets its own process group (`signal_group` reaches everything it
+/// starts) and ends with the media center.
+pub fn supervise(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0);
+    // SAFETY: prctl is async-signal-safe and touches only the new process.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+/// Ask a process that listens on its standard input to quit by itself (RetroArch: only
+/// that way it saves where the game was). `false`: it doesn't listen, or is gone.
+pub fn ask_to_stop(child: &mut std::process::Child) -> bool {
+    use std::io::Write;
+    child.stdin.as_mut().is_some_and(|stdin| {
+        stdin
+            .write_all(b"QUIT\n")
+            .and_then(|()| stdin.flush())
+            .is_ok()
+    })
+}
+
+/// Signal a program's whole process group. `false`: there is none (e.g. a player, which
+/// isn't the leader of a group, or everything in it has ended).
+pub fn signal_group(pid: u32, signal: i32) -> bool {
+    match libc::pid_t::try_from(pid) {
+        // SAFETY: plain kill(2); the group of our own child, never 0 or 1.
+        Ok(pid) if pid > 1 => unsafe { libc::kill(-pid, signal) == 0 },
+        _ => false,
+    }
+}
+
+/// After a program's main process ended: end what it left behind (its script may be gone
+/// while the emulator it started still saves), by force after 2 s.
+pub fn end_group(pid: u32) {
+    if !signal_group(pid, libc::SIGTERM) {
+        return;
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        if !signal_group(pid, 0) {
+            return;
+        }
+    }
+    log::warn!("program {pid}: leftover processes did not quit, killing them");
+    signal_group(pid, libc::SIGKILL);
+}
+
 pub fn game_music_command(files: &[PathBuf], cache_dir: Option<&Path>) -> Option<Command> {
     use std::os::unix::process::CommandExt;
     if files.is_empty() {
@@ -555,6 +621,85 @@ pub fn command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn emulators_are_asked_to_quit_on_their_input() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "read line; [ \"$line\" = QUIT ] && exit 7"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        assert!(ask_to_stop(&mut child));
+        assert_eq!(child.wait().unwrap().code(), Some(7));
+        let mut deaf = Command::new("/bin/sleep")
+            .arg("60")
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        assert!(!ask_to_stop(&mut deaf), "other players get a signal");
+        deaf.kill().unwrap();
+        deaf.wait().unwrap();
+    }
+
+    fn program(command: &str, args: &[&str]) -> crate::config::ProgramSettings {
+        crate::config::ProgramSettings {
+            id: "p".into(),
+            name: "P".into(),
+            command: command.into(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            working_dir: None,
+            icon: Default::default(),
+        }
+    }
+
+    #[test]
+    fn programs_start_as_registered_without_a_shell() {
+        let mut p = program("/opt/my game/run", &["$(reboot)", "a b; c"]);
+        p.working_dir = Some("/opt/my game".into());
+        let cmd = program_command(&p);
+        assert_eq!(cmd.get_program(), "/opt/my game/run");
+        assert_eq!(cmd.get_args().collect::<Vec<_>>(), ["$(reboot)", "a b; c"]);
+        assert_eq!(cmd.get_current_dir(), Some(Path::new("/opt/my game")));
+    }
+
+    #[test]
+    fn stopping_a_script_ends_the_program_it_started() {
+        let file = std::env::temp_dir().join(format!("curator-group-{}", std::process::id()));
+        let _ = std::fs::remove_file(&file);
+        let script = "sleep 60 & echo $! > \"$0\".tmp; mv \"$0\".tmp \"$0\"; wait";
+        let mut child =
+            program_command(&program("/bin/sh", &["-c", script, file.to_str().unwrap()]))
+                .spawn()
+                .unwrap();
+        let mut grandchild = String::new();
+        for _ in 0..200 {
+            grandchild = std::fs::read_to_string(&file).unwrap_or_default();
+            if !grandchild.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let _ = std::fs::remove_file(&file);
+        let proc_dir = format!("/proc/{}", grandchild.trim());
+        assert!(Path::new(&proc_dir).exists(), "the script started it");
+        assert!(signal_group(child.id(), libc::SIGTERM));
+        child.wait().unwrap();
+        end_group(child.id());
+        let gone = (0..200).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::fs::read_to_string(format!("{proc_dir}/stat"))
+                .map_or(true, |stat| stat.contains(") Z "))
+        });
+        assert!(gone, "the program the script started has ended too");
+    }
+
+    #[test]
+    fn a_process_without_its_own_group_is_not_signalled_as_one() {
+        let mut child = Command::new("/bin/sleep").arg("60").spawn().unwrap();
+        assert!(!signal_group(child.id(), 0));
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
     use crate::makemkv::parse_robot_output;
 
     fn args(cmd: &Command) -> Vec<String> {

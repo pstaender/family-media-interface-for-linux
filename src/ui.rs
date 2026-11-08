@@ -125,6 +125,11 @@ enum Screen {
         text: String,
         back: Option<Browse>,
     },
+    /// A DOS game's private copy is being made; then DOSBox starts.
+    PreparingEmulator {
+        job: Receiver<Result<crate::emulator::Prepared, String>>,
+        emulator: Box<crate::config::EmulatorSettings>,
+    },
     /// The built-in Ping Pong game ("Games" row).
     Pong(Box<PongView>),
     /// Brick Breaker ("Games" row).
@@ -157,6 +162,14 @@ enum PlayKind {
     Disc,
     File,
     Website,
+    Program,
+}
+
+impl PlayKind {
+    /// Played by one of our media players (not a website or program window).
+    fn is_media(self) -> bool {
+        matches!(self, PlayKind::Disc | PlayKind::File)
+    }
 }
 
 /// The rows of the home screen (only rows with content are shown, except discs).
@@ -166,6 +179,8 @@ enum RowKind {
     Folders = 1,
     Websites = 2,
     Games = 3,
+    Programs = 4,
+    Emulators = 5,
 }
 
 fn message(text: impl Into<String>) -> Screen {
@@ -195,6 +210,15 @@ struct RecentEntry {
     /// Its folder below the configured folder.
     sub: Vec<String>,
     entry: Entry,
+}
+
+/// Should files played from this folder be listed under "Recently played"?
+fn remembers_files(config: &View, folder_id: &str) -> bool {
+    config
+        .folders
+        .iter()
+        .find(|f| f.id == folder_id)
+        .is_none_or(|f| f.remember_recent)
 }
 
 /// The last played files of a folder that still exist and are still allowed.
@@ -230,7 +254,7 @@ impl Browse {
         let selected = select
             .and_then(|name| entries.iter().position(|e| e.name == name))
             .unwrap_or(0);
-        let recent = if sub.is_empty() && error.is_none() {
+        let recent = if sub.is_empty() && error.is_none() && folder.remember_recent {
             recent_entries(folder)
         } else {
             Vec::new()
@@ -523,6 +547,8 @@ pub struct App {
     top_focus: Option<TopButton>,
     /// Asking for the PIN to exit the media center.
     exit_view: Option<LockView>,
+    /// Since when a gamepad holds select + start (closes a program).
+    pad_close_since: Option<Instant>,
     /// The power button being held (log out / shut down).
     power_hold: crate::power::PowerHold,
     /// Horizontal scroll per row kind, vertical scroll of the rows.
@@ -633,6 +659,7 @@ impl App {
             focus: (0, 0),
             top_focus: None,
             exit_view: None,
+            pad_close_since: None,
             power_hold: Default::default(),
             row_scroll_x: [0.0; 4],
             rows_scroll_y: 0.0,
@@ -1426,7 +1453,7 @@ impl App {
             stopping: None,
             ..
         } = &self.screen
-            && *kind != PlayKind::Website
+            && kind.is_media()
         {
             player::mpv_show_text(&store::mpv_socket_path(), &volume_text(shown));
         }
@@ -1487,14 +1514,14 @@ impl App {
             }
             // Stop the player like Esc does; once it's gone, the home screen follows.
             Screen::Playing {
-                child,
+                mut child,
                 started,
                 kind,
                 stopping,
                 ..
             } => {
                 if stopping.is_none() {
-                    stop_player(child.id());
+                    stop_child(&mut child);
                 }
                 Screen::Playing {
                     child,
@@ -1578,7 +1605,7 @@ impl App {
                 } = &mut self.screen
             {
                 log::info!("the disc is gone: stopping the player");
-                stop_player(child.id());
+                stop_child(child);
                 *stopping = Some(Instant::now());
             }
         }
@@ -1741,6 +1768,7 @@ impl App {
                 Ok(None) => {
                     if stopping.is_some_and(|t| t.elapsed() > Duration::from_secs(2)) {
                         log::warn!("player did not quit, killing it");
+                        player::signal_group(child.id(), libc::SIGKILL);
                         let _ = child.kill();
                     }
                     self.ctx.request_repaint_after(Duration::from_millis(250));
@@ -1766,6 +1794,12 @@ impl App {
                                 status = status
                             )
                         }
+                        PlayKind::Program => {
+                            tr!(
+                                "This program stopped right away ({status}).",
+                                status = status
+                            )
+                        }
                     };
                     next = Some(Screen::Message {
                         text,
@@ -1782,6 +1816,16 @@ impl App {
             }
         }
         if let Some(screen) = next {
+            // A program's main process is gone; don't leave anything it started behind.
+            if let Screen::Playing {
+                kind: PlayKind::Program,
+                child,
+                ..
+            } = &self.screen
+            {
+                let pid = child.id();
+                std::thread::spawn(move || player::end_group(pid));
+            }
             // A disc player is gone: its makemkvcon helper may still hold the drive.
             if matches!(
                 self.screen,
@@ -1793,6 +1837,24 @@ impl App {
                 player::stop_leftover_makemkv_servers();
             }
             self.screen = screen;
+        }
+        if let Screen::PreparingEmulator { job, emulator } = &self.screen {
+            match job.try_recv() {
+                Ok(Ok(prepared)) => {
+                    let emulator = emulator.clone();
+                    match prepared {
+                        crate::emulator::Prepared::Dos(mounts) => {
+                            self.start_dos(&emulator, &mounts)
+                        }
+                        crate::emulator::Prepared::Snes(rom) => self.start_snes(&emulator, &rom),
+                    }
+                }
+                Ok(Err(text)) => self.screen = message(text),
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.ctx.request_repaint_after(Duration::from_millis(200));
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.screen = Screen::Home,
+            }
         }
         self.track_usage_and_limits();
         self.keep_player_in_front();
@@ -1938,6 +2000,18 @@ impl App {
         }
     }
 
+    /// The remote's power key: shut down at once, like a TV remote (with a PIN, after it).
+    /// Whatever plays stops first, because the PIN question is on our own window.
+    fn remote_power_key(&mut self, has_pin: bool) {
+        if has_pin {
+            self.go_home();
+            self.top_focus = None;
+            self.exit_view = Some(LockView::for_purpose(Purpose::ShutDown));
+        } else {
+            self.shut_down();
+        }
+    }
+
     /// Is OK held down right now (Enter / Space, a learned key, or the remote's OK that only
     /// its input device reports)?
     fn ok_held(&self, ctx: &egui::Context) -> bool {
@@ -1970,13 +2044,14 @@ impl App {
         self.stop_screensaver();
         match std::mem::replace(&mut self.screen, Screen::Home) {
             Screen::Playing { mut child, .. } => {
-                stop_player(child.id());
+                stop_child(&mut child);
                 let deadline = Instant::now() + Duration::from_secs(2);
                 while Instant::now() < deadline && matches!(child.try_wait(), Ok(None)) {
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 let _ = child.kill();
                 let _ = child.wait();
+                player::end_group(child.id());
             }
             Screen::Music(mut view) => view.player.stop(),
             _ => {}
@@ -1991,14 +2066,14 @@ impl App {
     fn stop_everything(&mut self) {
         match std::mem::replace(&mut self.screen, Screen::Home) {
             Screen::Playing {
-                child,
+                mut child,
                 started,
                 kind,
                 stopping,
                 ..
             } => {
                 if stopping.is_none() {
-                    stop_player(child.id());
+                    stop_child(&mut child);
                 }
                 // Keep watching it until it has exited (killed after 2 s if needed).
                 self.screen = Screen::Playing {
@@ -2423,6 +2498,176 @@ impl App {
         };
     }
 
+    /// Start an emulator game once its files are in our folder (in a thread: copying can
+    /// take a while).
+    fn open_emulator(&mut self, emulator: &crate::config::EmulatorSettings) {
+        use crate::config::EmulatorSystem;
+        use crate::emulator::{self as emu, Prepared};
+        let (Some(data), Some(library)) =
+            (store::emulator_data_dir(), store::emulator_library_dir())
+        else {
+            self.screen = message(tr!(
+                "The emulator could not be prepared: {error}",
+                error = "no data directory"
+            ));
+            return;
+        };
+        let (tx, job) = mpsc::channel();
+        let (settings, ctx) = (emulator.clone(), self.ctx.clone());
+        std::thread::spawn(move || {
+            let result = match settings.system {
+                EmulatorSystem::Dos => emu::prepare_dos(
+                    &settings.dos.drives,
+                    &data.join("dos").join(&settings.id),
+                    settings.dos.keep_saves,
+                )
+                .map(Prepared::Dos),
+                EmulatorSystem::Snes => {
+                    emu::prepare_snes(&settings.snes.rom, &library, &data.join("snes/roms"))
+                        .map(Prepared::Snes)
+                }
+            };
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+        self.screen = Screen::PreparingEmulator {
+            job,
+            emulator: Box::new(emulator.clone()),
+        };
+    }
+
+    /// The copy is ready: DOSBox starts here, on the UI thread (the parent-death signal is
+    /// tied to the thread that starts it).
+    fn start_dos(
+        &mut self,
+        emulator: &crate::config::EmulatorSettings,
+        mounts: &[crate::emulator::Mount],
+    ) {
+        let written = store::emulator_cache_dir()
+            .ok_or_else(|| std::io::Error::other("no cache directory"))
+            .and_then(|dir| {
+                std::fs::create_dir_all(dir.join("capture"))?;
+                let conf = dir.join(format!("{}.conf", emulator.id));
+                let text = crate::emulator::dosbox_conf(&emulator.dos, mounts, &dir);
+                std::fs::write(&conf, text)?;
+                Ok(conf)
+            });
+        match written {
+            Ok(conf) => {
+                self.run_emulator(emulator, crate::emulator::dosbox_command(&conf), "DOSBox")
+            }
+            Err(e) => {
+                self.screen = message(tr!(
+                    "The emulator could not be prepared: {error}",
+                    error = e
+                ))
+            }
+        }
+    }
+
+    fn start_snes(&mut self, emulator: &crate::config::EmulatorSettings, rom: &std::path::Path) {
+        use crate::emulator as emu;
+        let Some(core) = emu::find_core() else {
+            self.screen = message(tr!(
+                "{name} is not installed. Run scripts/setup.sh on this computer.",
+                name = "Snes9x"
+            ));
+            return;
+        };
+        let (Some(data), Some(cache)) = (store::emulator_data_dir(), store::emulator_cache_dir())
+        else {
+            self.screen = message(tr!(
+                "The emulator could not be prepared: {error}",
+                error = "no data directory"
+            ));
+            return;
+        };
+        let dirs = emu::RetroArchDirs {
+            core_dir: core.parent().map(PathBuf::from).unwrap_or_default(),
+            data: data.join("snes"),
+            cache: cache.join("snes"),
+        };
+        let shader = emu::shader_path(emulator.snes.filter);
+        let cfg = dirs.cache.join(format!("{}.cfg", emulator.id));
+        let text = emu::retroarch_cfg(&emulator.snes, &dirs, shader.is_some());
+        let written = ["saves", "system"]
+            .iter()
+            .map(|d| dirs.data.join(d))
+            .chain(
+                ["screenshots", "tmp", "playlists"]
+                    .iter()
+                    .map(|d| dirs.cache.join(d)),
+            )
+            .try_for_each(std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&cfg, text));
+        if let Err(e) = written {
+            self.screen = message(tr!(
+                "The emulator could not be prepared: {error}",
+                error = e
+            ));
+            return;
+        }
+        let cmd = emu::retroarch_command(&cfg, &core, shader.as_deref(), rom);
+        self.run_emulator(emulator, cmd, "RetroArch");
+    }
+
+    fn run_emulator(
+        &mut self,
+        emulator: &crate::config::EmulatorSettings,
+        mut cmd: std::process::Command,
+        tool: &str,
+    ) {
+        log::info!("starting emulator {}: {cmd:?}", emulator.id);
+        self.playing_activity = Some(Activity::new(
+            Category::Emulator,
+            emulator.name.clone(),
+            tool.to_string(),
+        ));
+        self.screen = match cmd.spawn() {
+            Ok(child) => Screen::Playing {
+                child,
+                started: Instant::now(),
+                back: None,
+                kind: PlayKind::Program,
+                stopping: None,
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => message(tr!(
+                "{name} is not installed. Run scripts/setup.sh on this computer.",
+                name = tool
+            )),
+            Err(e) => message(tr!(
+                "Could not start {name}: {error}",
+                name = emulator.name,
+                error = e
+            )),
+        };
+    }
+
+    /// Start a registered program; the "Playing" screen supervises it like a player.
+    fn open_program(&mut self, program: &crate::config::ProgramSettings) {
+        let mut cmd = player::program_command(program);
+        log::info!("starting program {}: {cmd:?}", program.id);
+        self.playing_activity = Some(Activity::new(
+            Category::Program,
+            program.name.clone(),
+            String::new(),
+        ));
+        self.screen = match cmd.spawn() {
+            Ok(child) => Screen::Playing {
+                child,
+                started: Instant::now(),
+                back: None,
+                kind: PlayKind::Program,
+                stopping: None,
+            },
+            Err(e) => message(tr!(
+                "Could not start {name}: {error}",
+                name = program.name,
+                error = e
+            )),
+        };
+    }
+
     /// Play a video file like the disc's main movie: languages, resume tracking, no writes.
     fn start_video(&mut self, browse: Browse, entry: Entry, start_secs: Option<f64>) {
         let (config, _) = self.config();
@@ -2452,12 +2697,14 @@ impl App {
         self.screen = match cmd.spawn() {
             Ok(child) => {
                 resume::spawn_monitor(socket.clone(), resume::file_key(&entry.path));
-                recent::record(
-                    &browse.folder_id,
-                    &browse.sub,
-                    &entry.name,
-                    recent::Kind::Video,
-                );
+                if remembers_files(&config, &browse.folder_id) {
+                    recent::record(
+                        &browse.folder_id,
+                        &browse.sub,
+                        &entry.name,
+                        recent::Kind::Video,
+                    );
+                }
                 Screen::Playing {
                     child,
                     started: Instant::now(),
@@ -2515,6 +2762,23 @@ impl eframe::App for App {
                 }
             }
         }
+        // A program has the focus and keeps its keys, so return / home come from the device.
+        // (Not in the first second: that press may have been meant for the menu.)
+        if matches!(
+            &self.screen,
+            Screen::Playing {
+                kind: PlayKind::Program,
+                stopping: None,
+                started,
+                ..
+            } if started.elapsed() >= Duration::from_secs(1)
+        ) && remote_events
+            .iter()
+            .any(|e| e.value == 1 && self.remote_map.closes_program(e.code))
+        {
+            log::info!("closing the program (remote)");
+            self.go_home();
+        }
         // Gamepads: menu navigation while the media center itself is in front (not over a
         // player or website); the game reads them itself.
         let pad_events: Vec<remote::PadEvent> = self.inputs.pads.try_iter().collect();
@@ -2523,6 +2787,26 @@ impl eframe::App for App {
             self.pads.apply(e);
         }
         let nav = self.pads.frame();
+        let program_runs = matches!(
+            self.screen,
+            Screen::Playing {
+                kind: PlayKind::Program,
+                stopping: None,
+                ..
+            }
+        );
+        if program_runs && self.pads.select_and_start_held() {
+            let since = *self.pad_close_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= crate::gamepad::CLOSE_COMBO_HOLD {
+                log::info!("closing the program (gamepad)");
+                self.pad_close_since = None;
+                self.go_home();
+            } else {
+                self.ctx.request_repaint_after(Duration::from_millis(50));
+            }
+        } else {
+            self.pad_close_since = None;
+        }
         if ctx.input(|i| i.focused)
             && !matches!(
                 self.screen,
@@ -2547,12 +2831,38 @@ impl eframe::App for App {
         self.mpris.set_status(match &self.screen {
             Screen::Music(view) if view.player.state().paused => PlayStatus::Paused,
             Screen::Music(_) => PlayStatus::Playing,
-            Screen::Playing { kind, .. } if *kind != PlayKind::Website => PlayStatus::Playing,
+            Screen::Playing { kind, .. } if kind.is_media() => PlayStatus::Playing,
             _ => PlayStatus::Stopped,
         });
-        // Ctrl+Q: like the exit button (asks first; with a PIN, the PIN).
-        if keys.quit && matches!(self.screen, Screen::Home) {
-            self.screen = Screen::ConfirmExit { selected: 1 };
+        let (power_enabled, pin_set) = {
+            let (config, _) = self.config();
+            (config.power.enabled, config.parental.pin_hash.is_some())
+        };
+        if power_enabled {
+            // Ctrl+Q: like the exit button (asks first; with a PIN, the PIN).
+            if keys.quit && matches!(self.screen, Screen::Home) {
+                self.screen = Screen::ConfirmExit { selected: 1 };
+            }
+            if remote_events
+                .iter()
+                .any(|e| e.code == remote::KEY_POWER && e.value == 1)
+                && crate::power::remote_key_acts(
+                    power_enabled,
+                    self.lock.is_some(),
+                    matches!(self.screen, Screen::Calibrate(_)),
+                )
+            {
+                self.remote_power_key(pin_set);
+            }
+        } else {
+            // Switched off in the admin panel while something of it was open.
+            self.power_hold = Default::default();
+            if self.exit_view.as_ref().is_some_and(LockView::is_for_power) {
+                self.exit_view = None;
+            }
+            if matches!(self.screen, Screen::ConfirmExit { .. }) {
+                self.screen = Screen::Home;
+            }
         }
 
         // Buttons only the device reports (e.g. OK = KEY_SELECT), while our window is in
@@ -2677,11 +2987,21 @@ impl App {
         if !games.is_empty() {
             rows.push(RowKind::Games);
         }
+        let emulators = &config.emulators;
+        if !emulators.is_empty() {
+            rows.push(RowKind::Emulators);
+        }
+        let programs = &config.programs;
+        if !programs.is_empty() {
+            rows.push(RowKind::Programs);
+        }
         let row_len = |kind: RowKind| match kind {
             RowKind::Discs => 1,
             RowKind::Folders => folders.len(),
             RowKind::Websites => websites.len(),
             RowKind::Games => games.len(),
+            RowKind::Programs => programs.len(),
+            RowKind::Emulators => emulators.len(),
         };
 
         // The buttons at the top right ("up" from the top row), left to right: home screens
@@ -2691,14 +3011,14 @@ impl App {
         let several = config.screens.len() > 1;
         let buttons: Vec<TopButton> = [
             several.then_some(TopButton::Screens),
-            Some(TopButton::Exit),
+            config.power.enabled.then_some(TopButton::Exit),
             has_pin.then_some(TopButton::Lock),
         ]
         .into_iter()
         .flatten()
         .collect();
         if self.top_focus.is_some_and(|b| !buttons.contains(&b)) {
-            self.top_focus = Some(TopButton::Exit);
+            self.top_focus = buttons.last().copied();
         }
         if home && let Some(focused) = self.top_focus {
             let at = buttons.iter().position(|b| *b == focused).unwrap_or(0);
@@ -2781,6 +3101,8 @@ impl App {
                 RowKind::Folders => tr!("Folders"),
                 RowKind::Websites => tr!("Websites"),
                 RowKind::Games => tr!("Games"),
+                RowKind::Programs => tr!("Programs"),
+                RowKind::Emulators => tr!("Emulators"),
             };
             painter.text(
                 screen_rect.min + Vec2::new(margin, y),
@@ -2861,6 +3183,22 @@ impl App {
                         GameTile::Blocks => paint_blocks_tile(painter, rect, s, focus),
                         GameTile::Dodger => paint_dodger_tile(painter, rect, s, focus),
                     },
+                    RowKind::Programs => paint_program_tile(
+                        painter,
+                        rect,
+                        s,
+                        &programs[i].name,
+                        programs[i].icon,
+                        focus,
+                    ),
+                    RowKind::Emulators => {
+                        use crate::config::{EmulatorSystem, ProgramIcon};
+                        let icon = match emulators[i].system {
+                            EmulatorSystem::Dos => ProgramIcon::Computer,
+                            EmulatorSystem::Snes => ProgramIcon::Gamepad,
+                        };
+                        paint_program_tile(painter, rect, s, &emulators[i].name, icon, focus)
+                    }
                 }
                 if home && response.clicked() {
                     self.focus = (r, i);
@@ -2881,7 +3219,8 @@ impl App {
         };
         // Home screens: left of the exit button.
         if several {
-            let rect = button((size + 24.0 * s) * if has_pin { 2.0 } else { 1.0 });
+            let rect =
+                button((size + 24.0 * s) * (has_pin as u8 + config.power.enabled as u8) as f32);
             let response = ui.interact(
                 rect,
                 ui.make_persistent_id("screens-button"),
@@ -2905,7 +3244,7 @@ impl App {
             }
         }
         // Exit: left of the lock button (or in its place without a PIN).
-        {
+        if config.power.enabled {
             let rect = button(if has_pin { size + 24.0 * s } else { 0.0 });
             let response = ui.interact(rect, ui.make_persistent_id("exit-button"), Sense::click());
             let focused = home && (self.top_focus == Some(TopButton::Exit) || response.hovered());
@@ -2975,6 +3314,16 @@ impl App {
                 Some(RowKind::Websites) => {
                     if let Some(site) = websites.get(col) {
                         self.open_website(site);
+                    }
+                }
+                Some(RowKind::Emulators) => {
+                    if let Some(emulator) = emulators.get(col) {
+                        self.open_emulator(emulator);
+                    }
+                }
+                Some(RowKind::Programs) => {
+                    if let Some(program) = programs.get(col) {
+                        self.open_program(program);
                     }
                 }
                 Some(RowKind::Games) => {
@@ -3194,7 +3543,6 @@ impl App {
                 );
             }
             Screen::Playing {
-                child,
                 stopping,
                 started,
                 kind,
@@ -3209,23 +3557,36 @@ impl App {
                         || keys.media(MediaCommand::Stop)
                         || ctx.input(|i| i.pointer.any_click()));
                 // Media keys for the video (mpv; nothing happens for VLC or websites).
-                if stopping.is_none() && *kind != PlayKind::Website {
+                if stopping.is_none() && kind.is_media() {
                     for command in &keys.media {
                         player::mpv_media_key(&store::mpv_socket_path(), *command);
                     }
                 }
-                let pid = child.id();
                 let body = if stopping.is_some() {
                     tr!("Stopping…")
                 } else {
                     tr!("Esc / Back: stop")
                 };
                 paint_overlay(painter, screen_rect, s, tr!("Playing…"), body);
-                if stop_now {
-                    stop_player(pid);
-                    if let Screen::Playing { stopping, .. } = &mut self.screen {
-                        *stopping = Some(Instant::now());
-                    }
+                if stop_now
+                    && let Screen::Playing {
+                        stopping, child, ..
+                    } = &mut self.screen
+                {
+                    stop_child(child);
+                    *stopping = Some(Instant::now());
+                }
+            }
+            Screen::PreparingEmulator { emulator, .. } => {
+                paint_overlay(
+                    painter,
+                    screen_rect,
+                    s,
+                    emulator.name.as_str(),
+                    tr!("Preparing the game…"),
+                );
+                if keys.back {
+                    self.screen = Screen::Home;
                 }
             }
             Screen::Message { text, .. } => {
@@ -3604,6 +3965,7 @@ impl App {
         s: f32,
         keys: &Keys,
     ) {
+        let (config, _) = self.config();
         let Screen::Music(mut view) = std::mem::replace(&mut self.screen, Screen::Home) else {
             return;
         };
@@ -3614,12 +3976,14 @@ impl App {
         if let Some(track) = view.tracks.get(current)
             && view.recorded.as_ref() != Some(&track.path)
         {
-            recent::record(
-                &view.back.folder_id,
-                &view.back.sub,
-                &track.name,
-                recent::Kind::Audio,
-            );
+            if remembers_files(&config, &view.back.folder_id) {
+                recent::record(
+                    &view.back.folder_id,
+                    &view.back.sub,
+                    &track.name,
+                    recent::Kind::Audio,
+                );
+            }
             view.recorded = Some(track.path.clone());
         }
         let back_to_browser = |view: MusicView| -> Screen {
@@ -3912,6 +4276,106 @@ fn paint_website_tile(painter: &egui::Painter, rect: Rect, s: f32, tile: &Websit
     paint_tile_texts(painter, rect, s, title, subtitle, alpha);
 }
 
+fn paint_program_tile(
+    painter: &egui::Painter,
+    rect: Rect,
+    s: f32,
+    name: &str,
+    icon: crate::config::ProgramIcon,
+    focus: f32,
+) {
+    let rect = rect.expand(focus * 12.0 * s);
+    let radius = CornerRadius::same((18.0 * s) as u8);
+    painter.rect_filled(rect, radius, TILE_BG);
+    if focus > 0.0 {
+        painter.rect_stroke(
+            rect,
+            radius,
+            Stroke::new(4.0 * s, ACCENT.gamma_multiply(focus)),
+            StrokeKind::Outside,
+        );
+    }
+    let center = Pos2::new(rect.center().x, rect.min.y + rect.height() * 0.36);
+    paint_program_icon(painter, center, rect.width() * 0.27, icon);
+    paint_tile_texts(painter, rect, s, name, "", 1.0);
+}
+
+/// Our own simple icons, drawn from rectangles and circles around `center` (`r`: half size).
+fn paint_program_icon(
+    painter: &egui::Painter,
+    center: Pos2,
+    r: f32,
+    icon: crate::config::ProgramIcon,
+) {
+    use crate::config::ProgramIcon as I;
+    let at = |x: f32, y: f32| center + Vec2::new(x, y) * r;
+    let block = |x: f32, y: f32, w: f32, h: f32, round: f32, color: Color32| {
+        painter.rect_filled(
+            Rect::from_center_size(at(x, y), Vec2::new(w, h) * r),
+            CornerRadius::same((round * r) as u8),
+            color,
+        );
+    };
+    let dot = |x: f32, y: f32, size: f32, color: Color32| {
+        painter.circle_filled(at(x, y), size * r, color);
+    };
+    let cross = |x: f32, y: f32, size: f32, color: Color32| {
+        block(x, y, size, size * 0.34, 0.02, color);
+        block(x, y, size * 0.34, size, 0.02, color);
+    };
+    let light = Color32::from_rgb(0xe8, 0xec, 0xf4);
+    let dark = Color32::from_rgb(0x1d, 0x22, 0x30);
+    let red = Color32::from_rgb(0xe5, 0x4b, 0x4b);
+    let yellow = Color32::from_rgb(0xf2, 0xb9, 0x3b);
+    let blue = Color32::from_rgb(0x3f, 0x8c, 0xe0);
+    let green = Color32::from_rgb(0x4c, 0xc2, 0x8a);
+    match icon {
+        I::Gamepad => {
+            block(0.0, 0.0, 2.0, 1.1, 0.42, light);
+            cross(-0.5, 0.0, 0.6, dark);
+            dot(0.4, 0.13, 0.15, red);
+            dot(0.72, -0.13, 0.15, blue);
+        }
+        I::Joystick => {
+            block(0.0, 0.72, 1.7, 0.5, 0.12, light);
+            dot(0.55, 0.62, 0.12, red);
+            block(0.0, 0.1, 0.18, 1.0, 0.04, dark);
+            dot(0.0, -0.6, 0.38, red);
+        }
+        I::Computer => {
+            block(0.0, -0.2, 1.9, 1.3, 0.12, light);
+            block(0.0, -0.2, 1.6, 1.0, 0.04, dark);
+            block(-0.55, -0.4, 0.3, 0.1, 0.0, green);
+            block(-0.45, -0.15, 0.5, 0.1, 0.0, green);
+            block(-0.6, 0.1, 0.12, 0.2, 0.0, green);
+            block(0.0, 0.72, 1.3, 0.3, 0.06, light);
+        }
+        I::Handheld => {
+            block(0.0, 0.0, 1.3, 2.0, 0.14, blue);
+            block(0.0, -0.42, 0.98, 0.84, 0.05, dark);
+            cross(-0.3, 0.55, 0.42, dark);
+            dot(0.18, 0.62, 0.1, yellow);
+            dot(0.42, 0.46, 0.1, yellow);
+        }
+        I::Floppy => {
+            block(0.0, 0.0, 1.9, 1.9, 0.08, blue);
+            block(0.05, -0.62, 1.0, 0.66, 0.02, light);
+            block(0.3, -0.62, 0.22, 0.48, 0.0, blue);
+            block(0.0, 0.42, 1.4, 1.0, 0.02, light);
+            block(0.0, 0.25, 1.05, 0.06, 0.0, dark);
+            block(0.0, 0.5, 1.05, 0.06, 0.0, dark);
+        }
+        I::App => {
+            block(0.0, 0.0, 1.9, 1.9, 0.36, green);
+            painter.add(egui::Shape::convex_polygon(
+                vec![at(-0.3, -0.5), at(0.55, 0.0), at(-0.3, 0.5)],
+                light,
+                Stroke::NONE,
+            ));
+        }
+    }
+}
+
 /// Our own globe icon: a circle with meridians and parallels.
 fn paint_globe_icon(painter: &egui::Painter, center: Pos2, r: f32, alpha: f32) {
     let fill = Color32::from_rgb(0x2f, 0xa3, 0x8a).gamma_multiply(alpha);
@@ -4151,8 +4615,19 @@ fn restart_program(
         .or_else(|| current_exe.map(PathBuf::into_os_string))
 }
 
+/// Stop a player: RetroArch quits when told to, so that it can save; others get a signal.
+fn stop_child(child: &mut Child) {
+    if !player::ask_to_stop(child) {
+        stop_player(child.id());
+    }
+}
+
 fn stop_player(pid: u32) {
     log::info!("stopping player (pid {pid})");
+    // A program is its own process group: also what its script started.
+    if player::signal_group(pid, libc::SIGTERM) {
+        return;
+    }
     if let Ok(pid) = libc::pid_t::try_from(pid) {
         // SAFETY: plain kill(2) on our own child process.
         unsafe {

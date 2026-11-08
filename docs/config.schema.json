@@ -91,6 +91,18 @@
         }
       }
     },
+    "power": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Turning the computer off from the TV, for all home screens.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "false: no power button on the TV, Ctrl+Q and the remote's power key do nothing; only the button on the computer is left."
+        }
+      }
+    },
     "statistics": {
       "type": "object",
       "additionalProperties": false,
@@ -144,6 +156,11 @@
           "maxLength": 60,
           "description": "Shown on the tile. No control characters, no leading/trailing spaces."
         },
+        "remember_recent": {
+          "type": "boolean",
+          "default": true,
+          "description": "List the files played last when the folder is opened."
+        },
         "path": {
           "type": "string",
           "maxLength": 4096,
@@ -164,6 +181,82 @@
           "type": "boolean",
           "default": false,
           "description": "Show pictures."
+        }
+      }
+    },
+    "emulator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "system"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "system": { "enum": ["dos", "snes"] },
+        "dos": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "For system dos: at least one drive.",
+          "properties": {
+            "drives": {
+              "type": "array",
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["letter", "path"],
+                "properties": {
+                  "letter": { "type": "string", "pattern": "^[A-Y]$", "description": "Z: is DOSBox's own drive." },
+                  "path": { "type": "string", "description": "A folder or a disk image (.img, .ima, .iso, .cue). Folders and floppy/hard disk images run from a private copy." }
+                }
+              }
+            },
+            "autostart": { "type": "string", "maxLength": 260, "default": "", "description": "File to start, with options; on the first drive unless it names one." },
+            "startup_script": { "type": "string", "maxLength": 4000, "default": "", "description": "DOS commands after mounting and before the game." },
+            "correct_aspect": { "type": "boolean", "default": true },
+            "keep_saves": { "type": "boolean", "default": true, "description": "false: a fresh copy of the original at every start." }
+          }
+        },
+        "snes": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "For system snes: rom is needed.",
+          "properties": {
+            "rom": { "type": "string", "default": "", "description": "Absolute path to a .sfc, .smc, .swc, .fig or .zip file." },
+            "filter": { "enum": ["none", "crt_easymode", "zfast_crt", "crt_geom", "crt_lottes", "crt_royale"], "default": "crt_easymode" },
+            "aspect": { "enum": ["4_3", "8_7", "fill"], "default": "4_3" },
+            "integer_scale": { "type": "boolean", "default": false },
+            "resume": { "type": "boolean", "default": true, "description": "Continue exactly where the game was left (a save state). Battery saves are always kept." }
+          }
+        }
+      }
+    },
+    "program": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "command"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "description": "An absolute path, or a program name looked up in PATH. Never run through a shell."
+        },
+        "args": {
+          "type": "array",
+          "maxItems": 64,
+          "default": [],
+          "items": { "type": "string", "maxLength": 4096 },
+          "description": "Each argument exactly as it is passed to the program."
+        },
+        "working_dir": {
+          "type": "string",
+          "description": "Absolute path of the folder to start in."
+        },
+        "icon": {
+          "enum": ["gamepad", "joystick", "computer", "handheld", "floppy", "app"],
+          "default": "gamepad"
         }
       }
     },
@@ -422,6 +515,24 @@
           "description": "Folders shown in the \"Folders\" row. Always accessed read-only. Ids are unique across all home screens.",
           "items": {
             "$ref": "#/$defs/folder"
+          }
+        },
+        "emulators": {
+          "type": "array",
+          "maxItems": 50,
+          "default": [],
+          "description": "Games in the \"Emulators\" row (DOSBox, Snes9x through RetroArch). Ids are unique across all home screens.",
+          "items": {
+            "$ref": "#/$defs/emulator"
+          }
+        },
+        "programs": {
+          "type": "array",
+          "maxItems": 50,
+          "default": [],
+          "description": "Programs in the \"Programs\" row (e.g. emulators), started and supervised by the media center. Ids are unique across all home screens.",
+          "items": {
+            "$ref": "#/$defs/program"
           }
         },
         "websites": {

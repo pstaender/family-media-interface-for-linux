@@ -23,6 +23,19 @@ import {
   type LimitRule,
   type Scope,
   type WebsiteSettings,
+  type ProgramSettings,
+  type EmulatorSettings,
+  type SnesFilter,
+  type SnesAspect,
+  newEmulator,
+  checkAllowedHosts,
+  DOS_UPLOAD_EXTENSIONS,
+  SNES_ROM_EXTENSIONS,
+  DOS_DRIVE_LETTERS,
+  SNES_FILTERS,
+  SNES_ASPECTS,
+  type ProgramIcon,
+  PROGRAM_ICONS,
   type Weekday,
 } from "../config";
 import { summarize, type UsageEntry } from "../usage-summary";
@@ -215,6 +228,8 @@ type Status = {
   /** Media centers of this user besides the one connected to the admin panel. */
   extraInstances?: number;
   extraPids?: number[];
+  /** The system no longer shuts down by itself on the remote's power key. */
+  remotePowerFree?: boolean;
   configError?: string | null;
   error?: string | null;
   locked?: boolean;
@@ -255,6 +270,9 @@ const PAGES: { id: string; label: string; icon: string; tabs: TabDef[] }[] = [
       { id: "websites", label: "Websites", icon: "world", saves: true },
       { id: "screensaver", label: "Screensaver", icon: "moon-stars", saves: true },
       { id: "games", label: "Games", icon: "device-gamepad-2", saves: true },
+      { id: "emulators", label: "Emulators", icon: "device-gamepad-2", saves: true },
+      { id: "programs", label: "Programs", icon: "player-play", saves: true },
+      { id: "power", label: "Power off", icon: "power", saves: true },
       { id: "remote", label: "Remote", icon: "device-remote" },
     ],
   },
@@ -275,6 +293,7 @@ const PAGES: { id: string; label: string; icon: string; tabs: TabDef[] }[] = [
     tabs: [
       { id: "pin", label: "PIN", icon: "lock", saves: true },
       { id: "password", label: "Admin password", icon: "password" },
+      { id: "admin", label: "Admin interface", icon: "world" },
     ],
   },
 ];
@@ -397,6 +416,15 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
     case "media/screensaver":
       content = <ScreensaverTab config={config} setConfig={setConfig} />;
       break;
+    case "media/emulators":
+      content = <EmulatorsSection emulators={screen.emulators} allIds={allIds} onChange={(emulators) => setScreen({ ...screen, emulators })} />;
+      break;
+    case "media/programs":
+      content = <ProgramsSection programs={screen.programs} allIds={allIds} onChange={(programs) => setScreen({ ...screen, programs })} />;
+      break;
+    case "media/power":
+      content = <PowerTab config={config} setConfig={setConfig} status={status} />;
+      break;
     case "media/remote":
       content = <RemoteTab status={status} reload={loadStatus} setNotice={setNotice} />;
       break;
@@ -424,6 +452,9 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
       break;
     case "parental/usage":
       content = <UsageTab config={config} setConfig={setConfig} setNotice={setNotice} />;
+      break;
+    case "security/admin":
+      content = <AdminInterfaceTab />;
       break;
     case "security/pin":
       content = (
@@ -524,7 +555,7 @@ type ConfigProps = { config: Config; setConfig: (c: Config) => void };
 type ScreenProps = { config: HomeScreen; setConfig: (s: HomeScreen) => void };
 
 /** The tabs that belong to one home screen (they show the home screen bar). */
-const SCREEN_TABS = ["media/home", "media/discs", "media/folders", "media/websites", "media/games", "parental/status", "parental/limits"];
+const SCREEN_TABS = ["media/home", "media/discs", "media/folders", "media/websites", "media/games", "media/emulators", "media/programs", "parental/status", "parental/limits"];
 
 /** Choose a home screen; on the media page also create, rename, star and delete them. */
 function ScreenBar(props: {
@@ -854,6 +885,30 @@ const SCREENSAVER_MODES: { id: ScreensaverMode; label: string; hint: string }[] 
     hint: "Flights over landscapes, cities, the sea and Earth from space, like on an Apple TV, in random order without sound. Up to 10 videos are downloaded once and stored on this computer.",
   },
 ];
+
+function PowerTab({ config, setConfig, status }: ConfigProps & { status: Status | null }) {
+  const enabled = config.power.enabled;
+  return (
+    <section className="card">
+      <p className="hint">For all home screens. The button on the computer itself always works.</p>
+      <label className="toggle">
+        <input type="checkbox" checked={enabled} onChange={(e) => setConfig({ ...config, power: { enabled: e.target.checked } })} />
+        <span>Allow turning off from the TV</span>
+      </label>
+      <p className="hint">
+        {enabled
+          ? "The TV shows the power button (exit, log out, shut down) and the remote's power key shuts the computer down. With a PIN, both ask for it."
+          : "No power button on the TV, and the remote's power key and Ctrl+Q do nothing. To turn the computer off, press the button on the computer."}
+      </p>
+      {status?.remotePowerFree === false && (
+        <p className="hint">
+          <strong>Not set up yet:</strong> the system still reacts to the remote's power key by itself and shuts down at once, whatever is set here.
+          Run this once on the computer, from an account with admin rights, and choose the remote: <code>scripts/remote-access.sh</code>
+        </p>
+      )}
+    </section>
+  );
+}
 
 function ScreensaverTab({ config, setConfig }: ConfigProps) {
   const s = config.screensaver;
@@ -1327,6 +1382,8 @@ const CATEGORY_LABELS: Record<string, string> = {
   pictures: "Pictures",
   website: "Websites",
   game: "Games",
+  program: "Programs",
+  emulator: "Emulators",
 };
 const clock = (unix: number) => new Date(unix * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
@@ -1370,7 +1427,7 @@ function UsageTab(props: ConfigProps & { setNotice: (n: Notice) => void }) {
           <span>
             Collect usage statistics
             <small>
-              The media center notes on which day, from when to when, which video, music, website, disc or game was
+              The media center notes on which day, from when to when, which video, music, website, disc, game, emulator or program was
               used. Everything stays on this computer.
             </small>
           </span>
@@ -1866,13 +1923,28 @@ function FoldersSection(props: { folders: FolderSettings[]; allIds: string[]; on
   const update = (i: number, patch: Partial<FolderSettings>) =>
     onChange(folders.map((f, j) => (j === i ? { ...f, ...patch } : f)));
 
+  const clone = (i: number) => {
+    const source = folders[i]!;
+    const name = `${source.name.slice(0, 53)} (copy)`;
+    const taken = [...props.allIds, ...folders.map((f) => f.id)];
+    onChange([...folders.slice(0, i + 1), { ...source, id: newFolderId(name, taken), name }, ...folders.slice(i + 1)]);
+  };
+
+  const move = (i: number, by: number) => {
+    const next = [...folders];
+    const [folder] = next.splice(i, 1);
+    next.splice(i + by, 0, folder!);
+    onChange(next);
+    setPicking(null);
+  };
+
   const picked = (path: string) => {
     if (picking === "new") {
       const base = path === "/" ? "Computer" : path.split("/").pop()!;
       const name = base.slice(0, 60);
       onChange([
         ...folders,
-        { id: newFolderId(name, props.allIds), name, path, video: true, audio: true, images: true },
+        { id: newFolderId(name, props.allIds), name, path, video: true, audio: true, images: true, remember_recent: true },
       ]);
     } else if (typeof picking === "number") {
       update(picking, { path });
@@ -1894,6 +1966,9 @@ function FoldersSection(props: { folders: FolderSettings[]; allIds: string[]; on
           onChange={(patch) => update(i, patch)}
           onRemove={() => onChange(folders.filter((_, j) => j !== i))}
           onPick={() => setPicking(i)}
+          onClone={folders.length < 50 ? () => clone(i) : undefined}
+          onUp={i > 0 ? () => move(i, -1) : undefined}
+          onDown={i + 1 < folders.length ? () => move(i, 1) : undefined}
         />
       ))}
       {picking !== null ? (
@@ -1909,19 +1984,53 @@ function FoldersSection(props: { folders: FolderSettings[]; allIds: string[]; on
   );
 }
 
+/** Does this folder exist and can it be read? An error text if not. */
+async function folderProblem(path: string): Promise<string | null> {
+  const res = await fetch(`/api/browse?path=${encodeURIComponent(path)}`);
+  if (res.ok) return null;
+  const data = await res.json().catch(() => ({}));
+  return data.error ?? "This folder can't be read.";
+}
+
+/** What was typed as a path, without trailing slashes. */
+const cleanPath = (typed: string) => typed.trim().replace(/\/+$/, "") || (typed.trim() ? "/" : "");
+
 function FolderEditor(props: {
   folder: FolderSettings;
   onChange: (patch: Partial<FolderSettings>) => void;
   onRemove: () => void;
   onPick: () => void;
+  onClone?: () => void;
+  onUp?: () => void;
+  onDown?: () => void;
 }) {
   const { folder, onChange } = props;
   const nothing = !folder.video && !folder.audio && !folder.images;
+  const [typed, setTyped] = useState(folder.path);
+  const [pathError, setPathError] = useState<string | null>(null);
+  useEffect(() => setTyped(folder.path), [folder.path]);
+
+  /** A typed path counts only if it can be read; otherwise the previous one comes back. */
+  const applyPath = async () => {
+    const path = cleanPath(typed);
+    if (path === folder.path) {
+      setTyped(folder.path);
+      return;
+    }
+    const problem = await folderProblem(path);
+    if (problem) {
+      setTyped(folder.path);
+      setPathError(`${path}: ${problem} The previous folder is kept.`);
+    } else {
+      setPathError(null);
+      onChange({ path });
+    }
+  };
 
   return (
     <div className="folder">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <label className="field" style={{ flex: 1, marginBottom: 8 }}>
+      <div className="row name-row">
+        <label className="field">
           <span>Name on the tile</span>
           <input
             type="text"
@@ -1931,12 +2040,26 @@ function FolderEditor(props: {
             onBlur={() => onChange({ name: folder.name.trim().replace(/\p{Cc}/gu, "") })}
           />
         </label>
+        <button disabled={!props.onUp} onClick={props.onUp} aria-label={`Move ${folder.name} up`}>↑</button>
+        <button disabled={!props.onDown} onClick={props.onDown} aria-label={`Move ${folder.name} down`}>↓</button>
+        <button disabled={!props.onClone} onClick={props.onClone} aria-label={`Clone ${folder.name}`}>Clone</button>
         <button onClick={props.onRemove} aria-label={`Remove ${folder.name}`}>Remove</button>
       </div>
       <div className="row" style={{ marginBottom: 8 }}>
-        <code className="path">{folder.path}</code>
+        <input
+          type="text"
+          aria-label="Path"
+          style={{ flex: 1, minWidth: 0, width: "auto" }}
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          onBlur={() => void applyPath()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+          }}
+        />
         <button className="small" onClick={props.onPick}>Change…</button>
       </div>
+      {pathError && <div className="banner error">{pathError}</div>}
       <div className="row kinds">
         {(
           [
@@ -1950,25 +2073,54 @@ function FolderEditor(props: {
           </label>
         ))}
       </div>
+      <label className="check" style={{ display: "block", marginTop: 6 }}>
+        <input type="checkbox" checked={folder.remember_recent} onChange={(e) => onChange({ remember_recent: e.target.checked })} /> Remember the files played last
+      </label>
       {nothing && <div className="banner warn">Choose at least one kind of file to show.</div>}
     </div>
   );
 }
 
-function FolderPicker(props: { start?: string; onPick: (path: string) => void; onCancel: () => void }) {
-  const [listing, setListing] = useState<{ path: string; parent: string | null; dirs: string[]; error?: string } | null>(null);
+function FolderPicker(props: { start?: string; files?: "dos" | "snes"; noFolders?: boolean; onPick: (path: string) => void; onCancel: () => void }) {
+  const [listing, setListing] = useState<{ path: string; parent: string | null; dirs: string[]; files?: string[]; error?: string } | null>(null);
+
+  const [typed, setTyped] = useState("");
+  const [typedError, setTypedError] = useState<string | null>(null);
 
   const open = useCallback(async (path?: string) => {
-    const query = path ? `?path=${encodeURIComponent(path)}` : "";
+    const params = new URLSearchParams();
+    if (path) params.set("path", path);
+    if (props.files) params.set("files", props.files);
+    const query = params.size > 0 ? `?${params}` : "";
     const res = await fetch(`/api/browse${query}`);
     const data = await res.json();
     if (res.ok) setListing(data);
     else setListing({ path: data.path ?? path ?? "/", parent: data.parent ?? null, dirs: [], error: data.error });
-  }, []);
+  }, [props.files]);
 
   useEffect(() => {
     open(props.start);
   }, [open, props.start]);
+
+  useEffect(() => setTyped(listing?.path ?? ""), [listing?.path]);
+
+  /** Go to a typed folder; if it can't be read, stay here and bring the path back. */
+  const goToTyped = async () => {
+    if (!listing) return;
+    const path = cleanPath(typed);
+    if (path === listing.path) {
+      setTyped(listing.path);
+      return;
+    }
+    const problem = await folderProblem(path);
+    if (problem) {
+      setTyped(listing.path);
+      setTypedError(`${path}: ${problem}`);
+    } else {
+      setTypedError(null);
+      void open(path);
+    }
+  };
 
   if (!listing) return null;
   const child = (name: string) => (listing.path === "/" ? `/${name}` : `${listing.path}/${name}`);
@@ -1976,22 +2128,40 @@ function FolderPicker(props: { start?: string; onPick: (path: string) => void; o
   return (
     <div className="picker">
       <div className="row" style={{ justifyContent: "space-between" }}>
-        <code className="path">{listing.path}</code>
+        <input
+          type="text"
+          aria-label="Folder"
+          style={{ flex: 1, minWidth: 0, width: "auto" }}
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          onBlur={() => void goToTyped()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+          }}
+        />
         <button className="small" disabled={listing.parent === null} onClick={() => open(listing.parent ?? "/")}>↑ Up</button>
       </div>
+      {typedError && <div className="banner error" style={{ marginTop: 8 }}>{typedError}</div>}
       {listing.error && <div className="banner error" style={{ marginTop: 8 }}>{listing.error}</div>}
       <ul className="dirs">
-        {listing.dirs.length === 0 && !listing.error && <li className="hint">No subfolders</li>}
+        {listing.dirs.length === 0 && (listing.files?.length ?? 0) === 0 && !listing.error && <li className="hint">No subfolders</li>}
         {listing.dirs.map((d) => (
           <li key={d}>
             <button className="link" onClick={() => open(child(d))}>📁 {d}</button>
           </li>
         ))}
+        {listing.files?.map((f) => (
+          <li key={f}>
+            <button className="link" onClick={() => props.onPick(child(f))}>📄 {f}</button>
+          </li>
+        ))}
       </ul>
       <div className="row">
-        <button className="primary" disabled={!!listing.error} onClick={() => props.onPick(listing.path)}>
-          Use this folder
-        </button>
+        {!props.noFolders && (
+          <button className="primary" disabled={!!listing.error} onClick={() => props.onPick(listing.path)}>
+            Use this folder
+          </button>
+        )}
         <button onClick={props.onCancel}>Cancel</button>
       </div>
     </div>
@@ -2034,6 +2204,319 @@ function WebsitesSection(props: { websites: WebsiteSettings[]; allIds: string[];
   );
 }
 
+const SNES_FILTER_LABELS: Record<SnesFilter, string> = {
+  none: "None (sharp pixels)",
+  crt_easymode: "CRT Easymode: balanced, the safe choice",
+  zfast_crt: "zfast CRT: light, for weak computers",
+  crt_geom: "CRT Geom: curved tube, classic look",
+  crt_lottes: "CRT Lottes: bright, visible shadow mask",
+  crt_royale: "CRT Royale: most realistic, needs a strong graphics card",
+};
+
+const SNES_ASPECT_LABELS: Record<SnesAspect, string> = {
+  "4_3": "4:3, as on an old TV (recommended)",
+  "8_7": "8:7, square pixels",
+  fill: "16:9, fill the screen (stretched)",
+};
+
+function EmulatorsSection(props: { emulators: EmulatorSettings[]; allIds: string[]; onChange: (emulators: EmulatorSettings[]) => void }) {
+  const { emulators, onChange } = props;
+  const update = (i: number, emulator: EmulatorSettings) => onChange(emulators.map((e, j) => (j === i ? emulator : e)));
+  const add = () => {
+    const taken = [...props.allIds, ...emulators.map((e) => e.id)];
+    let id = "game";
+    for (let n = 2; taken.includes(id); n++) id = `game-${n}`;
+    onChange([...emulators, newEmulator(id)]);
+  };
+  return (
+    <section className="card">
+      <p className="hint">
+        Games in their own row on the TV, always in fullscreen. The remote's return or home button closes them, and so does holding Select + Start on a gamepad for a second.
+      </p>
+      {emulators.length === 0 && <p>No games yet.</p>}
+      {emulators.map((emulator, i) => (
+        <EmulatorEditor key={emulator.id} emulator={emulator} onChange={(e) => update(i, e)} onRemove={() => onChange(emulators.filter((_, j) => j !== i))} />
+      ))}
+      {emulators.length < 50 && <button onClick={add}>Add game</button>}
+    </section>
+  );
+}
+
+/** Upload a game file into curator's own folder; `onDone` gets its path there. */
+function UploadButton(props: { kind: "dos" | "snes"; onDone: (path: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const extensions = props.kind === "dos" ? DOS_UPLOAD_EXTENSIONS : SNES_ROM_EXTENSIONS;
+  const upload = async (file: File) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const query = new URLSearchParams({ kind: props.kind, name: file.name });
+      const res = await fetch(`/api/emulators/upload?${query}`, { method: "POST", headers: { "X-Curator": "1", "Content-Type": "application/octet-stream" }, body: file });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? `Upload failed (${res.status})`);
+      props.onDone(data.path);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <label className={`upload small${busy ? " busy" : ""}`} style={{ cursor: "pointer" }}>
+        <button type="button" className="small" disabled={busy} onClick={(e) => (e.currentTarget.nextElementSibling as HTMLInputElement).click()}>
+          {busy ? "Uploading…" : "Upload…"}
+        </button>
+        <input
+          type="file"
+          hidden
+          accept={extensions.map((x) => `.${x}`).join(",")}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) void upload(file);
+          }}
+        />
+      </label>
+      {error && <small className="hint" style={{ color: "var(--err-text)" }}>{error}</small>}
+    </>
+  );
+}
+
+function EmulatorEditor(props: { emulator: EmulatorSettings; onChange: (e: EmulatorSettings) => void; onRemove: () => void }) {
+  const { emulator, onChange } = props;
+  const [picking, setPicking] = useState<number | "rom" | null>(null);
+  const setDos = (patch: Partial<EmulatorSettings["dos"]>) => onChange({ ...emulator, dos: { ...emulator.dos, ...patch } });
+  const setSnes = (patch: Partial<EmulatorSettings["snes"]>) => onChange({ ...emulator, snes: { ...emulator.snes, ...patch } });
+  const drives = emulator.dos.drives;
+  const setDrive = (i: number, patch: Partial<(typeof drives)[number]>) => setDos({ drives: drives.map((d, j) => (j === i ? { ...d, ...patch } : d)) });
+  const addDrive = () => {
+    const letter = ["C", "D", "E", "A", "B", ...DOS_DRIVE_LETTERS].find((l) => !drives.some((d) => d.letter === l));
+    if (letter) setDos({ drives: [...drives, { letter, path: "" }] });
+  };
+  const inFolder = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) || "/" : undefined);
+  return (
+    <div className="folder">
+      <div className="row name-row">
+        <label className="field">
+          <span>Name on the tile</span>
+          <input
+            type="text"
+            maxLength={60}
+            value={emulator.name}
+            placeholder="e.g. Space Game"
+            onChange={(e) => onChange({ ...emulator, name: e.target.value })}
+            onBlur={() => onChange({ ...emulator, name: emulator.name.trim().replace(/\p{Cc}/gu, "") })}
+          />
+        </label>
+        <button onClick={props.onRemove} aria-label={`Remove ${emulator.name || "game"}`}>Remove</button>
+      </div>
+      <label className="field">
+        <span>System</span>
+        <select value={emulator.system} onChange={(e) => onChange({ ...emulator, system: e.target.value as EmulatorSettings["system"] })}>
+          <option value="dos">DOS (DOSBox)</option>
+          <option value="snes">SNES (Snes9x)</option>
+        </select>
+      </label>
+      {emulator.system === "dos" && (
+        <>
+          <div className="field">
+            <span>Drives</span>
+            {drives.map((drive, i) => (
+              <div key={i}>
+                <div className="row" style={{ marginBottom: 6 }}>
+                  <select aria-label="Drive letter" style={{ width: "5em", flex: "none" }} value={drive.letter} onChange={(e) => setDrive(i, { letter: e.target.value })}>
+                    {DOS_DRIVE_LETTERS.filter((l) => l === drive.letter || !drives.some((d) => d.letter === l)).map((l) => (
+                      <option key={l} value={l}>{l}:</option>
+                    ))}
+                  </select>
+                  <input type="text" style={{ flex: 1, minWidth: 0 }} value={drive.path} placeholder="/home/media/dos/game   or   /home/media/dos/disk.img" onChange={(e) => setDrive(i, { path: e.target.value.trim() })} />
+                  <button className="small" onClick={() => setPicking(picking === i ? null : i)}>Choose…</button>
+                  <UploadButton kind="dos" onDone={(path) => setDrive(i, { path })} />
+                  <button className="small" aria-label={`Remove drive ${drive.letter}`} onClick={() => setDos({ drives: drives.filter((_, j) => j !== i) })}>Remove</button>
+                </div>
+                {picking === i && (
+                  <FolderPicker
+                    files="dos"
+                    start={inFolder(drive.path)}
+                    onPick={(path) => {
+                      setDrive(i, { path });
+                      setPicking(null);
+                    }}
+                    onCancel={() => setPicking(null)}
+                  />
+                )}
+              </div>
+            ))}
+            {drives.length < 8 && <button className="small" onClick={addDrive}>Add drive</button>}
+            <small className="hint">
+              A folder on this computer, or a disk image (.img, .ima, .iso, .cue; chosen here or uploaded). Floppy, hard disk or CD is recognized by itself. Drive Z: belongs to DOSBox. At its first start the game is copied into the media center's own folder and runs from there, so your files are never changed.
+            </small>
+          </div>
+          <label className="field">
+            <span>Start automatically (optional)</span>
+            <input type="text" value={emulator.dos.autostart} placeholder="GAME\START.EXE" onChange={(e) => setDos({ autostart: e.target.value })} />
+            <small className="hint">A file on the first drive (or with its drive, like A:\START.BAT), with options if needed. Empty: the DOS prompt. When the game ends, DOSBox closes.</small>
+          </label>
+          <label className="field">
+            <span>Startup script (optional)</span>
+            <textarea rows={3} value={emulator.dos.startup_script} placeholder={"keyb gr\ncycles 3000"} onChange={(e) => setDos({ startup_script: e.target.value.replace(/\r/g, "") })} />
+            <small className="hint">DOS commands that run after the drives are mounted and before the game. For a game that runs too fast, try a lower <code>cycles</code> value.</small>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={emulator.dos.correct_aspect} onChange={(e) => setDos({ correct_aspect: e.target.checked })} /> Correct the picture to 4:3 (recommended)
+          </label>
+          <label className="check" style={{ display: "block" }}>
+            <input type="checkbox" checked={emulator.dos.keep_saves} onChange={(e) => setDos({ keep_saves: e.target.checked })} /> Keep what the game saves
+          </label>
+          <small className="hint">Off: the game starts fresh from the original every time. DOSBox can't freeze a running game, so only what the game saves itself is kept.</small>
+        </>
+      )}
+      {emulator.system === "snes" && (
+        <>
+          <div className="field">
+            <span>ROM file</span>
+            <div className="row">
+              <input type="text" style={{ flex: 1, minWidth: 0 }} value={emulator.snes.rom} placeholder="/home/media/snes/game.sfc" onChange={(e) => setSnes({ rom: e.target.value.trim() })} />
+              <button className="small" onClick={() => setPicking(picking === "rom" ? null : "rom")}>Choose…</button>
+              <UploadButton kind="snes" onDone={(rom) => setSnes({ rom })} />
+            </div>
+            {picking === "rom" && (
+              <FolderPicker
+                files="snes"
+                noFolders
+                start={inFolder(emulator.snes.rom)}
+                onPick={(rom) => {
+                  setSnes({ rom });
+                  setPicking(null);
+                }}
+                onCancel={() => setPicking(null)}
+              />
+            )}
+          </div>
+          <label className="field">
+            <span>CRT filter</span>
+            <select value={emulator.snes.filter} onChange={(e) => setSnes({ filter: e.target.value as SnesFilter })}>
+              {SNES_FILTERS.map((f) => (
+                <option key={f} value={f}>{SNES_FILTER_LABELS[f]}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Aspect ratio</span>
+            <select value={emulator.snes.aspect} onChange={(e) => setSnes({ aspect: e.target.value as SnesAspect })}>
+              {SNES_ASPECTS.map((a) => (
+                <option key={a} value={a}>{SNES_ASPECT_LABELS[a]}</option>
+              ))}
+            </select>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={emulator.snes.integer_scale} onChange={(e) => setSnes({ integer_scale: e.target.checked })} /> Whole-number scaling (even scanlines, but a border around the picture)
+          </label>
+          <label className="check" style={{ display: "block" }}>
+            <input type="checkbox" checked={emulator.snes.resume} onChange={(e) => setSnes({ resume: e.target.checked })} /> Continue where the game was left
+          </label>
+          <small className="hint">The game's own saves (battery saves) are always kept.</small>
+        </>
+      )}
+    </div>
+  );
+}
+
+const PROGRAM_ICON_LABELS: Record<ProgramIcon, string> = {
+  gamepad: "Gamepad",
+  joystick: "Joystick",
+  computer: "Old computer",
+  handheld: "Handheld console",
+  floppy: "Floppy disk",
+  app: "Program",
+};
+
+function ProgramsSection(props: { programs: ProgramSettings[]; allIds: string[]; onChange: (programs: ProgramSettings[]) => void }) {
+  const { programs, onChange } = props;
+  const update = (i: number, patch: Partial<ProgramSettings>) => onChange(programs.map((p, j) => (j === i ? { ...p, ...patch } : p)));
+  const add = () => {
+    const taken = [...props.allIds, ...programs.map((p) => p.id)];
+    let id = "program";
+    for (let n = 2; taken.includes(id); n++) id = `program-${n}`;
+    onChange([...programs, { id, name: "", command: "", args: [], icon: "gamepad" }]);
+  };
+  return (
+    <section className="card">
+      <p className="hint">
+        Programs in their own row on the TV, e.g. DOSBox or an emulator (start it in fullscreen with its own option). The remote's return or home button closes
+        the program, and it ends when the time is up.
+      </p>
+      <p className="hint">
+        <strong>Only add programs you trust.</strong> They run with the media center's account, which can also change these settings, so nothing that gives
+        access to files or other programs (file managers, terminals).
+      </p>
+      {programs.length === 0 && <p>No programs yet.</p>}
+      {programs.map((program, i) => (
+        <div className="folder" key={program.id}>
+          <div className="row name-row">
+            <label className="field">
+              <span>Name on the tile</span>
+              <input
+                type="text"
+                maxLength={60}
+                value={program.name}
+                placeholder="e.g. Space Game"
+                onChange={(e) => update(i, { name: e.target.value })}
+                onBlur={() => update(i, { name: program.name.trim().replace(/\p{Cc}/gu, "") })}
+              />
+            </label>
+            <button onClick={() => onChange(programs.filter((_, j) => j !== i))} aria-label={`Remove ${program.name || "program"}`}>Remove</button>
+          </div>
+          <label className="field">
+            <span>Icon</span>
+            <select value={program.icon} onChange={(e) => update(i, { icon: e.target.value as ProgramIcon })}>
+              {PROGRAM_ICONS.map((icon) => (
+                <option key={icon} value={icon}>{PROGRAM_ICON_LABELS[icon]}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Program or script</span>
+            <input
+              type="text"
+              value={program.command}
+              placeholder="dosbox   or   /home/media/games/start.sh"
+              onChange={(e) => update(i, { command: e.target.value.trim() })}
+            />
+            <small className="hint">A program name or the full path of an executable script. Arguments go below.</small>
+          </label>
+          <label className="field">
+            <span>Arguments (one per line, no quotes needed)</span>
+            <textarea
+              rows={3}
+              value={program.args.join("\n")}
+              placeholder={"/home/media/dos/game/GAME.EXE\n-fullscreen\n-exit"}
+              onChange={(e) => update(i, { args: e.target.value.split("\n") })}
+              onBlur={() => update(i, { args: program.args.map((a) => a.trim()).filter((a) => a !== "") })}
+            />
+          </label>
+          <label className="field">
+            <span>Start in folder (optional)</span>
+            <input
+              type="text"
+              value={program.working_dir ?? ""}
+              placeholder="/home/media/dos/game"
+              onChange={(e) => {
+                const dir = e.target.value.trim();
+                const { working_dir: _old, ...rest } = program;
+                onChange(programs.map((p, j) => (j === i ? (dir ? { ...rest, working_dir: dir } : rest) : p)));
+              }}
+            />
+          </label>
+        </div>
+      ))}
+      {programs.length < 50 && <button onClick={add}>Add program</button>}
+    </section>
+  );
+}
+
 function WebsiteEditor(props: {
   site: WebsiteSettings;
   onChange: (patch: Partial<WebsiteSettings>) => void;
@@ -2044,8 +2527,8 @@ function WebsiteEditor(props: {
 
   return (
     <div className="folder">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <label className="field" style={{ flex: 1, marginBottom: 8 }}>
+      <div className="row name-row">
+        <label className="field">
           <span>Name on the tile</span>
           <input
             type="text"
@@ -2155,6 +2638,57 @@ function LogoPreview({ id, url }: { id: string; url: string }) {
         {error && <p className="hint" style={{ color: "var(--err-text)", margin: "4px 0 0" }}>{error}</p>}
       </div>
     </div>
+  );
+}
+
+function AdminInterfaceTab() {
+  const [text, setText] = useState("");
+  const [info, setInfo] = useState<{ machineName: string; localOnly: boolean } | null>(null);
+  const [notice, setNotice] = useState<Notice>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api<{ allowedHosts: string[]; machineName: string; localOnly: boolean }>("GET", "/api/admin-interface")
+      .then((d) => {
+        setText(d.allowedHosts.join("\n"));
+        setInfo(d);
+      })
+      .catch((e) => setNotice({ kind: "error", text: (e as Error).message }));
+  }, []);
+
+  const checked = checkAllowedHosts(text.split("\n"));
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!checked.ok) return;
+    setBusy(true);
+    try {
+      const saved = await api<{ allowedHosts: string[] }>("PUT", "/api/admin-interface", { allowedHosts: checked.hosts });
+      setText(saved.allowedHosts.join("\n"));
+      setNotice({ kind: "ok", text: "Saved. The admin panel answers on these names right away." });
+    } catch (err) {
+      setNotice({ kind: "error", text: (err as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="card">
+      <form onSubmit={submit}>
+        {notice && <div className={`banner ${notice.kind}`}>{notice.text}</div>}
+        <label className="field">
+          <span>Allowed host names (one per line)</span>
+          <textarea rows={5} spellCheck={false} value={text} placeholder={info?.machineName ?? ""} onChange={(e) => setText(e.target.value)} />
+        </label>
+        {!checked.ok && <div className="banner error">{checked.error}</div>}
+        <p className="hint">
+          Names you reach the admin panel by, e.g. one your router gives this computer. Always reachable, without being listed: localhost, 127.0.0.1, this computer's IP addresses
+          {info && <>, {info.machineName} and {info.machineName}.local</>}.
+        </p>
+        {info?.localOnly && <div className="banner error">The admin panel only listens on this computer (<code>--host</code> setting), so other names won't reach it.</div>}
+        <button className="primary" disabled={busy || !checked.ok || info === null}>Save</button>
+      </form>
+    </section>
   );
 }
 

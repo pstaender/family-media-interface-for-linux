@@ -61,6 +61,13 @@ impl PowerHold {
     }
 }
 
+/// Does a press of the remote's power key shut down now? Never when switched off in the
+/// settings; not on the lock screen (only a parent decides there) and not during the remote
+/// setup, where it is just another button.
+pub fn remote_key_acts(enabled: bool, locked: bool, calibrating: bool) -> bool {
+    enabled && !locked && !calibrating
+}
+
 /// Shut the computer down through logind (allowed for the user at the screen without a
 /// password, unless other users are logged in; then polkit refuses without asking).
 pub fn power_off() -> Result<(), String> {
@@ -82,6 +89,14 @@ mod tests {
 
     fn at(t0: Instant, ms: u64) -> Instant {
         t0 + Duration::from_millis(ms)
+    }
+
+    #[test]
+    fn remote_key_only_when_allowed() {
+        assert!(remote_key_acts(true, false, false));
+        assert!(!remote_key_acts(false, false, false), "switched off");
+        assert!(!remote_key_acts(true, true, false), "lock screen");
+        assert!(!remote_key_acts(true, false, true), "remote setup");
     }
 
     #[test]

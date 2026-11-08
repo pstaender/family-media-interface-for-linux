@@ -7,7 +7,7 @@
 # by running this script you decide that for your installation.
 #
 # Usage:  scripts/setup.sh [--no-makemkv]
-#         --no-makemkv: only install the system packages (no Blu-ray support)
+#         --no-makemkv: only install the system packages and emulators (no Blu-ray support)
 # Env:    MAKEMKV_VERSION (default 2.0.0), PREFIX (default /usr/local),
 #         BUILD_DIR (default ~/.cache/curator/build)
 
@@ -17,6 +17,12 @@ MAKEMKV_VERSION="${MAKEMKV_VERSION:-2.0.0}"
 PREFIX="${PREFIX:-/usr/local}"
 BUILD_DIR="${BUILD_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/curator/build}"
 MAKEMKV_URL="https://www.makemkv.com/download"
+# RetroArch's packages come without CRT filters and gamepad profiles: pinned versions.
+SHADERS_COMMIT=f277bd87e454a68c50e01e61e3588118d56b1365
+SHADERS_SHA256=94127dc1ad7f4bdc77f6451acedd7d6aa049d42dbaba548933ede9fe66e36ca0
+JOYPADS_COMMIT=2e3b8a2728d5efd00fa0207d07ba2488b89e87b2
+JOYPADS_SHA256=0143f69b5b16ec14a0e09812c1c06501591440890b0220344e0432f08bc19b3a
+RETROARCH_DIR="$PREFIX/share/curator/retroarch"
 
 APT_PACKAGES=(
     # MakeMKV build dependencies (GUI disabled, so no Qt)
@@ -43,6 +49,40 @@ install_packages() {
         die "Only apt-based distributions (Debian, Ubuntu, Mint) are supported so far.
 Please install the equivalents of: ${APT_PACKAGES[*]}"
     fi
+}
+
+# One pinned libretro repository, only the given folders, into $RETROARCH_DIR/<target>.
+install_libretro_files() {
+    local repo="$1" commit="$2" sha="$3" target="$4"
+    shift 4
+    local tarball="$BUILD_DIR/$repo-$commit.tar.gz"
+    if [[ ! -f $tarball ]]; then
+        curl -fL --proto '=https' --retry 3 -o "$tarball.part" "https://codeload.github.com/libretro/$repo/tar.gz/$commit" || return 1
+        mv "$tarball.part" "$tarball"
+    fi
+    echo "$sha  $tarball" | sha256sum -c --quiet - || { rm -f "$tarball"; return 1; }
+    local tmp
+    tmp="$(mktemp -d)"
+    local patterns=()
+    local folder
+    for folder in "$@"; do patterns+=("*/$folder/*"); done
+    tar xzf "$tarball" -C "$tmp" --strip-components=1 --wildcards "${patterns[@]}" || { rm -rf "$tmp"; return 1; }
+    sudo mkdir -p "$RETROARCH_DIR/$target"
+    sudo cp -r "$tmp"/. "$RETROARCH_DIR/$target/"
+    rm -rf "$tmp"
+}
+
+# Not fatal: everything else works without the emulators, and the TV says what is missing.
+install_emulators() {
+    info "Installing the emulators (DOSBox, RetroArch with Snes9x)"
+    # Separate: Snes9x is in an optional package section (multiverse / non-free).
+    sudo apt-get install -y dosbox retroarch libretro-snes9x ||
+        printf 'warning: not all emulator packages could be installed\n' >&2
+    mkdir -p "$BUILD_DIR"
+    install_libretro_files glsl-shaders "$SHADERS_COMMIT" "$SHADERS_SHA256" shaders crt blurs ||
+        printf 'warning: CRT filters not installed; games run without them\n' >&2
+    install_libretro_files retroarch-joypad-autoconfig "$JOYPADS_COMMIT" "$JOYPADS_SHA256" autoconfig udev ||
+        printf 'warning: gamepad profiles not installed\n' >&2
 }
 
 download() {
@@ -117,6 +157,7 @@ for arg in "$@"; do
 done
 
 install_packages
+install_emulators
 if [[ $WITH_MAKEMKV == 1 ]]; then
     build_makemkv
     check

@@ -6,6 +6,7 @@ mod control;
 mod cover;
 mod disc;
 mod dodger;
+mod emulator;
 mod gamepad;
 mod highscores;
 mod i18n;

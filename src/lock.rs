@@ -97,6 +97,11 @@ impl LockView {
     }
 
     /// The PIN pad to confirm something only a parent may do.
+    /// Does this screen guard leaving the media center or shutting down?
+    pub fn is_for_power(&self) -> bool {
+        matches!(self.purpose, Some(Purpose::Exit | Purpose::ShutDown))
+    }
+
     pub fn for_purpose(purpose: Purpose) -> Self {
         Self {
             purpose: Some(purpose),

@@ -107,8 +107,31 @@ label.field span {
   margin-bottom: 4px;
 }
 
+.row.name-row {
+  align-items: flex-end;
+  margin-bottom: 8px;
+}
+
+.name-row .field {
+  flex: 1 1 14em;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+div.field > span {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+div.field > small.hint {
+  display: block;
+  margin-top: 4px;
+}
+
 input[type="password"],
 input[type="text"],
+textarea,
 select {
   width: 100%;
   padding: 9px 11px;

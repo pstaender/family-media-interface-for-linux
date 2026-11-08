@@ -193,7 +193,9 @@ previous, volume up / down, mute):
 1. Run `scripts/remote-access.sh` once (in a normal terminal; asks for your password) and
    choose the remote from the list. It lets the logged-in user read **only that device**, so
    the media center gets every button, also those X11 never delivers to any window (many
-   remotes send OK as `KEY_SELECT`). Undo: `scripts/remote-access.sh --remove`.
+   remotes send OK as `KEY_SELECT`). It also stops the system from shutting down by itself
+   on the remote's power key, so the setting **Home screen & media → Power off** applies to
+   it. Undo: `scripts/remote-access.sh --remove`.
 2. Admin panel → **Home screen & media → Remote → Set up the remote on the TV**. Switch the
    remote's mouse / pointer mode off first (in that mode it sends other buttons). The TV asks
    for one button after the other; a button your remote doesn't have is skipped after 10 s.
@@ -286,6 +288,7 @@ Blocked pages are logged as `curator-web: blocked …`.
 | `~/.config/curator/admin.json` | admin password hash |
 | `~/.local/share/curator/` | resume positions, usage statistics (`statistics/`, only if turned on), usage time (`usage.json`), remote buttons (`remote.json`), recently played files per folder (`recent.json`) |
 | `/etc/udev/rules.d/70-curator-remote.rules` | read access to the remote (`scripts/remote-access.sh`) |
+| `/etc/udev/rules.d/71-curator-remote-power.rules` | the system ignores the remote's power key, the media center handles it (`scripts/remote-access.sh`) |
 | `~/.cache/curator/` | disc info, website cookies and logos, screensaver videos (`aerial/`), player screenshots, MakeMKV build |
 | `/run/user/<uid>/curator*.sock` | control sockets |
 | `/opt/curator/` | installed programs (`scripts/install.sh`), `install-state` for the uninstaller |

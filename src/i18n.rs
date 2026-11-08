@@ -147,6 +147,41 @@ const DE: &[(&str, &str)] = &[
     ("Discs", "Discs"),
     ("Folders", "Ordner"),
     ("Websites", "Webseiten"),
+    ("Programs", "Programme"),
+    ("Emulators", "Emulatoren"),
+    ("Preparing the game…", "Das Spiel wird vorbereitet …"),
+    (
+        "{name} is not installed. Run scripts/setup.sh on this computer.",
+        "{name} ist nicht installiert. Bitte scripts/setup.sh auf diesem Computer ausführen.",
+    ),
+    (
+        "The game file was not found: {path}",
+        "Die Spieldatei wurde nicht gefunden: {path}",
+    ),
+    (
+        "The emulator could not be prepared: {error}",
+        "Der Emulator konnte nicht vorbereitet werden: {error}",
+    ),
+    (
+        "{path} can't be read: {error}",
+        "{path} kann nicht gelesen werden: {error}",
+    ),
+    (
+        "{path} is not a folder or disk image.",
+        "{path} ist kein Ordner und kein Disketten- oder Festplattenabbild.",
+    ),
+    (
+        "The game could not be copied: {error}",
+        "Das Spiel konnte nicht kopiert werden: {error}",
+    ),
+    (
+        "Could not start {name}: {error}",
+        "{name} konnte nicht gestartet werden: {error}",
+    ),
+    (
+        "This program stopped right away ({status}).",
+        "Dieses Programm wurde sofort beendet ({status}).",
+    ),
     ("Not available", "Nicht verfügbar"),
     ("Not installed", "Nicht installiert"),
     (

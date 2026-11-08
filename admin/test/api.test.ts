@@ -38,6 +38,8 @@ beforeAll(async () => {
     logoDir: join(configDir, "logos"),
     aerialDir: join(configDir, "aerial"),
     statisticsDir: join(configDir, "statistics"),
+    remotePowerRule: join(configDir, "remote-power.rules"),
+    libraryDir: join(configDir, "library"),
     listMediaCenters: async () => runningPids,
   });
   base = `http://127.0.0.1:${server.port}`;
@@ -154,6 +156,8 @@ test("reads default config, rejects invalid, saves and applies valid config", as
         home: { title: "curator", show_title: true, language: "auto" },
         discs: { enabled: true, allow_disc_menu: false, audio_languages: ["deu"], subtitle_languages: [] },
         folders: [],
+        emulators: [],
+        programs: [],
         websites: [],
         games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false }, blocks: { enabled: false, start_level: 0, sound: false }, dodger: { enabled: false, sound: false, music: false } },
         limits: [],
@@ -162,7 +166,67 @@ test("reads default config, rejects invalid, saves and applies valid config", as
     parental: { pin_backoff_doubling: true },
     screensaver: { mode: "title", idle_minutes: 10, aerial_quality: "1080p_h264", aerial_videos: [] },
     statistics: { enabled: false, keep_days: 90 },
+    power: { enabled: true },
   });
+});
+
+test("game files are uploaded into our own folder only", async () => {
+  const upload = (query: string, body: BodyInit, headers: Record<string, string> = { "X-Curator": "1", Cookie: cookie }) =>
+    fetch(`${base}/api/emulators/upload?${query}`, { method: "POST", headers, body });
+  const library = join(configDir, "library");
+  // Whatever the name says, it lands in the library.
+  const good = await upload("kind=snes&name=" + encodeURIComponent("../../evil game.SFC"), "rom-data");
+  expect(good.status).toBe(200);
+  const { path } = (await good.json()) as { path: string };
+  expect(path).toBe(join(library, "snes", "evil game.sfc"));
+  expect(readFileSync(path, "utf8")).toBe("rom-data");
+  // Never over an existing file.
+  const again = (await (await upload("kind=snes&name=evil%20game.sfc", "other")).json()) as { path: string };
+  expect(again.path).toBe(join(library, "snes", "evil game-2.sfc"));
+  expect(readFileSync(path, "utf8")).toBe("rom-data");
+  for (const query of ["kind=snes&name=a.exe", "kind=dos&name=a.cue", "kind=dos&name=a.sfc", "kind=c64&name=a.img", "kind=snes&name=.sfc", "kind=snes"]) {
+    expect((await upload(query, "x")).status).toBe(400);
+  }
+  expect((await upload("kind=snes&name=a.sfc", "x", { Cookie: cookie })).status).toBe(403);
+  expect((await upload("kind=snes&name=a.sfc", "x", { "X-Curator": "1" })).status).toBe(401);
+});
+
+test("uploads no game uses go away, later and only those", async () => {
+  const { pruneLibrary } = await import("../src/emulator-library");
+  const { defaultConfig, newEmulator } = await import("../src/config");
+  const library = join(configDir, "prune");
+  mkdirSync(join(library, "snes"), { recursive: true });
+  const used = join(library, "snes", "used.sfc");
+  const unused = join(library, "snes", "unused.sfc");
+  writeFileSync(used, "x");
+  writeFileSync(unused, "x");
+  const config = defaultConfig();
+  const game = newEmulator("g");
+  game.system = "snes";
+  game.snes.rom = used;
+  config.home_screens[0]!.emulators.push(game);
+  expect(await pruneLibrary(library, config)).toBe(0);
+  expect(await pruneLibrary(library, config, Date.now() + 2 * 86400_000)).toBe(1);
+  expect(existsSync(used)).toBe(true);
+  expect(existsSync(unused)).toBe(false);
+});
+
+test("allowed host names apply at once and are saved", async () => {
+  const asHost = (host: string) => fetch(`${base}/api/state`, { headers: { Host: `${host}:${server.port}` } });
+  expect((await asHost("tv.fritz.box")).status).toBe(403);
+  const saved = await call("PUT", "/api/admin-interface", { allowedHosts: ["TV.Fritz.Box", " ", "tv.fritz.box"] });
+  expect(saved.data).toEqual({ saved: true, allowedHosts: ["tv.fritz.box"] });
+  expect((await asHost("tv.fritz.box")).status).toBe(200);
+  expect(JSON.parse(readFileSync(join(configDir, "admin-server.json"), "utf8"))).toEqual({ allowed_hosts: ["tv.fritz.box"] });
+  expect((await call("GET", "/api/admin-interface")).data.allowedHosts).toEqual(["tv.fritz.box"]);
+  // localhost and the IP address don't depend on the list.
+  await call("PUT", "/api/admin-interface", { allowedHosts: [] });
+  expect((await asHost("tv.fritz.box")).status).toBe(403);
+  expect((await asHost("localhost")).status).toBe(200);
+  expect((await asHost("127.0.0.1")).status).toBe(200);
+  for (const bad of [["http://tv"], ["tv:8787"], ["a b"], ["tv/x"], "tv", [1], Array.from({ length: 33 }, (_, i) => `h${i}`)]) {
+    expect((await call("PUT", "/api/admin-interface", { allowedHosts: bad })).status).toBe(400);
+  }
 });
 
 test("restart is passed to the media center", async () => {
@@ -209,7 +273,7 @@ test("folder picker lists only visible directories, read-only", async () => {
 });
 
 test("saves folders", async () => {
-  const folders = [{ id: "movies", name: "Movies", path: "/srv/movies", video: true, audio: false, images: true }];
+  const folders = [{ id: "movies", name: "Movies", path: "/srv/movies", video: true, audio: false, images: true, remember_recent: true }];
   const r = await call("PUT", "/api/config", { version: 1, folders });
   expect(r.data.saved).toBe(true);
   expect(JSON.parse(readFileSync(join(configDir, "config.json"), "utf8")).home_screens[0].folders).toEqual(folders);
@@ -218,6 +282,7 @@ test("saves folders", async () => {
 test("status comes from the media center", async () => {
   expect((await call("GET", "/api/status")).data).toEqual({
     running: true,
+    remotePowerFree: false,
     homeScreen: null,
     activeHomeScreen: null,
     activeLocked: false,

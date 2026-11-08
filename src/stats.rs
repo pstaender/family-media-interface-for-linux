@@ -22,6 +22,8 @@ pub enum Category {
     Pictures,
     Website,
     Game,
+    Program,
+    Emulator,
 }
 
 /// What is being used: e.g. Music / "Stories" (folder) / "Janosch/01 Tiger.mp3".

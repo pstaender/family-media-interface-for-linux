@@ -8,8 +8,9 @@
 // - changing requests need the header `X-Curator: 1` and a matching Origin (CSRF),
 // - all input is validated before anything is written.
 
+import { existsSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
 import index from "./web/index.html";
 import {
@@ -18,7 +19,7 @@ import {
   sessionCookie,
   sessionToken,
 } from "./auth";
-import { allWebsites, isNormalizedAbsolutePath, validateConfig, defaultConfig, type Config } from "./config";
+import { checkAllowedHosts, DOS_IMAGE_EXTENSIONS, SNES_ROM_EXTENSIONS, allWebsites, isNormalizedAbsolutePath, validateConfig, defaultConfig, type Config } from "./config";
 import { defaultStatisticsDir, deleteStatistics, readStatistics } from "./statistics";
 import { NOT_RUNNING, sendCommand } from "./control";
 import { readJson, writeJsonAtomic } from "./files";
@@ -26,7 +27,8 @@ import { defaultLogoDir, readLogo, refreshLogos, updateLogo } from "./logos";
 import { Aerial, sourceFor } from "./aerial";
 import { mediaCenterPids } from "./processes";
 import { AERIAL_QUALITIES, type AerialQuality } from "./config";
-import { DEFAULT_HOST, isAllowedHost, isLoopbackAddress } from "./settings";
+import { DEFAULT_HOST, isAllowedHost, isLoopbackAddress, SETTINGS_FILE } from "./settings";
+import { defaultLibraryDir, MAX_DOS_UPLOAD_BYTES, pruneLibrary, safeFileName, storeUpload, UploadError } from "./emulator-library";
 
 export interface AdminOptions {
   configDir: string;
@@ -46,6 +48,10 @@ export interface AdminOptions {
   aerialDir?: string;
   /** Usage statistics ($XDG_DATA_HOME/curator/statistics). */
   statisticsDir?: string;
+  /** Uploaded disk images and ROMs ($XDG_DATA_HOME/curator/emulators/library). */
+  libraryDir?: string;
+  /** The udev rule that takes the remote's power key away from logind. */
+  remotePowerRule?: string;
   /** Tests only: the running media centers' pids (default: from /proc). */
   listMediaCenters?: () => Promise<number[]>;
 }
@@ -57,9 +63,11 @@ const MAX_BROWSE_ENTRIES = 2000;
  * List the subdirectories of `path` for the folder picker. Read-only (readdir/stat only);
  * hidden entries are skipped.
  */
-export async function listDirectories(path: string): Promise<{ path: string; parent: string | null; dirs: string[] }> {
+/** The folders of `path`; with `extensions`, also the files with one of them (read-only). */
+export async function listDirectories(path: string, extensions: string[] = []): Promise<{ path: string; parent: string | null; dirs: string[]; files: string[] }> {
   const items = await readdir(path, { withFileTypes: true });
   const dirs: string[] = [];
+  const files: string[] = [];
   for (const item of items) {
     if (item.name.startsWith(".")) continue;
     let isDir = item.isDirectory();
@@ -67,10 +75,13 @@ export async function listDirectories(path: string): Promise<{ path: string; par
       isDir = await stat(join(path, item.name)).then((s) => s.isDirectory(), () => false);
     }
     if (isDir) dirs.push(item.name);
-    if (dirs.length >= MAX_BROWSE_ENTRIES) break;
+    else if (extensions.includes(item.name.split(".").pop()!.toLowerCase())) files.push(item.name);
+    if (dirs.length + files.length >= MAX_BROWSE_ENTRIES) break;
   }
-  dirs.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
-  return { path, parent: path === "/" ? null : dirname(path), dirs };
+  const order = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+  dirs.sort(order);
+  files.sort(order);
+  return { path, parent: path === "/" ? null : dirname(path), dirs, files };
 }
 
 function json(data: unknown, status = 200, headers: Record<string, string> = {}): Response {
@@ -110,6 +121,11 @@ export function createAdminServer(options: AdminOptions) {
   const logoDir = options.logoDir ?? defaultLogoDir();
   const aerial = new Aerial(options.aerialDir);
   const statisticsDir = options.statisticsDir ?? defaultStatisticsDir();
+  const libraryDir = options.libraryDir ?? defaultLibraryDir();
+  /** Can change while running (Password & PIN → Admin interface). */
+  let allowedHosts = options.allowedHosts ?? [];
+  const serverSettingsPath = join(options.configDir, SETTINGS_FILE);
+  const remotePowerRule = options.remotePowerRule ?? "/etc/udev/rules.d/71-curator-remote-power.rules";
   /** A home screen id from a request (checked like the config's ids), or undefined. */
   const screenParam = (value: unknown): string | undefined | null =>
     value === undefined || value === null || value === ""
@@ -151,7 +167,7 @@ export function createAdminServer(options: AdminOptions) {
   const api = (handler: Handler, { login = true, mutating = false } = {}): Handler => {
     return (req) => {
       const host = req.headers.get("host") ?? "";
-      if (!isAllowedHost(host, server.port!, options.allowedHosts)) return json({ error: "Forbidden host." }, 403);
+      if (!isAllowedHost(host, server.port!, allowedHosts)) return json({ error: "Forbidden host." }, 403);
       if (mutating) {
         const origin = req.headers.get("origin");
         if (req.headers.get("x-curator") !== "1" || (origin !== null && origin !== `http://${host}`)) {
@@ -163,9 +179,12 @@ export function createAdminServer(options: AdminOptions) {
     };
   };
 
+  const listensOn = options.hostname ?? DEFAULT_HOST;
   const server = Bun.serve({
-    hostname: options.hostname ?? DEFAULT_HOST,
+    hostname: listensOn,
     port: options.port,
+    // Disk images; every other route refuses big bodies itself before reading them.
+    maxRequestBodySize: MAX_DOS_UPLOAD_BYTES + 1024 ** 2,
     development: options.development ?? false,
     routes: {
       "/": index,
@@ -268,6 +287,7 @@ export function createAdminServer(options: AdminOptions) {
             void refreshLogos(logoDir, allWebsites(v.config));
             // Downloads / deletes the screensaver videos in the background.
             aerial.sync(v.config.screensaver);
+            void pruneLibrary(libraryDir, v.config);
             return json(result);
           },
           { mutating: true },
@@ -459,12 +479,66 @@ export function createAdminServer(options: AdminOptions) {
         ),
       },
 
+      "/api/emulators/upload": {
+        POST: api(
+          async (req) => {
+            const params = new URL(req.url).searchParams;
+            const kind = params.get("kind");
+            if (kind !== "dos" && kind !== "snes") return json({ error: "Invalid file kind." }, 400);
+            const name = safeFileName(params.get("name") ?? "", kind);
+            if (name === null) return json({ error: "This kind of file can't be used here." }, 400);
+            if (!req.body) return json({ error: "The file is empty." }, 400);
+            try {
+              const path = await storeUpload(libraryDir, kind, name, Number(req.headers.get("content-length") ?? "0"), req.body);
+              return json({ path });
+            } catch (e) {
+              if (e instanceof UploadError) return json({ error: e.message }, e.status);
+              return json({ error: `The file could not be stored: ${(e as Error).message}` }, 500);
+            }
+          },
+          { mutating: true },
+        ),
+      },
+
+      "/api/admin-interface": {
+        GET: api(() =>
+          json({
+            allowedHosts,
+            machineName: hostname(),
+            // Listening only on this computer: other names lead nowhere.
+            localOnly: listensOn === "localhost" || listensOn === "::1" || listensOn.startsWith("127."),
+          }),
+        ),
+        PUT: api(
+          async (req) => {
+            const body = await readBody(req);
+            const checked = checkAllowedHosts(body?.allowedHosts);
+            if (!checked.ok) return json({ error: checked.error }, 400);
+            const here = req.headers.get("host") ?? "";
+            if (!isAllowedHost(here, server.port!, checked.hosts)) {
+              return json({ error: `You are connected as ${here}, so this name can't be removed from here. Use another address, e.g. this computer's IP address.` }, 400);
+            }
+            // The other settings of the file stay as they are.
+            const stored = await readJson(serverSettingsPath).catch(() => undefined);
+            await writeJsonAtomic(serverSettingsPath, { ...(isRecord(stored) ? stored : {}), allowed_hosts: checked.hosts }, 0o644);
+            allowedHosts = checked.hosts;
+            return json({ saved: true, allowedHosts });
+          },
+          { mutating: true },
+        ),
+      },
+
       "/api/browse": {
         GET: api(async (req) => {
-          const path = new URL(req.url).searchParams.get("path") || homedir();
+          const params = new URL(req.url).searchParams;
+          const path = params.get("path") || homedir();
           if (!isNormalizedAbsolutePath(path)) return json({ error: "Invalid path." }, 400);
+          // ?files=dos|snes: also the game files of that system (nothing else is ever listed).
+          const kind = params.get("files");
+          if (kind !== null && kind !== "dos" && kind !== "snes") return json({ error: "Invalid file kind." }, 400);
+          const extensions = kind === "dos" ? DOS_IMAGE_EXTENSIONS : kind === "snes" ? SNES_ROM_EXTENSIONS : [];
           try {
-            return json(await listDirectories(path));
+            return json(await listDirectories(path, extensions));
           } catch (e) {
             const code = (e as NodeJS.ErrnoException).code;
             const reason =
@@ -485,8 +559,10 @@ export function createAdminServer(options: AdminOptions) {
           // More than one media center: the one on the TV may not get the changes.
           const extraPids = await strayMediaCenters(reply.ok ? reply.pid : undefined);
           const extraInstances = extraPids.length;
+          const remotePowerFree = existsSync(remotePowerRule);
           if (reply.ok) {
             return json({
+              remotePowerFree,
               extraInstances,
               extraPids,
               running: true,
@@ -503,7 +579,7 @@ export function createAdminServer(options: AdminOptions) {
               remote: reply.remote ?? null,
             });
           }
-          return json({ running: false, extraInstances, extraPids, error: reply.error === NOT_RUNNING ? null : reply.error });
+          return json({ running: false, remotePowerFree, extraInstances, extraPids, error: reply.error === NOT_RUNNING ? null : reply.error });
         }),
       },
 

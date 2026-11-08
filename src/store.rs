@@ -112,6 +112,21 @@ pub fn highscores_path() -> Option<PathBuf> {
     Some(dirs::data_dir()?.join(APP).join("highscores.json"))
 }
 
+/// `$XDG_DATA_HOME/curator/emulators`: saved games and the private copies of DOS games.
+pub fn emulator_data_dir() -> Option<PathBuf> {
+    Some(dirs::data_dir()?.join(APP).join("emulators"))
+}
+
+/// Disk images and ROMs uploaded in the admin panel (written there, read here).
+pub fn emulator_library_dir() -> Option<PathBuf> {
+    Some(emulator_data_dir()?.join("library"))
+}
+
+/// `$XDG_CACHE_HOME/curator/emulators`: generated configuration files and the like.
+pub fn emulator_cache_dir() -> Option<PathBuf> {
+    Some(dirs::cache_dir()?.join(APP).join("emulators"))
+}
+
 /// `$XDG_CACHE_HOME/curator/music`: the games' tunes as WAV files (made by `music.rs`).
 pub fn music_dir() -> Option<PathBuf> {
     Some(dirs::cache_dir()?.join(APP).join("music"))

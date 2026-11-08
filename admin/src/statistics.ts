@@ -12,7 +12,7 @@ export function defaultStatisticsDir(): string {
   return join(data, "curator", "statistics");
 }
 
-export const CATEGORIES = ["disc", "video", "music", "pictures", "website", "game"] as const;
+export const CATEGORIES = ["disc", "video", "music", "pictures", "website", "game", "program", "emulator"] as const;
 export type Category = (typeof CATEGORIES)[number];
 
 export interface StatisticsEntry {

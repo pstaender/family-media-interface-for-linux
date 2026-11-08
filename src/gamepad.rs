@@ -26,6 +26,10 @@ pub fn hide_cursor(in_game: bool, gamepads: usize, mouse_idle: std::time::Durati
     in_game && gamepads > 0 && mouse_idle >= CURSOR_HIDES_AFTER
 }
 
+/// Holding select + start this long closes a program. A moment, because many SNES games
+/// use a quick press of both themselves.
+pub const CLOSE_COMBO_HOLD: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Stick positions below this count as the middle.
 const DEAD_ZONE: f32 = 0.25;
 /// A direction for menus.
@@ -170,6 +174,14 @@ impl Pads {
             .any(|p| p.held.iter().any(|c| !is_pause(*c) && !is_back(*c)))
     }
 
+    /// Some pad has select and start held down together.
+    pub fn select_and_start_held(&self) -> bool {
+        self.pads.values().any(|p| {
+            p.held.iter().any(|c| matches!(*c, BTN_SELECT | BTN_BASE3))
+                && p.held.iter().any(|c| matches!(*c, BTN_START | BTN_BASE4))
+        })
+    }
+
     /// Up / down of each pad (-1 … 1), in a stable order (player 1 first).
     pub fn vertical(&self) -> Vec<f32> {
         self.pads.values().map(|p| p.position().1).collect()
@@ -295,6 +307,22 @@ mod tests {
             !pads.button_held(),
             "start / select / back don't count as held"
         );
+    }
+
+    #[test]
+    fn select_and_start_together_on_one_pad() {
+        let press = |pad, code, pressed| event(pad, PadInput::Button { code, pressed });
+        for (select, start) in [(BTN_SELECT, BTN_START), (BTN_BASE3, BTN_BASE4)] {
+            let mut pads = Pads::default();
+            pads.apply(press(1, select, true));
+            assert!(!pads.select_and_start_held(), "select alone");
+            pads.apply(press(2, start, true));
+            assert!(!pads.select_and_start_held(), "on two different pads");
+            pads.apply(press(1, start, true));
+            assert!(pads.select_and_start_held());
+            pads.apply(press(1, select, false));
+            assert!(!pads.select_and_start_held(), "released");
+        }
     }
 
     #[test]

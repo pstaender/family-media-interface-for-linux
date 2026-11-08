@@ -1,7 +1,7 @@
 // Groups usage statistics for Parental control → Usage: per day, per category, with the
 // single entries for the detailed view. Pure (also used in the browser).
 
-export const CATEGORY_ORDER = ["video", "disc", "music", "pictures", "website", "game"] as const;
+export const CATEGORY_ORDER = ["video", "disc", "music", "pictures", "website", "game", "program", "emulator"] as const;
 export type UsageCategory = (typeof CATEGORY_ORDER)[number];
 
 export interface UsageEntry {

@@ -196,7 +196,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   read), sizes via HEAD (`sizes.json`). Admin: Home screen & media → Screensaver
   (`GET /api/aerial?quality=…[&refresh=1]`).
 - **Games row (implemented, `games` in config.json, admin: Home screen & media → Games):**
-  built-in games. "Programs" (registered programs) will be a separate tab and row later; the
+  built-in games. "Programs" (registered programs) is a separate tab and row; the
   games' old place `programs.pong` is still read (if `games` is missing) and written as
   `games` (`Config::legacy_programs`, `validateConfig`).
 - **Ping Pong (`games.pong`):** `src/pong.rs`: field 16 × 9,
@@ -372,6 +372,9 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
 - On the home screen, each folder is a tile in the "Folders" row. It can be browsed (subfolders
   plus visible files); hidden files (`.name`) are never shown. A folder that doesn't exist or
   can't be read is shown semi-transparent.
+- **Admin → Folders:** clone, move up / down (the order on the TV), the path can be typed (it
+  counts only if `/api/browse` can read it, otherwise the previous one comes back).
+  `remember_recent` (default on) turns "Recently played" off per folder.
 - **Recently played (`src/recent.rs`):** the folder's first page ends with a "Recently
   played" heading and the last 5 videos/music files played from it (newest first; label
   `subfolder › file`). Stored per folder id in `$XDG_DATA_HOME/curator/recent.json`
@@ -450,6 +453,41 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
 
 ### Allowed software and scripts (set up by the admin)
 
+- **Emulators (`emulators` of each home screen, admin: Home screen & media → Emulators, row
+  "Emulators", `src/emulator.rs`):** `system` dos (DOSBox) or snes (Snes9x core in RetroArch:
+  the most used SNES emulator; RetroArch brings gamepad autoconfig and shaders); started
+  and supervised as `PlayKind::Program`, always fullscreen, from a configuration we generate
+  in `$XDG_CACHE_HOME/curator/emulators/`. DOS: up to 8 drive mappings (A–Y; Z: is DOSBox's
+  own, `mount z` is refused), folder or image; type from the file (`classify`: ≤ 2.88 MB
+  floppy, larger hard disk with `-size 512,63,16,<cyl>` because `imgmount -t hdd` can't
+  detect it, .iso/.cue CD); autostart, startup script, 4:3 correction. **DOSBox 0.74 ignores
+  `mount -ro`**, so folders and floppy/hard disk images run from a private copy, made once in
+  `$XDG_DATA_HOME/curator/emulators/dos/<id>/` (thread, `Screen::PreparingEmulator`), where the
+  saves stay; the originals are never changed. SNES: ROM (only read), filter, aspect,
+  whole-number scaling; saves in `…/emulators/snes/saves`; RetroArch's menu is switched off
+  (it could open other files). `scripts/setup.sh` installs the packages and the pinned CRT
+  filters and gamepad profiles into `/usr/local/share/curator/retroarch` (Ubuntu's RetroArch
+  ships neither); without them a game runs unfiltered. Persistence: SNES `resume` (default on,
+  RetroArch's automatic save state; battery saves are always kept, `autosave_interval` 30 s; only a real quit writes the state, a signal doesn't, so stopping sends `QUIT` on its stdin, `player::ask_to_stop`, with `quit_press_twice` off; it also needs `libretro_directory`, or it believes the core can't save states);
+  DOS `keep_saves` (default on; off = fresh copy each start; DOSBox 0.74 has no save states).
+  Game files live in curator's data folder (not the cache, which may be cleared): the
+  admin panel uploads to `emulators/library/{dos,snes}/` (`admin/src/emulator-library.ts`,
+  `POST /api/emulators/upload`, raw body, names sanitized, never overwrites, 1 GB kept free;
+  unused uploads are removed a day later when saving), and a file chosen on the computer is
+  copied at the first start (`.cue` stays in place: it names a data file beside it). Holding select + start on a gamepad
+  for 1 s also closes programs and emulators (`CLOSE_COMBO_HOLD`).
+- **Implemented (`programs` of each home screen, admin: Home screen & media → Programs, row
+  "Programs"):** name, icon (one of ours, `ui::paint_program_icon`), command (absolute path
+  or name in `PATH`), arguments (a list, one per line in the admin panel), optional start
+  folder. Ids unique across home screens. `player::program_command`: no shell, own process
+  group, parent-death signal. Runs as `Screen::Playing` (`PlayKind::Program`), so it gets
+  the player's handling: window in front, usage time, stopped at the time limit,
+  statistics (`program`), back to the menu when it exits. The remote's return or home
+  button closes it at a single press (`RemoteMap::closes_program`, read from the device: the
+  program's window keeps its keys; a keyboard's or normal mouse's aren't readable). Stopping
+  signals the whole group, because a script's child is the real program
+  (`player::signal_group`, `end_group`: SIGTERM, SIGKILL after 2 s, also for what a program
+  left behind when it exited). A process that makes its own session escapes this.
 - The admin can register specific programs or scripts as tiles (name, icon, command, arguments,
   working directory, allowed profiles).
 - Only run what is registered. Launch with an explicit program + argument list, never via a
@@ -498,6 +536,10 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   Serves the React app (`src/web/`, bundled by Bun via HTML import) and a JSON API:
   `GET /api/state`, `POST /api/setup|login|logout|password`, `GET|PUT /api/config`,
   `GET /api/status`.
+- **Allowed host names (Password & PIN → Admin interface, `GET|PUT /api/admin-interface`):**
+  `allowed_hosts` of `admin-server.json`, checked in the browser and on the server
+  (`checkAllowedHosts`), active at once without a restart. localhost, IP addresses and this
+  computer's name are always allowed. The name you are connected by can't be removed.
 - **Security checks on every API call:** `Host` must carry our port and be an IP address,
   `localhost`, this computer's name (`<hostname>`, `<hostname>.local`) or an `allowed_hosts`
   entry; never another domain name (DNS rebinding); changing requests need `X-Curator: 1` and, if
@@ -546,6 +588,7 @@ src/
   stats.rs        usage statistics (what was used when; day files, pruning)
   sound.rs        game sounds (generated WAV files, played with pw-play / paplay / aplay)
   music.rs        game music: MIDI reader, chip-style synth, looping with mpv
+  emulator.rs     DOSBox and RetroArch: generated configs, DOS private copies
   makemkv.rs      makemkvcon robot-output parser, main title selection
   player.rs       builds the player commands (mpv / VLC with libmmbd)
   resume.rs       resume positions via mpv IPC
@@ -565,6 +608,7 @@ admin/            Bun + React admin web interface
   src/app.ts      HTTP server, API routes, security checks
   src/auth.ts     admin password (argon2id), sessions, login rate limit
   src/config.ts   config types + validation (mirror of src/config.rs)
+  src/emulator-library.ts  uploaded disk images and ROMs
   src/settings.ts port / listen address / allowed Host names (args, env, admin-server.json)
   src/control.ts  control socket client
   src/aerial.ts   screensaver videos: list, sizes, downloads (apple-root-ca.pem pinned)
@@ -724,6 +768,17 @@ Before you consider a change done, run the formatter, linter and tests for every
   session ends). Shut down: logind `PowerOff(false)` over D-Bus (polkit allows it for the
   active session; not while other users are logged in, then a message is shown). Before: with the PIN, it logs out to the login screen, where parents log
   into their own account.
+- **Power off setting (`power.enabled`, default true, shared; admin: Home screen & media →
+  Power off; off when the config is invalid):** off = no power button, Ctrl+Q and the
+  remote's power key do nothing, only the computer's own button is left. logind shuts down
+  by itself on `KEY_POWER` of every device tagged `power-switch` (udev tags all devices with
+  keys), and an inhibitor (`handle-power-key`) would also block the computer's own button,
+  which must keep working. So `scripts/remote-access.sh` (and `install.sh` for remotes set up
+  earlier) writes `/etc/udev/rules.d/71-curator-remote-power.rules` (`TAG-="power-switch"`
+  by USB id; must sort after `70-power-switch.rules`), and the media center reads
+  `KEY_POWER` from the device: allowed = shut down (with a PIN, after it; not on the lock
+  screen or during calibration). The admin tab warns while that rule is missing
+  (`remotePowerFree` in `/api/status`).
 - **Installer / setup script:** autologin works differently per display manager (GDM, SDDM,
   LightDM). Handle that in a setup script that supports all three, not in the app, so the app
   itself stays desktop-agnostic.

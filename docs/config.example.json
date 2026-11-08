@@ -152,6 +152,43 @@
           "images": false
         }
       ],
+      "emulators": [
+        {
+          "id": "kids-space-game",
+          "name": "Space Game",
+          "system": "dos",
+          "dos": {
+            "drives": [
+              { "letter": "C", "path": "/home/media/dos/space" },
+              { "letter": "A", "path": "/home/media/dos/disk1.img" }
+            ],
+            "autostart": "SPACE\\START.EXE",
+            "startup_script": "keyb gr",
+            "correct_aspect": true
+          }
+        },
+        {
+          "id": "kids-racer",
+          "name": "Racer",
+          "system": "snes",
+          "snes": {
+            "rom": "/home/media/snes/racer.sfc",
+            "filter": "crt_geom",
+            "aspect": "4_3",
+            "integer_scale": false
+          }
+        }
+      ],
+      "programs": [
+        {
+          "id": "kids-dos-game",
+          "name": "DOS Game",
+          "command": "dosbox",
+          "args": ["/home/media/dos/game/GAME.EXE", "-fullscreen", "-exit"],
+          "working_dir": "/home/media/dos/game",
+          "icon": "computer"
+        }
+      ],
       "websites": [
         {
           "id": "kids-kika",
@@ -198,5 +235,8 @@
   "statistics": {
     "enabled": true,
     "keep_days": 90
+  },
+  "power": {
+    "enabled": true
   }
 }

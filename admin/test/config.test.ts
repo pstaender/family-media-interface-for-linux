@@ -44,6 +44,14 @@ test("home screens", () => {
   expect(defaultScreen(v.config).id).toBe("family");
   expect(v.config.home_screens[1]!.limits.length).toBe(1);
   expect(v.config.statistics).toEqual({ enabled: true, keep_days: 90 });
+  expect(v.config.power).toEqual({ enabled: true });
+  const games = v.config.home_screens[1]!.emulators;
+  expect(games[0]!.dos.drives).toEqual([{ letter: "C", path: "/home/media/dos/space" }, { letter: "A", path: "/home/media/dos/disk1.img" }]);
+  expect(games[1]!.snes).toEqual({ rom: "/home/media/snes/racer.sfc", filter: "crt_geom", aspect: "4_3", integer_scale: false, resume: true });
+  expect(games[0]!.dos.keep_saves).toBe(true);
+  expect(v.config.home_screens[1]!.programs).toEqual([
+    { id: "kids-dos-game", name: "DOS Game", command: "dosbox", args: ["/home/media/dos/game/GAME.EXE", "-fullscreen", "-exit"], working_dir: "/home/media/dos/game", icon: "computer" },
+  ]);
   // Written form is accepted again unchanged.
   const again = validateConfig(JSON.parse(JSON.stringify(v.config)));
   expect(again.ok && again.config).toEqual(v.config);
@@ -97,7 +105,7 @@ test("version 1 becomes one home screen", () => {
 
 test("the removed extensions option is ignored", () => {
   const v = validateConfig({ version: 1, folders: [{ id: "a", name: "A", path: "/x", video: true, extensions: ["pdf"] }] });
-  expect(v.ok && v.config.home_screens[0]!.folders[0]).toEqual({ id: "a", name: "A", path: "/x", video: true, audio: false, images: false });
+  expect(v.ok && v.config.home_screens[0]!.folders[0]).toEqual({ id: "a", name: "A", path: "/x", video: true, audio: false, images: false, remember_recent: true });
 });
 
 test("the example websites are valid", () => {
@@ -282,6 +290,48 @@ const BAD: unknown[] = [
   { version: 2, home_screens: [{ id: "a", name: "A", default: true }], statistics: { keep_days: 3651 } },
   { version: 2, home_screens: [{ id: "a", name: "A", default: true }], statistics: { enabled: "yes" } },
   { version: 2, home_screens: [{ id: "a", name: "A", default: true }], statistics: [] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true }], power: { enabled: "no" } },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true }], power: { x: 1 } },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true }], power: [] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "dos", dos: { drives: [{ letter: "C", path: "/g" }], keep_saves: "yes" } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "snes", snes: { rom: "/a.sfc", resume: 1 } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E" }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "c64" }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "dos" }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "dos", dos: { drives: [] } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "dos", dos: { drives: [{ letter: "Z", path: "/g" }] } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "dos", dos: { drives: [{ letter: "c", path: "/g" }] } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "dos", dos: { drives: [{ letter: "CC", path: "/g" }] } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "dos", dos: { drives: [{ letter: "C", path: "g" }] } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "dos", dos: { drives: [{ letter: "C", path: "/a\"b" }] } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "dos", dos: { drives: [{ letter: "C", path: "/g" }, { letter: "C", path: "/g" }] } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "dos", dos: { drives: [{ letter: "C", path: "/g" }], autostart: "..\\x.exe" } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "dos", dos: { drives: [{ letter: "C", path: "/g" }], autostart: "a\"b" } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "dos", dos: { drives: [{ letter: "C", path: "/g" }], startup_script: "[sdl]" } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "dos", dos: { drives: [{ letter: "C", path: "/g" }], startup_script: "a\tb" } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "dos", dos: { drives: [{ letter: "C", path: "/g" }], x: 1 } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "dos", dos: [] }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "snes" }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "snes", snes: { rom: "/a.exe" } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "snes", snes: { rom: "a.sfc" } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "snes", snes: { rom: "/a.sfc", filter: "blur" } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "snes", snes: { rom: "/a.sfc", aspect: "21_9" } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "snes", snes: { rom: "/a.sfc", integer_scale: "yes" } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, emulators: [{ id: "e", name: "E", system: "snes", snes: [] }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, programs: [{ id: "p", name: "P" }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, programs: [{ id: "p", name: "P", command: "" }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, programs: [{ id: "p", name: "P", command: "bin/x" }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, programs: [{ id: "p", name: "P", command: "./x" }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, programs: [{ id: "p", name: "P", command: "-x" }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, programs: [{ id: "p", name: "P", command: "dosbox -fullscreen" }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, programs: [{ id: "p", name: "P", command: "/a/../x" }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, programs: [{ id: "p", name: "P", command: "x\ny" }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, programs: [{ id: "p", name: "P", command: "x", args: "-a" }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, programs: [{ id: "p", name: "P", command: "x", args: ["a\nb"] }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, programs: [{ id: "p", name: "P", command: "x", working_dir: "games" }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, programs: [{ id: "p", name: "P", command: "x", icon: "dragon" }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, programs: [{ id: "p", name: "P", command: "x", shell: true }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, programs: [{ id: "p", name: "P", command: "x" }, { id: "p", name: "Q", command: "y" }] }] },
   { version: 2, home_screens: [{ id: "a", name: "A", default: true }], parental: { limits: [] } },
   { version: 2, home_screens: [{ id: "a", name: "A", default: true }], folders: [] },
   { version: 3, home_screens: [{ id: "a", name: "A", default: true }] },

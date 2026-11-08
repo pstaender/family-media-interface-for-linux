@@ -10,6 +10,7 @@
 import { isIP } from "node:net";
 import { hostname, networkInterfaces } from "node:os";
 import { join } from "node:path";
+import { HOST_NAME } from "./config";
 import { readJson } from "./files";
 
 export const DEFAULT_PORT = 8787;
@@ -40,8 +41,6 @@ export function parseHost(value: unknown, source: string): Result<string> {
   }
   return { ok: true, value };
 }
-
-const HOST_NAME = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/;
 
 /** Validate the content of admin-server.json (all fields optional, unknown fields rejected). */
 export function parseSettingsFile(value: unknown): Result<Partial<ServerSettings>> {
