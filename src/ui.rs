@@ -567,6 +567,8 @@ pub struct App {
     /// Connected gamepads, and when the game was last advanced.
     pads: Pads,
     pong_tick: Instant,
+    /// When the mouse was last used (the cursor hides in games).
+    last_mouse: Instant,
     /// The home screen shown (to notice a switch), the usage statistics, and what the
     /// running player / website is (for them).
     shown_screen: String,
@@ -658,11 +660,40 @@ impl App {
             inhibitor: inhibit::Inhibitor::spawn(),
             pads: Pads::default(),
             pong_tick: Instant::now(),
+            last_mouse: Instant::now(),
             shown_screen: String::new(),
             stats: Default::default(),
             playing_activity: None,
             screen_kind: std::mem::discriminant(&Screen::Home),
             screen_since: Instant::now(),
+        }
+    }
+
+    /// In a game with a gamepad connected: no mouse cursor while the mouse isn't used.
+    fn hide_cursor_in_games(&mut self, ctx: &egui::Context) {
+        let moved = ctx.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::PointerMoved(_)
+                        | egui::Event::PointerButton { .. }
+                        | egui::Event::MouseWheel { .. }
+                )
+            })
+        });
+        if moved {
+            self.last_mouse = Instant::now();
+        }
+        let in_game = matches!(
+            self.screen,
+            Screen::Pong(_) | Screen::Bricks(_) | Screen::Blocks(_)
+        );
+        let idle = self.last_mouse.elapsed();
+        if crate::gamepad::hide_cursor(in_game, self.pads.count(), idle) {
+            ctx.set_cursor_icon(egui::CursorIcon::None);
+        } else if in_game && self.pads.count() > 0 {
+            // Menus don't repaint by themselves: be there when it's time to hide it.
+            ctx.request_repaint_after(crate::gamepad::CURSOR_HIDES_AFTER.saturating_sub(idle));
         }
     }
 
@@ -2540,6 +2571,8 @@ impl eframe::App for App {
             );
             return;
         }
+
+        self.hide_cursor_in_games(&ctx);
 
         match self.screen {
             Screen::Browse(_) => self.browse_screen(ui, &painter, screen_rect, s, &keys),

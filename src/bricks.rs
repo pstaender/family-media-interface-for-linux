@@ -13,7 +13,7 @@
 //!   paddle hit (bricks that come too low disappear without points). After every three stages
 //!   a bonus stage: the ball goes through the bricks, a lost ball costs nothing, a timer runs,
 //!   and clearing it gives bonus points. 32 stages, then it starts over.
-//! - 5 paddles; one more every 1000 points up to 10 000 (at most 9). The high scores are kept
+//! - 5 paddles; one more every 1000 points up to 10 000 (at most 99). The high scores are kept
 //!   on this computer, with the players' names (`highscores`).
 //! - A ball that keeps bouncing without hitting a brick gets another angle.
 //!
@@ -53,7 +53,9 @@ const SNAP: f32 = 0.15;
 const LOOP_HITS: u32 = 6;
 /// Paddles at the start (setting `games.bricks.lives`, 1–9).
 pub const START_LIVES: u32 = 5;
-pub const MAX_LIVES: u32 = 9;
+pub const MAX_LIVES: u32 = 99;
+/// Paddle icons drawn at most (two rows); the label shows the real number.
+const MAX_LIFE_ICONS: u32 = 10;
 /// Bricks that move down this close above the paddle disappear.
 const LOW_LIMIT: f32 = PADDLE_Y - 2.5;
 /// Moving stages: a step sideways every … seconds.
@@ -971,7 +973,7 @@ fn paint_game(painter: &egui::Painter, screen: Rect, s: f32, game: &Game, best: 
         24.0,
         crate::ui::TEXT_DIM,
     );
-    for i in 0..game.lives {
+    for i in 0..game.lives.min(MAX_LIFE_ICONS) {
         let p = right
             + Vec2::new(
                 (i % 5) as f32 * 46.0 * s,
@@ -1148,7 +1150,8 @@ mod tests {
     fn starting_paddles_and_sounds() {
         assert_eq!(Game::new(3).lives, 3);
         assert_eq!(Game::new(0).lives, 1);
-        assert_eq!(Game::new(20).lives, MAX_LIVES);
+        assert_eq!(Game::new(99).lives, 99);
+        assert_eq!(Game::new(200).lives, MAX_LIVES);
         let mut g = playing(
             0,
             vec![cell(5, 0, Brick::Light), cell(0, 9, Brick::Light)],
@@ -1162,7 +1165,7 @@ mod tests {
     }
 
     #[test]
-    fn extra_paddles_every_1000_points_up_to_9() {
+    fn extra_paddles_every_1000_points_up_to_10000_and_99_at_most() {
         let mut g = Game::new(START_LIVES);
         g.add_points(999);
         assert_eq!(g.lives, 5);
@@ -1171,7 +1174,10 @@ mod tests {
         g.add_points(2500);
         assert_eq!(g.lives, 8);
         g.add_points(20_000);
-        assert_eq!(g.lives, MAX_LIVES);
+        assert_eq!(g.lives, 15, "ten more at most, by 10 000 points");
+        let mut g = Game::new(98);
+        g.add_points(5000);
+        assert_eq!(g.lives, MAX_LIVES, "never more than 99");
     }
 
     #[test]

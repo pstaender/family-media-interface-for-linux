@@ -238,7 +238,7 @@ const BAD: unknown[] = [
   { version: 1, games: { pong: [] } },
   { version: 1, games: { bricks: { enabled: 1 } } },
   { version: 1, games: { bricks: { lives: 0 } } },
-  { version: 1, games: { bricks: { lives: 10 } } },
+  { version: 1, games: { bricks: { lives: 100 } } },
   { version: 1, games: { bricks: { sound: "on" } } },
   { version: 1, games: { bricks: { speed: 2 } } },
   { version: 1, games: { bricks: [] } },

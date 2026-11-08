@@ -725,12 +725,12 @@ function GamesTab({ config, setConfig }: ScreenProps) {
           <input
             type="number"
             min={1}
-            max={9}
+            max={99}
             value={bricks.lives}
             disabled={!bricks.enabled}
-            onChange={(e) => setBricks({ lives: Math.min(9, Math.max(1, Math.round(Number(e.target.value) || 5))) })}
+            onChange={(e) => setBricks({ lives: Math.min(99, Math.max(1, Math.round(Number(e.target.value) || 5))) })}
           />
-          <small className="hint">More are earned with points: one every 1000, up to 9.</small>
+          <small className="hint">More are earned with points: one every 1000, up to 10 000 points.</small>
         </label>
         <label className="toggle">
           <input

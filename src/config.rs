@@ -259,7 +259,7 @@ pub struct BlocksSettings {
 #[serde(deny_unknown_fields, default)]
 pub struct BricksSettings {
     pub enabled: bool,
-    /// Paddles at the start of a game (1–9).
+    /// Paddles at the start of a game (1–99).
     pub lives: u32,
     /// Sound on at the start (can be switched in the game's menu).
     pub sound: bool,
@@ -856,8 +856,8 @@ fn validate_screen(screen: &HomeScreen) -> Result<(), String> {
     if !(3..=21).contains(&screen.games.pong.points_to_win) {
         return Err("games.pong.points_to_win must be 3 to 21".into());
     }
-    if !(1..=9).contains(&screen.games.bricks.lives) {
-        return Err("games.bricks.lives must be 1 to 9".into());
+    if !(1..=99).contains(&screen.games.bricks.lives) {
+        return Err("games.bricks.lives must be 1 to 99".into());
     }
     if screen.games.blocks.start_level > 9 {
         return Err("games.blocks.start_level must be 0 to 9".into());
@@ -1301,7 +1301,7 @@ mod tests {
             r#"{"version":1,"games":{"pong":[]}}"#,
             r#"{"version":1,"games":{"bricks":{"enabled":1}}}"#,
             r#"{"version":1,"games":{"bricks":{"lives":0}}}"#,
-            r#"{"version":1,"games":{"bricks":{"lives":10}}}"#,
+            r#"{"version":1,"games":{"bricks":{"lives":100}}}"#,
             r#"{"version":1,"games":{"bricks":{"sound":"on"}}}"#,
             r#"{"version":1,"games":{"bricks":{"speed":2}}}"#,
             r#"{"version":1,"games":{"bricks":[]}}"#,

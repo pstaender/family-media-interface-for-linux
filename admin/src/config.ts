@@ -150,7 +150,7 @@ function validateGames(input: unknown, where: string): GameSettings | string {
     }
     if (b.lives !== undefined) {
       const n = b.lives;
-      if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > 9) return `${where}.bricks.lives must be 1 to 9`;
+      if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > 99) return `${where}.bricks.lives must be 1 to 99`;
       games.bricks.lives = n;
     }
   }

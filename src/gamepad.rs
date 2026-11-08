@@ -18,6 +18,14 @@ const BTN_MODE: u16 = 0x13c;
 const BTN_BASE3: u16 = 0x128;
 const BTN_BASE4: u16 = 0x129;
 
+/// In a game with a gamepad connected, the mouse cursor hides after this long unused.
+pub const CURSOR_HIDES_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Should the mouse cursor be hidden now?
+pub fn hide_cursor(in_game: bool, gamepads: usize, mouse_idle: std::time::Duration) -> bool {
+    in_game && gamepads > 0 && mouse_idle >= CURSOR_HIDES_AFTER
+}
+
 /// Stick positions below this count as the middle.
 const DEAD_ZONE: f32 = 0.25;
 /// A direction for menus.
@@ -233,6 +241,19 @@ mod tests {
         pads.apply(event(5, PadInput::Axis(PadAxis::HatY, 1.0)));
         assert_eq!(pads.vertical(), [1.0]);
         assert!(pads.frame().down);
+    }
+
+    #[test]
+    fn cursor_hides_in_games_with_a_gamepad_when_the_mouse_rests() {
+        use std::time::Duration;
+        let idle = Duration::from_secs(2);
+        assert!(hide_cursor(true, 1, idle));
+        assert!(!hide_cursor(true, 1, Duration::from_millis(1999)));
+        assert!(
+            !hide_cursor(true, 0, idle),
+            "no gamepad: the mouse may be needed"
+        );
+        assert!(!hide_cursor(false, 2, idle), "only in games");
     }
 
     #[test]

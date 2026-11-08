@@ -216,7 +216,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   steps, down one row per paddle hit — too low bricks vanish without points) + a bonus
   stage after every three (ball passes through, no life lost, timer 60 s − 5 s each, ≥ 30 s,
   clearing gives 500 + 250 each, ≤ 1500); 32 stages then over again; 5 paddles, +1 per
-  1000 points up to 10 000 (max 9); 6 paddle hits without a brick change the angle. No names, characters, levels or look of the original.
+  1000 points up to 10 000 (max 99; `games.bricks.lives` 1–99); 6 paddle hits without a brick change the angle. No names, characters, levels or look of the original.
 - **Block Stacker (`games.blocks`, `src/blocks.rs`):** our own falling-block game (own name
   and look, no name, music or look of the original) with the classic hand-held's rules:
   10 × 18, one preview, no hold / hard drop / wall kicks, frames of 1/59.73 s, gravity table
@@ -234,7 +234,8 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   axes X/Y/HAT0X/HAT0Y normalized with `EVIOCGABS` (SNES-style 0…255 d-pads, Xbox/PS sticks
   and hats alike). Access: systemd's `70-uaccess.rules` already tags joysticks for the
   active session. In menus (only while our window has focus): d-pad/stick = arrows (edges),
-  B/circle/select = back, start = OK, every other button = OK.
+  B/circle/select = back, start = OK, every other button = OK. On the game screens with a
+  gamepad connected, the mouse cursor hides after 2 s without mouse use (`hide_cursor`).
 - **Just-opened screens:** a screen ignores OK and clicks for 350 ms after it opened
   (`App::just_opened`), and a tile's activation ends the frame: the click / OK that opened
   the disc's start options used to pick one of them at once.

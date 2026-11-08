@@ -479,9 +479,9 @@
                 "lives": {
                   "type": "integer",
                   "minimum": 1,
-                  "maximum": 9,
+                  "maximum": 99,
                   "default": 5,
-                  "description": "Paddles at the start of a game (more are earned with points, up to 9)."
+                  "description": "Paddles at the start of a game (more are earned with points, up to 99)."
                 },
                 "sound": {
                   "type": "boolean",
