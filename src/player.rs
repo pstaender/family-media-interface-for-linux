@@ -588,14 +588,10 @@ pub fn command(
             // Decode the audio instead of passing Dolby/DTS through to the TV or receiver:
             // on HDMI that failed ("digital pass-through stream connection failure"), and
             // the system volume only works on decoded sound.
-            .arg("--no-spdif");
-            // The kiosk hides X11 from everything (curator-kiosk in scripts/install.sh), but
-            // this VLC has no way to show its menus without it.
-            if let Some(display) =
-                std::env::var_os("CURATOR_KIOSK_X11_DISPLAY").filter(|d| !d.is_empty())
-            {
-                cmd.env("DISPLAY", display);
-            }
+            .arg("--no-spdif")
+            // No hardware decoding or its probe: on Wayland, VLC's probe crashed inside
+            // libva-wayland. A Blu-ray is no work for the processor.
+            .args(["--avcodec-hw=none", "--glconv=none"]);
             if let Some(dir) = movie.cache_dir {
                 cmd.arg(format!(
                     "--snapshot-path={}",
@@ -1028,6 +1024,7 @@ mod tests {
         );
         assert_eq!(cmd.get_program(), "vlc");
         assert_eq!(args(&cmd).last().unwrap(), "bluray:///dev/sr1");
+        assert!(args(&cmd).iter().any(|a| a == "--glconv=none"));
         let envs: Vec<_> = cmd.get_envs().collect();
         assert!(envs.contains(&("LIBAACS_PATH".as_ref(), Some("libmmbd".as_ref()))));
     }

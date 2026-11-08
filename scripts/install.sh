@@ -164,6 +164,11 @@ if [[ $UPDATE -eq 0 ]]; then
     info "Installing the kiosk compositor (${KIOSK_PACKAGES[*]})"
     sudo apt-get install -y "${KIOSK_PACKAGES[@]}"
 fi
+# VLC's window in the kiosk (Wayland). Also on --update: older installations don't have it.
+if ! dpkg -s qtwayland5 >/dev/null 2>&1; then
+    info "Installing Wayland support for VLC (qtwayland5)"
+    sudo apt-get install -y qtwayland5
+fi
 
 if ! command -v cargo >/dev/null && [[ -x $HOME/.cargo/bin/cargo ]]; then
     export PATH="$HOME/.cargo/bin:$PATH"
@@ -223,8 +228,7 @@ EOF
 cat >"$STAGING/bin/curator-kiosk" <<'EOF'
 #!/bin/sh
 # cage 0.1.5 segfaults as soon as an X11 program closes, ending the whole session. Without
-# DISPLAY, programs use Wayland; only VLC gets it back (src/player.rs), it can't do without.
-export CURATOR_KIOSK_X11_DISPLAY="${DISPLAY:-}"
+# DISPLAY, programs use Wayland.
 unset DISPLAY
 # $PPID is cage: once it is gone (session ended), stop instead of starting the media center
 # into whatever display comes next (it would run twice, hidden from the admin panel).

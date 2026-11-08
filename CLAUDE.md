@@ -816,10 +816,11 @@ Before you consider a change done, run the formatter, linter and tests for every
   the uninstaller. No autologin changes (system settings do that).
 - **No X11 in the kiosk:** cage 0.1.5 (Ubuntu 24.04) segfaults in `wl_list_remove` as soon as
   any X11 client closes (even `xeyes`), which ends the session. So `curator-kiosk` unsets
-  `DISPLAY` (kept in `CURATOR_KIOSK_X11_DISPLAY`) and the media center, mpv, DOSBox, RetroArch
-  and the website window use Wayland. A registered X11-only program can't start there. VLC
-  (disc menus) still gets X11, because `qtwayland5` isn't installed, so closing it still
-  ends the session. Reproduce without a screen: `WLR_BACKENDS=headless WLR_RENDERER=pixman
+  `DISPLAY` and the media center, mpv, VLC, DOSBox, RetroArch and the website window use
+  Wayland. A registered X11-only program can't start there. VLC's window is Qt's
+  (`qtwayland5`, installed by `install.sh`, also on `--update`; its own Wayland window plugin
+  doesn't start under cage) and it runs without hardware decoding (`--avcodec-hw=none
+  --glconv=none`: the probe crashed in libva-wayland). Reproduce without a screen: `WLR_BACKENDS=headless WLR_RENDERER=pixman
   WLR_LIBINPUT_NO_DEVICES=1 cage -s -- …`.
 - **Covered window (`App::logic`, `while_covered`):** under Wayland the compositor sends no
   frames to a window that a player or game covers, so `ui` doesn't run. eframe calls
