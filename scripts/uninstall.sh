@@ -102,8 +102,12 @@ if [[ $(state PREV_LINGER) != yes ]]; then
     sudo loginctl disable-linger "$INSTALL_USER"
 fi
 
-info "Removing $PREFIX and the login session"
+info "Removing $PREFIX, the login session and the remote access rule"
 sudo rm -f "$SESSION_FILE"
+if [[ -f /etc/udev/rules.d/70-familynovice-remote.rules ]]; then
+    sudo rm -f /etc/udev/rules.d/70-familynovice-remote.rules
+    sudo udevadm control --reload-rules || true
+fi
 sudo rm -rf "$PREFIX" "$PREFIX.new" "$PREFIX.old"
 
 if [[ $PURGE -eq 1 ]]; then

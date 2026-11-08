@@ -169,6 +169,21 @@ to itself (`target/release/` or `target/debug/`), otherwise in `PATH`.
    weekdays, this week or every day. **Status** shows usage and lets you unlock or lock.
 5. Click **Save and apply**: the media center uses the new settings right away.
 
+### Remote control
+
+Arrow keys, OK (as a click) and Back (as a right click, like air-mouse remotes send it) work
+right away. For the other buttons (OK outside pointer mode, home, play/pause, next,
+previous):
+
+1. Run `scripts/remote-access.sh` once (in a normal terminal; asks for your password) and
+   choose the remote from the list. It lets the logged-in user read **only that device**, so
+   the media center gets every button, also those X11 never delivers to any window (many
+   remotes send OK as `KEY_SELECT`). Undo: `scripts/remote-access.sh --remove`.
+2. Admin panel → **Home screen & media → Remote → Set up the remote on the TV**. The TV asks
+   for one button after the other; a button your remote doesn't have is skipped after 10 s.
+   The result is saved in `~/.local/share/familynovice/remote.json` and shown in the admin
+   panel.
+
 ### Using the media center
 
 | Key | Action |
@@ -252,7 +267,8 @@ Blocked pages are logged as `familynovice-web: blocked …`.
 | --- | --- |
 | `~/.config/familynovice/config.json` | settings (written by the admin panel) |
 | `~/.config/familynovice/admin.json` | admin password hash |
-| `~/.local/share/familynovice/` | resume positions, usage time (`usage.json`) |
+| `~/.local/share/familynovice/` | resume positions, usage time (`usage.json`), remote buttons (`remote.json`) |
+| `/etc/udev/rules.d/70-familynovice-remote.rules` | read access to the remote (`scripts/remote-access.sh`) |
 | `~/.cache/familynovice/` | disc info, website cookies and logos, player screenshots, MakeMKV build |
 | `/run/user/<uid>/familynovice*.sock` | control sockets |
 | `/opt/familynovice/` | installed programs (`scripts/install.sh`), `install-state` for the uninstaller |

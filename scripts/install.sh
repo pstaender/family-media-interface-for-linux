@@ -304,6 +304,8 @@ $(printf '\033[1;32m')Done.$(printf '\033[0m')
   * Admin panel: http://127.0.0.1:8787/  ($(target_systemctl is-active "$SERVICE_NAME" 2>/dev/null || true))
     From other devices: $(hostname -I 2>/dev/null | awk '{printf "http://%s:8787/", $1}')
     Set the admin password on this computer first, then a PIN.
+  * Remote control: run scripts/remote-access.sh once (lets the media center read the
+    remote directly), then admin panel → Home screen & media → Remote → set it up.
   * Leave the media center: Ctrl+Q (ends the session, back to the login screen).
   * Back to the normal desktop for this account: pick it in the session menu of the login
     screen, or run scripts/uninstall.sh.

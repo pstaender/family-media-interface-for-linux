@@ -13,6 +13,7 @@ use eframe::egui::{
 use crate::audio::AudioPlayer;
 use crate::config::{Config, FolderSettings};
 use crate::control::SharedConfig;
+use crate::control::UiRequest;
 use crate::disc::{self, DriveReport, DriveState, MediaKind};
 use crate::library::{self, Entry, EntryKind, Filter};
 use crate::limits::{self, Status};
@@ -21,6 +22,7 @@ use crate::makemkv::{self, DiscInfo, ScanProgress};
 use crate::mpris::{MediaCommand, Mpris, Status as PlayStatus};
 use crate::pictures::{self, Picture};
 use crate::player::{self, MovieOptions, PlayMode};
+use crate::remote::{self, Action, Calibration, RemoteMap};
 use crate::usage::SharedTracker;
 use crate::{cover, resume, sites, store};
 
@@ -77,6 +79,8 @@ enum ScanEvent {
 }
 
 enum Screen {
+    /// Learning the remote's buttons (started from the admin panel).
+    Calibrate(Box<CalibrateView>),
     Home,
     /// Asking how to start the Blu-ray.
     Choose {
@@ -245,6 +249,20 @@ fn select(mut browse: Browse, path: &std::path::Path) -> Browse {
     browse
 }
 
+struct CalibrateView {
+    calibration: Calibration,
+    /// Set when all buttons are through: the summary shows until a press or 20 s.
+    done: Option<Instant>,
+}
+
+/// Channels from the background threads into the UI.
+pub struct Inputs {
+    /// Keys of remotes read directly from their device (`remote::spawn`).
+    pub remote: Receiver<remote::KeyEvent>,
+    /// Requests from the admin interface (control socket).
+    pub requests: Receiver<UiRequest>,
+}
+
 /// Keys pressed this frame.
 struct Keys {
     enter: bool,
@@ -291,6 +309,22 @@ impl Keys {
 
     fn media(&self, command: MediaCommand) -> bool {
         self.media.contains(&command)
+    }
+
+    /// A remote button learned in the calibration (or read from the device).
+    fn apply(&mut self, action: Action) {
+        match action {
+            Action::Ok => self.enter = true,
+            Action::Back => self.back = true,
+            Action::Up => self.up = true,
+            Action::Down => self.down = true,
+            Action::Left => self.left = true,
+            Action::Right => self.right = true,
+            Action::PlayPause => self.media.push(MediaCommand::PlayPause),
+            Action::Next => self.media.push(MediaCommand::Next),
+            Action::Previous => self.media.push(MediaCommand::Previous),
+            Action::Home => {} // held, see App::home_button
+        }
     }
 
     /// For vertical lists: up/left = previous, down/right = next.
@@ -345,6 +379,13 @@ pub struct App {
     /// Media keys from the desktop (MPRIS); also tells the desktop whether something plays.
     mpris: Mpris,
     media_rx: Receiver<MediaCommand>,
+    inputs: Inputs,
+    /// The remote's learned buttons (`remote.json`).
+    remote_map: RemoteMap,
+    /// Device key codes currently held down (for the home button).
+    remote_down: std::collections::BTreeSet<u16>,
+    /// The admin panel asked for the calibration; starts on the home screen.
+    calibrate_requested: bool,
     drives_rx: Receiver<Vec<DriveReport>>,
     drives: Vec<DriveReport>,
     scan_tx: Sender<ScanEvent>,
@@ -391,7 +432,12 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(ctx: egui::Context, config: SharedConfig, tracker: SharedTracker) -> Self {
+    pub fn new(
+        ctx: egui::Context,
+        config: SharedConfig,
+        tracker: SharedTracker,
+        inputs: Inputs,
+    ) -> Self {
         let (drives_tx, drives_rx) = mpsc::channel();
         let repaint = ctx.clone();
         disc::spawn_watcher(Duration::from_secs(2), drives_tx, move || {
@@ -409,6 +455,10 @@ impl App {
             ctx,
             mpris,
             media_rx,
+            inputs,
+            remote_map: RemoteMap::load(),
+            remote_down: Default::default(),
+            calibrate_requested: false,
             drives_rx,
             drives: Vec::new(),
             scan_tx,
@@ -450,12 +500,177 @@ impl App {
     }
 
     /// Pull updates from background threads.
+    /// The remote calibration: asks for one button after the other (see `remote::Calibration`).
+    fn calibrate_screen(
+        &mut self,
+        ctx: &egui::Context,
+        painter: &egui::Painter,
+        screen_rect: Rect,
+        s: f32,
+        remote_events: &[remote::KeyEvent],
+    ) {
+        let Screen::Calibrate(view) = &mut self.screen else {
+            return;
+        };
+        let now = Instant::now();
+        let window_presses: Vec<String> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        repeat: false,
+                        ..
+                    } => Some(format!("key:{}", key.name())),
+                    egui::Event::PointerButton {
+                        button,
+                        pressed: true,
+                        ..
+                    } => Some(format!("mouse:{button:?}").to_lowercase()),
+                    _ => None,
+                })
+                .collect()
+        });
+        let center = screen_rect.center();
+        let font = |size: f32| FontId::proportional(size * s);
+        painter.text(
+            Pos2::new(center.x, screen_rect.min.y + 110.0 * s),
+            Align2::CENTER_CENTER,
+            "Remote setup",
+            font(52.0),
+            TEXT,
+        );
+
+        if let Some(done) = view.done {
+            // Summary; any button (or 20 s) closes it.
+            let mut lines = vec!["Saved. Your remote's buttons:".to_string(), String::new()];
+            for action in Action::ALL {
+                lines.push(format!(
+                    "{}:  {}",
+                    action.label(),
+                    view.calibration.map.describe(action)
+                ));
+            }
+            painter.text(
+                center,
+                Align2::CENTER_CENTER,
+                lines.join("\n"),
+                font(26.0),
+                TEXT,
+            );
+            painter.text(
+                Pos2::new(center.x, screen_rect.max.y - 70.0 * s),
+                Align2::CENTER_CENTER,
+                "Press any button to continue",
+                font(24.0),
+                TEXT_DIM,
+            );
+            let pressed = !window_presses.is_empty() || remote_events.iter().any(|e| e.value == 1);
+            if done.elapsed() > Duration::from_secs(20)
+                || (done.elapsed() > Duration::from_secs(1) && pressed)
+            {
+                self.screen = Screen::Home;
+            }
+            ctx.request_repaint_after(Duration::from_millis(500));
+            return;
+        }
+
+        for e in remote_events.iter().filter(|e| e.value == 1) {
+            view.calibration.device_press(e.code, now);
+        }
+        for w in window_presses {
+            view.calibration.window_press(w, now);
+        }
+        if view.calibration.tick(now) {
+            let map = view.calibration.map.clone();
+            if let Err(e) = map.save() {
+                log::warn!("could not save the remote's buttons: {e}");
+            }
+            log::info!("remote calibrated: {map:?}");
+            self.remote_map = map;
+            view.done = Some(now);
+            ctx.request_repaint();
+            return;
+        }
+        let Some(action) = view.calibration.current() else {
+            return;
+        };
+        painter.text(
+            Pos2::new(center.x, center.y - 150.0 * s),
+            Align2::CENTER_CENTER,
+            format!(
+                "Button {} of {}",
+                view.calibration.step() + 1,
+                Action::ALL.len()
+            ),
+            font(26.0),
+            TEXT_DIM,
+        );
+        painter.text(
+            Pos2::new(center.x, center.y - 60.0 * s),
+            Align2::CENTER_CENTER,
+            "Press this button on the remote:",
+            font(32.0),
+            TEXT,
+        );
+        painter.text(
+            Pos2::new(center.x, center.y + 20.0 * s),
+            Align2::CENTER_CENTER,
+            action.label(),
+            font(72.0),
+            ACCENT,
+        );
+        painter.text(
+            Pos2::new(center.x, center.y + 110.0 * s),
+            Align2::CENTER_CENTER,
+            format!(
+                "No such button? It's skipped in {} s.",
+                view.calibration.seconds_left(now)
+            ),
+            font(24.0),
+            TEXT_DIM,
+        );
+        if let Some(message) = &view.calibration.message {
+            painter.text(
+                Pos2::new(center.x, center.y + 170.0 * s),
+                Align2::CENTER_CENTER,
+                message,
+                font(26.0),
+                Color32::from_rgb(0xff, 0xb4, 0x5c),
+            );
+        }
+        let learned: Vec<String> = Action::ALL
+            .iter()
+            .take(view.calibration.step())
+            .map(|a| match view.calibration.map.buttons.get(a) {
+                Some(_) => format!("{} ✓", a.label()),
+                None => format!("{} –", a.label()),
+            })
+            .collect();
+        painter.text(
+            Pos2::new(center.x, screen_rect.max.y - 70.0 * s),
+            Align2::CENTER_CENTER,
+            learned.join("    "),
+            font(22.0),
+            TEXT_DIM,
+        );
+        ctx.request_repaint_after(Duration::from_millis(100));
+    }
+
     /// Holding the remote's home button (XF86HomePage) for 3 s stops what is playing and
     /// shows the home screen. While a player or website is in front, they handle it
     /// themselves (`player::MPV_HOME_SCRIPT`, `familynovice-web`).
     fn home_button(&mut self, ui: &egui::Ui, screen_rect: Rect, s: f32) {
         let ctx = ui.ctx();
-        if !ctx.input(|i| i.key_down(Key::BrowserHome)) {
+        let window_home = ctx.input(|i| {
+            i.key_down(Key::BrowserHome)
+                || self.remote_map.window_keys().any(|(name, action)| {
+                    action == Action::Home && Key::from_name(name).is_some_and(|k| i.key_down(k))
+                })
+        });
+        let device_home = self.remote_down.iter().any(|c| self.remote_map.is_home(*c));
+        if !window_home && !device_home {
             self.home_since = None;
             self.home_done = false;
             return;
@@ -1230,6 +1445,32 @@ impl eframe::App for App {
 
         let mut keys = Keys::read(&ctx);
         keys.media.extend(self.media_rx.try_iter());
+        for (name, action) in self.remote_map.window_keys() {
+            if Key::from_name(name).is_some_and(|k| ctx.input(|i| i.key_pressed(k))) {
+                keys.apply(action);
+            }
+        }
+        let remote_events: Vec<remote::KeyEvent> = self.inputs.remote.try_iter().collect();
+        for e in &remote_events {
+            match e.value {
+                0 => {
+                    self.remote_down.remove(&e.code);
+                }
+                _ => {
+                    self.remote_down.insert(e.code);
+                    self.last_input = Instant::now();
+                }
+            }
+        }
+        if self
+            .inputs
+            .requests
+            .try_iter()
+            .any(|r| r == UiRequest::CalibrateRemote)
+        {
+            self.calibrate_requested = true;
+            self.go_home();
+        }
         self.mpris.set_status(match &self.screen {
             Screen::Music(view) if view.player.state().paused => PlayStatus::Paused,
             Screen::Music(_) => PlayStatus::Playing,
@@ -1246,6 +1487,34 @@ impl eframe::App for App {
             return;
         }
         self.home_button(ui, screen_rect, s);
+        if self.calibrate_requested && matches!(self.screen, Screen::Home) {
+            self.calibrate_requested = false;
+            self.screen = Screen::Calibrate(Box::new(CalibrateView {
+                calibration: Calibration::new(Instant::now()),
+                done: None,
+            }));
+        }
+        if matches!(self.screen, Screen::Calibrate(_)) {
+            self.calibrate_screen(&ctx, &painter, screen_rect, s, &remote_events);
+            return;
+        }
+        // Buttons only the device reports (e.g. OK = KEY_SELECT), while our window is in
+        // front (not while a player or website is, or the desktop is used in development).
+        if ctx.input(|i| i.focused) {
+            for e in &remote_events {
+                let repeat_ok = e.value == 2;
+                if (e.value == 1 || repeat_ok)
+                    && let Some(action) = self.remote_map.device_action(e.code)
+                    && (!repeat_ok
+                        || matches!(
+                            action,
+                            Action::Up | Action::Down | Action::Left | Action::Right
+                        ))
+                {
+                    keys.apply(action);
+                }
+            }
+        }
 
         match self.screen {
             Screen::Browse(_) => self.browse_screen(ui, &painter, screen_rect, s, &keys),
@@ -1508,6 +1777,7 @@ impl App {
         // Overlays
         match &self.screen {
             Screen::Home
+            | Screen::Calibrate(_)
             | Screen::Browse(_)
             | Screen::Picture(_)
             | Screen::Music(_)

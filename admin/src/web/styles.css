@@ -664,3 +664,23 @@ select {
   text-align: center;
   color: #5d6475;
 }
+
+/* ---------------------------------------------------------------- remote */
+
+table.buttons {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+table.buttons th,
+table.buttons td {
+  text-align: left;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  vertical-align: top;
+}
+
+table.buttons th {
+  width: 160px;
+  font-weight: 500;
+}

@@ -260,6 +260,10 @@ pub fn command(
                 "--no-video-title-show",
                 // No first-run "privacy and network access" dialog.
                 "--no-qt-privacy-ask",
+                // Deinterlacing always on (not only for streams flagged as interlaced):
+                // many discs' menus and extras are interlaced. yadif: good quality, cheap.
+                "--deinterlace=1",
+                "--deinterlace-mode=yadif",
             ])
             // Esc closes the player (VLC allows one key per action).
             .args([
@@ -398,6 +402,8 @@ mod tests {
             &options,
         ));
         assert!(vlc.contains(&"--audio-language=deu,ger,eng".to_string()));
+        assert!(vlc.contains(&"--deinterlace=1".to_string()));
+        assert!(vlc.contains(&"--deinterlace-mode=yadif".to_string()));
         assert!(vlc.contains(&"--sub-language=deu,ger".to_string()));
         assert_eq!(vlc.last().unwrap(), "bluray:///dev/sr0");
         // No preference: no language options at all.

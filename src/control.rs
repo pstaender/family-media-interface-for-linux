@@ -9,6 +9,7 @@
 //!   lifts the limits (and a parent's lock) for that time
 //! - `{"command":"end_unlock"}`: ends an unlock early; the time limits apply again
 //! - `{"command":"lock"}`: locks the media center until it is unlocked
+//! - `{"command":"calibrate_remote"}`: shows the remote calibration on the TV
 //! - `{"command":"restart"}` → not supported yet (`ok: false`)
 
 use std::io::{BufRead, BufReader, Write};
@@ -22,9 +23,16 @@ use serde_json::{Value, json};
 
 use crate::config::{self, ConfigState};
 use crate::limits::{self, Status};
+use crate::remote::{self, RemoteMap, SharedDevices};
 use crate::usage::SharedTracker;
 
 pub type SharedConfig = Arc<Mutex<ConfigState>>;
+
+/// Things the admin interface asks the UI to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiRequest {
+    CalibrateRemote,
+}
 
 /// Everything the control socket works on.
 #[derive(Clone)]
@@ -32,6 +40,8 @@ pub struct Control {
     pub config: SharedConfig,
     pub config_path: PathBuf,
     pub tracker: SharedTracker,
+    pub remote_devices: SharedDevices,
+    pub ui_requests: std::sync::mpsc::Sender<UiRequest>,
 }
 
 /// Handle one request line and return the reply.
@@ -64,6 +74,7 @@ pub fn handle(line: &str, control: &Control) -> Value {
                 "used_today_secs": tracker.used_on(Local::now().date_naive()),
                 "used_week_secs": tracker.used_this_week(Local::now().date_naive()),
                 "unlocked_until": tracker.stored.unlocked_until,
+                "remote": remote_status(&control.remote_devices),
             })
         }
         Some("unlock") => {
@@ -99,10 +110,34 @@ pub fn handle(line: &str, control: &Control) -> Value {
             log::info!("locked from the admin panel");
             json!({"ok": true})
         }
+        Some("calibrate_remote") => match control.ui_requests.send(UiRequest::CalibrateRemote) {
+            Ok(()) => json!({"ok": true}),
+            Err(_) => json!({"ok": false, "error": "the media center's screen isn't running"}),
+        },
         Some("restart") => json!({"ok": false, "error": "restart is not supported yet"}),
         Some(other) => json!({"ok": false, "error": format!("unknown command: {other}")}),
         None => json!({"ok": false, "error": "expected {\"command\": \"…\"}"}),
     }
+}
+
+/// Readable remote devices and the learned buttons, for the admin panel.
+fn remote_status(devices: &SharedDevices) -> Value {
+    let devices: Vec<String> = devices
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .values()
+        .cloned()
+        .collect();
+    let map = RemoteMap::load();
+    let buttons: serde_json::Map<String, Value> = remote::Action::ALL
+        .iter()
+        .map(|a| (a.label().to_string(), json!(map.describe(*a))))
+        .collect();
+    json!({
+        "devices": devices,
+        "calibrated": !map.buttons.is_empty(),
+        "buttons": buttons,
+    })
 }
 
 /// Start the socket server in a background thread. `notify` is called after every
@@ -174,6 +209,9 @@ mod tests {
             config: Arc::new(Mutex::new(state)),
             config_path: path,
             tracker: Tracker::in_memory().shared(),
+            remote_devices: Arc::default(),
+            // The receiver is dropped: calibrate_remote reports that no screen runs.
+            ui_requests: std::sync::mpsc::channel().0,
         }
     }
 

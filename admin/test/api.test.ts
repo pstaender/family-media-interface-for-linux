@@ -173,6 +173,7 @@ test("status comes from the media center", async () => {
     usedTodaySecs: 1200,
     usedWeekSecs: 5400,
     unlockedUntil: null,
+    remote: null,
   });
 });
 
@@ -221,6 +222,9 @@ test("unlock and lock are forwarded to the media center", async () => {
     { command: "end_unlock" },
     { command: "lock" },
   ]);
+  requests.length = 0;
+  expect((await call("POST", "/api/remote/calibrate")).data).toEqual({ ok: true });
+  expect(requests).toEqual([{ command: "calibrate_remote" }]);
   for (const bad of [{}, { minutes: 0 }, { minutes: 2000 }, { minutes: "30" }]) {
     expect((await call("POST", "/api/unlock", bad)).status).toBe(400);
   }

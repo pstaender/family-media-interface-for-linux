@@ -199,6 +199,7 @@ type Status = {
   usedTodaySecs?: number;
   usedWeekSecs?: number;
   unlockedUntil?: number | null;
+  remote?: { devices: string[]; calibrated: boolean; buttons: Record<string, string> } | null;
 };
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
@@ -228,6 +229,7 @@ const PAGES: { id: string; label: string; icon: string; tabs: TabDef[] }[] = [
       { id: "discs", label: "Discs", icon: "disc", saves: true },
       { id: "folders", label: "Folders", icon: "folder", saves: true },
       { id: "websites", label: "Websites", icon: "world", saves: true },
+      { id: "remote", label: "Remote", icon: "device-remote" },
     ],
   },
   {
@@ -340,6 +342,9 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
       break;
     case "media/websites":
       content = <WebsitesSection websites={config.websites} onChange={(websites) => setConfig({ ...config, websites })} />;
+      break;
+    case "media/remote":
+      content = <RemoteTab status={status} reload={loadStatus} setNotice={setNotice} />;
       break;
     case "parental/status":
       content = <StatusTab status={status} reload={loadStatus} setNotice={setNotice} pinSet={pinSet} />;
@@ -521,6 +526,73 @@ const minutesText = (secs: number) => {
   const m = Math.max(0, Math.round(secs / 60));
   return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
 };
+
+function RemoteTab(props: { status: Status | null; reload: () => void; setNotice: (n: Notice) => void }) {
+  const { status } = props;
+  const [busy, setBusy] = useState(false);
+  const calibrate = async () => {
+    setBusy(true);
+    try {
+      await api("POST", "/api/remote/calibrate");
+      props.setNotice({ kind: "ok", text: "The remote setup is shown on the TV now. Press the buttons it asks for." });
+      setTimeout(props.reload, 3000);
+    } catch (e) {
+      props.setNotice({ kind: "error", text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!status) return <section className="card">Loading…</section>;
+  if (!status.running) {
+    return (
+      <section className="card">
+        <p>The media center is not running, so the remote can't be set up right now.</p>
+      </section>
+    );
+  }
+  const remote = status.remote;
+  return (
+    <>
+      <section className="card">
+        <h2>Remote control</h2>
+        <p className="hint">
+          Arrow keys, OK as a click and Back as a right click work with most remotes right away. The setup
+          learns the other buttons (OK outside pointer mode, home, play/pause, next, previous): the TV asks for
+          one button after the other; a button the remote doesn't have is skipped after 10 seconds.
+        </p>
+        {remote && remote.devices.length > 0 ? (
+          <p>
+            <Icon name="circle-check" /> Read directly: {remote.devices.join(", ")}
+          </p>
+        ) : (
+          <div className="banner warn">
+            The media center can't read the remote directly yet, so some buttons (e.g. OK outside pointer mode)
+            can't work. On the media center computer, run <code className="path">scripts/remote-access.sh</code>{" "}
+            once and choose the remote (it needs an administrator password).
+          </div>
+        )}
+        <button className="primary" disabled={busy} onClick={calibrate}>
+          <Icon name="device-remote" /> Set up the remote on the TV
+        </button>
+      </section>
+      {remote?.calibrated && (
+        <section className="card">
+          <h2>Learned buttons</h2>
+          <table className="buttons">
+            <tbody>
+              {Object.entries(remote.buttons).map(([label, text]) => (
+                <tr key={label}>
+                  <th>{label}</th>
+                  <td>{text}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+    </>
+  );
+}
 
 function StatusTab(props: { status: Status | null; reload: () => void; setNotice: (n: Notice) => void; pinSet: boolean }) {
   const { status } = props;

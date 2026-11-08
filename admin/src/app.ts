@@ -340,6 +340,16 @@ export function createAdminServer(options: AdminOptions) {
         ),
       },
 
+      "/api/remote/calibrate": {
+        POST: api(
+          async () => {
+            const reply = await sendCommand(socketPath, "calibrate_remote");
+            return reply.ok ? json({ ok: true }) : json({ error: reply.error }, 502);
+          },
+          { mutating: true },
+        ),
+      },
+
       "/api/browse": {
         GET: api(async (req) => {
           const path = new URL(req.url).searchParams.get("path") || homedir();
@@ -370,6 +380,7 @@ export function createAdminServer(options: AdminOptions) {
               usedTodaySecs: reply.used_today_secs ?? 0,
               usedWeekSecs: reply.used_week_secs ?? 0,
               unlockedUntil: reply.unlocked_until ?? null,
+              remote: reply.remote ?? null,
             });
           }
           return json({ running: false, error: reply.error === NOT_RUNNING ? null : reply.error });

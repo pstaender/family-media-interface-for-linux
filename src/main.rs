@@ -11,6 +11,7 @@ mod mpris;
 mod pictures;
 mod pin;
 mod player;
+mod remote;
 mod resume;
 // Parts of it are only used by the browser window (web/, includes this file).
 #[allow(dead_code)]
@@ -50,6 +51,10 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let tracker = usage::Tracker::load().shared();
+            let (remote_tx, remote_rx) = std::sync::mpsc::channel();
+            let ctx = cc.egui_ctx.clone();
+            let remote_devices = remote::spawn(remote_tx, move || ctx.request_repaint());
+            let (ui_tx, ui_rx) = std::sync::mpsc::channel();
             if let Some(path) = config_path {
                 let ctx = cc.egui_ctx.clone();
                 control::spawn_server(
@@ -58,11 +63,21 @@ fn main() -> eframe::Result {
                         config: shared.clone(),
                         config_path: path,
                         tracker: tracker.clone(),
+                        remote_devices,
+                        ui_requests: ui_tx,
                     },
                     move || ctx.request_repaint(),
                 );
             }
-            Ok(Box::new(ui::App::new(cc.egui_ctx.clone(), shared, tracker)))
+            Ok(Box::new(ui::App::new(
+                cc.egui_ctx.clone(),
+                shared,
+                tracker,
+                ui::Inputs {
+                    remote: remote_rx,
+                    requests: ui_rx,
+                },
+            )))
         }),
     )
 }

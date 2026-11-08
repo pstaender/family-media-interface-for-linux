@@ -120,6 +120,22 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   keys, OK is a left click, **return is a right click**. So a right click means "back":
   media center (`Keys.back`), mpv (`MBTN_RIGHT quit`), website window (leave page
   fullscreen → previous page → close on the first page; WebKit's context menu is off).
+- **Remote calibration (implemented, `src/remote.rs`):** many remote buttons never reach a
+  window: X11 can't deliver key codes > 247 (e.g. `KEY_SELECT` 353 = OK outside pointer mode
+  on the HAOBO remote, USB 4842:0001), egui drops keys it doesn't know. So the media center
+  also reads input devices directly (`/dev/input/event*`, read-only, never grabbed, hotplug
+  every 3 s). Access only to the remote: `scripts/remote-access.sh` writes
+  `/etc/udev/rules.d/70-familynovice-remote.rules` (`TAG+="uaccess"` by USB id; logind gives
+  the active session's user an ACL); not the `input` group (that would expose every keyboard).
+  Calibration (admin → Home screen & media → Remote → control socket `calibrate_remote` →
+  `Screen::Calibrate`): OK, Back, Home, arrows, Play/Pause, Next, Previous; each press is
+  gathered for 300 ms from the device and the window, a button already used is refused,
+  10 s without a press skips. Saved to `$XDG_DATA_HOME/familynovice/remote.json`. **No double
+  actions:** a button whose press also reached the window stays the window's (its key names
+  are added as extra bindings); device codes act only for buttons the window doesn't get,
+  and only while our window has focus. Without calibration: KEY_OK/KEY_SELECT = OK,
+  KEY_HOMEPAGE = home. Holding home works through the device also while a player/website
+  (including VLC) is in front. `status` reports the readable devices and learned buttons.
 - **Home button (implemented):** holding the remote's home button (XF86HomePage; egui
   `Key::BrowserHome`, mpv `HOMEPAGE`, GDK `HomePage`) for 3 s stops everything and shows the
   home screen. Media center window: `App::home_button` / `go_home` (hint while held). mpv:
@@ -189,7 +205,8 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   window); when the player exits: `Normal` + `Focus` (`ui::App::keep_player_in_front`).
 - **mpv video output:** `--vo=gpu-next,gpu,sdl,x11`. Xv/VDPAU are skipped: without a usable GPU
   (e.g. over RDP, display `:10`) mpv hung on Xv with a tiny invisible window. VLC gets
-  `--no-qt-privacy-ask` (no first-run dialog).
+  `--no-qt-privacy-ask` (no first-run dialog) and deinterlacing always on
+  (`--deinterlace=1 --deinterlace-mode=yadif`; disc menus and extras are often interlaced).
 - **Eject (`disc::eject`):** 1. `CDROM_LOCKDOOR` + `CDROMEJECT` ioctls. 2. If refused, unmount
   with `udisksctl` (desktop automount) and retry. 3. If still refused, run util-linux `eject`,
   which uses SCSI commands. Needed on the Pioneer BDR-UD04: after unmounting, the kernel
@@ -362,6 +379,7 @@ src/
   ui.rs           home screen / front row (egui): rows with focus navigation, disc chooser,
                   folder browser, overlays
   disc.rs         optical drive + disc detection (ioctl + udev)
+  remote.rs       remote read from its input device, calibration (remote.json)
   library.rs      read-only folder browsing (media filters, confinement to the folder)
   sites.rs        website rules (allowed pages, always-blocked addresses); also used by web/
   pictures.rs     picture decoding for the built-in viewer
@@ -374,6 +392,7 @@ scripts/
   setup.sh        installs players, builds MakeMKV from source (--no-makemkv: packages only)
   install.sh      kiosk install for the current account (cage session, admin service)
   uninstall.sh    undoes install.sh (--purge: also settings and data)
+  remote-access.sh  udev rule: read access to the remote only (for src/remote.rs)
   config.rs       config.json: types, validation, load/reload (fail closed)
   control.rs      control socket for the admin interface (reload/status)
 web/              familynovice-web: locked-down fullscreen browser window (WebKitGTK via wry),
