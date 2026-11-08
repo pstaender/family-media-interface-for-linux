@@ -21,6 +21,7 @@ mod sites;
 mod store;
 mod ui;
 mod usage;
+mod volume;
 
 use std::sync::{Arc, Mutex};
 

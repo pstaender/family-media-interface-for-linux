@@ -55,7 +55,8 @@ MakeMKV stay installed.
 
 Limits of the example: made for GDM and LightDM (they read the default session from
 AccountsService). With SDDM, pick the session once at the login screen. Inside the session
-there is no system volume control yet: use the volume of the TV or the players' keys. Website
+the remote's volume buttons change the computer's sound output (see "Using the media
+center"). Website
 file-upload fields and VLC's menus still open file dialogs; you can browse files there, but
 nothing can be started.
 
@@ -174,7 +175,7 @@ to itself (`target/release/` or `target/debug/`), otherwise in `PATH`.
 
 Arrow keys, OK (as a click) and Back (as a right click, like air-mouse remotes send it) work
 right away. For the other buttons (OK outside pointer mode, home, play/pause, next,
-previous):
+previous, volume up / down, mute):
 
 1. Run `scripts/remote-access.sh` once (in a normal terminal; asks for your password) and
    choose the remote from the list. It lets the logged-in user read **only that device**, so
@@ -196,6 +197,7 @@ previous):
 | Right click (the "return" button of air-mouse remotes) | like Esc; on websites: leave fullscreen, previous page, or close on the first page |
 | Media keys (remote, keyboard) | music: next / previous / play-pause / stop; pictures: next / previous; video: chapters, play-pause, stop |
 | Hold Esc for 3 s | close a website |
+| Volume up / down, mute (remote, keyboard) | system volume of the sound output (e.g. HDMI to the TV or receiver), in 5 % steps up to 100 %; also while a video or website is in front. Set the TV / receiver fairly loud once. On a normal desktop, the desktop handles the standard volume keys itself |
 | Hold the remote's home button for 3 s | stop what is playing (music, video, website) and show the home screen |
 | Ctrl+Q | quit the media center (development; will be PIN-protected) |
 

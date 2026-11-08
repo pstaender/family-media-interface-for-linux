@@ -143,6 +143,18 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   `player::EXIT_GO_HOME` (4); familynovice-web exits with the same code; the "Playing"
   screen then goes home instead of back to the folder. VLC (disc menus) has no hold
   detection. Not yet confirmed which key the tested remote sends for home.
+- **Volume (implemented, `src/volume.rs`):** the remote's volume up/down/mute change the
+  system volume of the default output (software volume; the HDMI receiver stays at a fixed
+  level; HDMI-CEC to the receiver would need extra hardware, maybe later as an option):
+  `wpctl` (PipeWire), else `pactl` (`LC_ALL=C`), in a worker thread with absolute values,
+  5 % steps, never above 100 %, up/down unmute. Learned in the calibration (Volume up,
+  Volume down, Mute). Our window: egui `Key::AudioVolume*` (+ learned window keys); device
+  codes only for buttons the window doesn't get. While a player/website is in front: every
+  volume button from the device (`RemoteMap::device_volume`). mpv/VLC don't change their own
+  volume on these keys (`VOLUME_UP ignore` …, `--key-vol-up=Ctrl+Up` …). A desktop handles
+  the standard keys (113–115) itself, so we skip them unless `FAMILYNOVICE_KIOSK=1` (set by
+  `familynovice-session`) or `XDG_CURRENT_DESKTOP` is empty. Feedback: bar at the bottom for
+  2 s, and `show-text` in mpv. "No volume control found" if neither tool works.
 - **Languages (implemented, `src/i18n.rs`):** English and German. `home.language`: `auto`
   (default: `LC_ALL` / `LC_MESSAGES` / `LANG`, then the `LANGUAGE` list as in gettext;
   English if none is known), `en`, `de`; set in the admin panel (Home screen tab), applied
@@ -411,6 +423,7 @@ src/
   sites.rs        website rules (allowed pages, always-blocked addresses); also used by web/
   pictures.rs     picture decoding for the built-in viewer
   audio.rs        built-in music player (windowless mpv controlled over IPC)
+  volume.rs       system volume for the remote's volume buttons (wpctl / pactl)
   makemkv.rs      makemkvcon robot-output parser, main title selection
   player.rs       builds the player commands (mpv / VLC with libmmbd)
   resume.rs       resume positions via mpv IPC
@@ -589,7 +602,7 @@ Before you consider a change done, run the formatter, linter and tests for every
   the uninstaller. No autologin changes (system settings do that).
 - **Kiosk escapes closed so far:** mpv's console (`` ` `` / `:`, its `run` command starts
   programs) is unbound in `MPV_INPUT_CONF`. Open: VLC's Qt menus and WebKit file-upload
-  dialogs (file browsing, nothing can be started); no volume control in the session.
+  dialogs (file browsing, nothing can be started).
 
 ## Decisions made
 

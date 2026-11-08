@@ -176,6 +176,8 @@ if [ -r /etc/default/keyboard ]; then
     export XKB_DEFAULT_MODEL="${XKB_DEFAULT_MODEL:-$XKBMODEL}"
     export XKB_DEFAULT_OPTIONS="${XKB_DEFAULT_OPTIONS:-$XKBOPTIONS}"
 fi
+# No desktop handles the volume keys here: the media center does (src/volume.rs).
+export FAMILYNOVICE_KIOSK=1
 # Logs: journalctl -t familynovice
 if command -v systemd-cat >/dev/null; then
     exec systemd-cat -t familynovice -- cage -s -- /opt/familynovice/bin/familynovice-kiosk

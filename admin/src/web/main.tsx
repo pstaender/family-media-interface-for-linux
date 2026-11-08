@@ -570,7 +570,7 @@ function RemoteTab(props: { status: Status | null; reload: () => void; setNotice
         <h2>Remote control</h2>
         <p className="hint">
           Arrow keys, OK as a click and Back as a right click work with most remotes right away. The setup
-          learns the other buttons (OK outside pointer mode, home, play/pause, next, previous): the TV asks for
+          learns the other buttons (OK outside pointer mode, home, play/pause, next, previous, volume up / down, mute): the TV asks for
           one button after the other; a button the remote doesn't have is skipped after 10 seconds.
         </p>
         <p className="hint">

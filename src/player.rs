@@ -36,6 +36,7 @@ fn mpv_no_writes(cmd: &mut Command, cache_dir: Option<&Path>) {
 /// position is kept: the resume monitor saves it when mpv closes. mpv's defaults stay active,
 /// except the console (` and :), whose `run` command could start any program (kiosk escape).
 /// The remote's next/previous keys jump between chapters (as via MPRIS, see `mpv_media_key`).
+/// The volume keys change the system volume (`volume`), not mpv's own, so they're ignored here.
 pub const MPV_INPUT_CONF: &str = "\
 ESC quit
 BS quit
@@ -47,6 +48,9 @@ MBTN_RIGHT quit
 : ignore
 NEXT add chapter 1
 PREV add chapter -1
+VOLUME_UP ignore
+VOLUME_DOWN ignore
+MUTE ignore
 ";
 pub const MPV_INPUT_CONF_NAME: &str = "mpv-input.conf";
 
@@ -86,7 +90,6 @@ pub fn mpv_home_script() -> String {
 /// next/previous chapter. Does nothing if mpv isn't listening (VLC, already closed).
 pub fn mpv_media_key(socket: &Path, key: crate::mpris::MediaCommand) {
     use crate::mpris::MediaCommand;
-    use std::io::Write;
     let command = match key {
         MediaCommand::PlayPause => serde_json::json!(["cycle", "pause"]),
         MediaCommand::Play => serde_json::json!(["set", "pause", "no"]),
@@ -95,12 +98,23 @@ pub fn mpv_media_key(socket: &Path, key: crate::mpris::MediaCommand) {
         MediaCommand::Previous => serde_json::json!(["add", "chapter", -1]),
         MediaCommand::Stop => return, // handled by the "Playing…" screen
     };
+    mpv_send(socket, &command);
+}
+
+/// Show a short text in the running video (e.g. the new volume).
+pub fn mpv_show_text(socket: &Path, text: &str) {
+    mpv_send(socket, &serde_json::json!(["show-text", text, 2000]));
+}
+
+/// Send one command to mpv's IPC socket; does nothing if mpv isn't listening.
+fn mpv_send(socket: &Path, command: &serde_json::Value) {
+    use std::io::Write;
     let result = std::os::unix::net::UnixStream::connect(socket).and_then(|mut stream| {
         stream.set_write_timeout(Some(std::time::Duration::from_millis(500)))?;
         writeln!(stream, "{}", serde_json::json!({ "command": command }))
     });
     if let Err(e) = result {
-        log::debug!("media key for mpv: {e}");
+        log::debug!("command for mpv: {e}");
     }
 }
 
@@ -273,10 +287,14 @@ pub fn command(
                 "--deinterlace=1",
                 "--deinterlace-mode=yadif",
             ])
-            // Esc closes the player (VLC allows one key per action).
+            // Esc closes the player (VLC allows one key per action). The volume keys change
+            // the system volume (`volume`), so VLC's own volume keeps only its Ctrl/m keys.
             .args([
                 "--key-quit=Esc",
                 "--key-leave-fullscreen=Ctrl+Alt+Shift+F12",
+                "--key-vol-up=Ctrl+Up",
+                "--key-vol-down=Ctrl+Down",
+                "--key-vol-mute=m",
             ]);
             if let Some(dir) = movie.cache_dir {
                 cmd.arg(format!(
@@ -499,6 +517,26 @@ mod tests {
         let dashdash = a.iter().position(|x| x == "--").unwrap();
         assert_eq!(&a[dashdash + 1..], ["/m/2.mp3", "/m/3.mp3"]);
         assert!(audio_command(&files, 3, Path::new("/run/a.sock"), None).is_none());
+    }
+
+    #[test]
+    fn players_leave_the_volume_keys_to_the_system_volume() {
+        for key in ["VOLUME_UP", "VOLUME_DOWN", "MUTE"] {
+            assert!(MPV_INPUT_CONF.lines().any(|l| l == format!("{key} ignore")));
+        }
+        let vlc = args(&command(
+            PlayMode::DiscMenu,
+            Path::new("/dev/sr0"),
+            None,
+            &MovieOptions::default(),
+        ));
+        for arg in [
+            "--key-vol-up=Ctrl+Up",
+            "--key-vol-down=Ctrl+Down",
+            "--key-vol-mute=m",
+        ] {
+            assert!(vlc.contains(&arg.to_string()), "{arg}");
+        }
     }
 
     #[test]

@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::store;
+use crate::volume::VolumeCommand;
 use crate::{tr, tr_noop};
 
 /// `KEY_HOMEPAGE`: the home button of most remotes.
@@ -33,6 +34,12 @@ pub const KEY_SELECT: u16 = 353;
 /// so to the desktop's media keys.
 pub const KEY_NEXT: u16 = 407;
 pub const KEY_PREVIOUS: u16 = 412;
+/// `KEY_MUTE` / `KEY_VOLUMEDOWN` / `KEY_VOLUMEUP`: a desktop handles these itself (see
+/// `volume::desktop_handles_keys`). Our window gets them as `AudioVolume*` keys; while a
+/// player or website is in front, they come from the device.
+pub const KEY_MUTE: u16 = 113;
+pub const KEY_VOLUMEDOWN: u16 = 114;
+pub const KEY_VOLUMEUP: u16 = 115;
 
 /// What a remote button does in the media center.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -48,11 +55,14 @@ pub enum Action {
     PlayPause,
     Next,
     Previous,
+    VolumeUp,
+    VolumeDown,
+    Mute,
 }
 
 impl Action {
     /// The order the calibration asks for the buttons.
-    pub const ALL: [Action; 10] = [
+    pub const ALL: [Action; 13] = [
         Action::Ok,
         Action::Back,
         Action::Home,
@@ -63,6 +73,9 @@ impl Action {
         Action::PlayPause,
         Action::Next,
         Action::Previous,
+        Action::VolumeUp,
+        Action::VolumeDown,
+        Action::Mute,
     ];
 
     pub fn label(self) -> &'static str {
@@ -77,6 +90,19 @@ impl Action {
             Action::PlayPause => tr_noop!("Play / Pause"),
             Action::Next => tr_noop!("Next"),
             Action::Previous => tr_noop!("Previous"),
+            Action::VolumeUp => tr_noop!("Volume up"),
+            Action::VolumeDown => tr_noop!("Volume down"),
+            Action::Mute => tr_noop!("Mute"),
+        }
+    }
+
+    /// The volume command of a volume button.
+    pub fn volume(self) -> Option<VolumeCommand> {
+        match self {
+            Action::VolumeUp => Some(VolumeCommand::Up),
+            Action::VolumeDown => Some(VolumeCommand::Down),
+            Action::Mute => Some(VolumeCommand::Mute),
+            _ => None,
         }
     }
 }
@@ -130,6 +156,39 @@ impl RemoteMap {
             KEY_PREVIOUS => Some(Action::Previous),
             _ => None,
         })
+    }
+
+    /// The volume command of a device code. `focused`: our window is in front and gets the
+    /// keys it can (then only buttons the window doesn't get count); otherwise one of our
+    /// players or websites is in front, which doesn't change the system volume, so every
+    /// volume button counts, learned or standard. `desktop_volume`: a desktop already
+    /// handles the standard volume keys, so they never count.
+    pub fn device_volume(
+        &self,
+        code: u16,
+        focused: bool,
+        desktop_volume: bool,
+    ) -> Option<VolumeCommand> {
+        if desktop_volume && matches!(code, KEY_VOLUMEUP | KEY_VOLUMEDOWN | KEY_MUTE) {
+            return None;
+        }
+        if focused {
+            return self.device_action(code).and_then(Action::volume);
+        }
+        let learned = self
+            .buttons
+            .iter()
+            .find(|(_, b)| b.codes.contains(&code))
+            .map(|(a, _)| *a);
+        match learned {
+            Some(action) => action.volume(),
+            None => match code {
+                KEY_VOLUMEUP => Some(VolumeCommand::Up),
+                KEY_VOLUMEDOWN => Some(VolumeCommand::Down),
+                KEY_MUTE => Some(VolumeCommand::Mute),
+                _ => None,
+            },
+        }
     }
 
     /// Is this device code the home button (held: go to the home screen)?
@@ -513,6 +572,20 @@ mod tests {
         assert_eq!(empty.device_action(KEY_NEXT), Some(Action::Next));
         assert_eq!(empty.device_action(KEY_PREVIOUS), Some(Action::Previous));
         assert_eq!(empty.device_action(28), None); // Enter reaches the window
+        // Player in front: the standard volume keys from the device.
+        assert_eq!(
+            empty.device_volume(KEY_VOLUMEUP, false, false),
+            Some(VolumeCommand::Up)
+        );
+        assert_eq!(
+            empty.device_volume(KEY_MUTE, false, false),
+            Some(VolumeCommand::Mute)
+        );
+        // Our window in front: it gets them as AudioVolume* keys, the device doesn't count.
+        assert_eq!(empty.device_volume(KEY_VOLUMEUP, true, false), None);
+        // A desktop handles the standard keys itself: no second change.
+        assert_eq!(empty.device_volume(KEY_VOLUMEUP, false, true), None);
+        assert_eq!(empty.device_volume(KEY_SELECT, false, false), None);
         let mut map = RemoteMap::default();
         map.buttons.insert(
             Action::Back,
@@ -533,6 +606,39 @@ mod tests {
             [("F5", Action::Back)]
         );
         assert!(map.is_home(102));
+        // A learned volume button only the device sees: always, also with a desktop.
+        map.buttons.insert(
+            Action::VolumeDown,
+            Button {
+                codes: vec![KEY_VOLUMEUP, 0x1a0],
+                window: vec![],
+            },
+        );
+        for focused in [true, false] {
+            assert_eq!(
+                map.device_volume(0x1a0, focused, true),
+                Some(VolumeCommand::Down)
+            );
+        }
+        assert_eq!(map.device_volume(KEY_VOLUMEUP, false, true), None);
+        // Learned: KEY_VOLUMEUP now means "down" (the default is replaced).
+        assert_eq!(
+            map.device_volume(KEY_VOLUMEUP, false, false),
+            Some(VolumeCommand::Down)
+        );
+        // A learned button the window gets too: the window's while focused, else the device's.
+        map.buttons.insert(
+            Action::Mute,
+            Button {
+                codes: vec![KEY_MUTE],
+                window: vec!["key:AudioVolumeMute".into()],
+            },
+        );
+        assert_eq!(map.device_volume(KEY_MUTE, true, false), None);
+        assert_eq!(
+            map.device_volume(KEY_MUTE, false, false),
+            Some(VolumeCommand::Mute)
+        );
         assert!(!map.is_home(KEY_HOMEPAGE)); // learned home button replaces the default
         let json = serde_json::to_string(&map).unwrap();
         assert_eq!(serde_json::from_str::<RemoteMap>(&json).unwrap(), map);

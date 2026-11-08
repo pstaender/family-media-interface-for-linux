@@ -26,6 +26,7 @@ use crate::recent;
 use crate::remote::{self, Action, Calibration, RemoteMap};
 use crate::tr;
 use crate::usage::SharedTracker;
+use crate::volume::{self, Volume, VolumeCommand};
 use crate::{cover, resume, sites, store};
 
 /// How long the remote's home button must be held to go to the home screen.
@@ -315,6 +316,8 @@ struct Keys {
     quit: bool,
     /// Media keys (next, previous, play/pause, stop): from the window or via MPRIS.
     media: Vec<MediaCommand>,
+    /// Volume keys the window got (built-in `AudioVolume*` or learned keys).
+    volume: Vec<VolumeCommand>,
 }
 
 impl Keys {
@@ -343,6 +346,25 @@ impl Keys {
             .filter(|(key, _)| i.key_pressed(*key))
             .map(|(_, command)| command)
             .collect(),
+            // Up/down repeat while held; mute doesn't.
+            volume: i
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        repeat,
+                        ..
+                    } => match key {
+                        Key::AudioVolumeUp => Some(VolumeCommand::Up),
+                        Key::AudioVolumeDown => Some(VolumeCommand::Down),
+                        Key::AudioVolumeMute if !repeat => Some(VolumeCommand::Mute),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect(),
         })
     }
 
@@ -362,6 +384,14 @@ impl Keys {
             Action::PlayPause => self.media.push(MediaCommand::PlayPause),
             Action::Next => self.media.push(MediaCommand::Next),
             Action::Previous => self.media.push(MediaCommand::Previous),
+            Action::VolumeUp | Action::VolumeDown | Action::Mute => {
+                // A learned key may be a built-in one too (AudioVolumeUp): count it once.
+                if let Some(command) = action.volume()
+                    && !self.volume.contains(&command)
+                {
+                    self.volume.push(command);
+                }
+            }
             Action::Home => {} // held, see App::home_button
         }
     }
@@ -372,6 +402,15 @@ impl Keys {
     }
     fn next(&self) -> bool {
         self.down || self.right
+    }
+}
+
+/// "Volume 45 %", "Muted" or that there is no volume control.
+fn volume_text(shown: volume::Shown) -> String {
+    match shown {
+        volume::Shown::Level(l) if l.muted => tr!("Muted").into(),
+        volume::Shown::Level(l) => tr!("Volume {percent} %", percent = l.percent),
+        volume::Shown::Unavailable => tr!("No volume control found").into(),
     }
 }
 
@@ -468,6 +507,11 @@ pub struct App {
     last_input: Instant,
     pin_tx: Sender<bool>,
     pin_rx: Receiver<bool>,
+    /// System volume (remote's volume buttons) and the last change already passed to mpv.
+    volume: Volume,
+    volume_seen: Option<Instant>,
+    /// A desktop handles the standard volume keys (not in the kiosk session).
+    desktop_volume: bool,
 }
 
 impl App {
@@ -490,6 +534,17 @@ impl App {
         let (logo_tx, logo_rx) = mpsc::channel();
         let repaint = ctx.clone();
         let mpris = Mpris::start(media_tx, move || repaint.request_repaint());
+        let repaint = ctx.clone();
+        let volume = Volume::spawn(move || repaint.request_repaint());
+        let desktop_volume = volume::desktop_handles_keys();
+        log::info!(
+            "volume keys: {}",
+            if desktop_volume {
+                "handled by the desktop (learned non-standard buttons: by us)"
+            } else {
+                "handled by the media center"
+            }
+        );
         Self {
             ctx,
             mpris,
@@ -529,6 +584,9 @@ impl App {
             last_input: Instant::now(),
             pin_tx,
             pin_rx,
+            volume,
+            volume_seen: None,
+            desktop_volume,
         }
     }
 
@@ -762,6 +820,96 @@ impl App {
             TEXT,
         );
         ctx.request_repaint_after(Duration::from_millis(100));
+    }
+
+    /// The remote's volume buttons change the system volume (`volume`): from the window
+    /// while it's in front, from the device while one of our players or websites is (they
+    /// don't change the system volume themselves). Not during the calibration.
+    fn volume_keys(&mut self, ctx: &egui::Context, keys: &Keys, events: &[remote::KeyEvent]) {
+        if matches!(self.screen, Screen::Calibrate(_)) {
+            return;
+        }
+        let focused = ctx.input(|i| i.focused);
+        let mut commands = keys.volume.clone();
+        // Not focused and nothing of ours in front: someone uses the desktop (development).
+        if focused || matches!(self.screen, Screen::Playing { .. }) {
+            for e in events.iter().filter(|e| e.value == 1 || e.value == 2) {
+                match self
+                    .remote_map
+                    .device_volume(e.code, focused, self.desktop_volume)
+                {
+                    Some(VolumeCommand::Mute) if e.value == 2 => {}
+                    Some(command) => commands.push(command),
+                    None => {}
+                }
+            }
+        }
+        for command in commands {
+            self.volume.send(command);
+        }
+        // A new level: show it in mpv too (in front of our window during a video).
+        let Some((shown, at)) = self.volume.shown() else {
+            return;
+        };
+        if self.volume_seen == Some(at) {
+            return;
+        }
+        self.volume_seen = Some(at);
+        if let Screen::Playing {
+            kind,
+            stopping: None,
+            ..
+        } = &self.screen
+            && *kind != PlayKind::Website
+        {
+            player::mpv_show_text(&store::mpv_socket_path(), &volume_text(shown));
+        }
+    }
+
+    /// The volume bar (bottom center) for 2 s after a change.
+    fn paint_volume(&self, ui: &egui::Ui, screen_rect: Rect, s: f32) {
+        const SHOW: Duration = Duration::from_secs(2);
+        let Some((shown, at)) = self.volume.shown() else {
+            return;
+        };
+        let age = at.elapsed();
+        if age >= SHOW {
+            return;
+        }
+        let ctx = ui.ctx();
+        ctx.request_repaint_after(SHOW - age);
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            ui.make_persistent_id("volume"),
+        ));
+        let rect = Rect::from_center_size(
+            Pos2::new(screen_rect.center().x, screen_rect.max.y - 220.0 * s),
+            Vec2::new(560.0 * s, 110.0 * s),
+        );
+        painter.rect_filled(
+            rect,
+            CornerRadius::same((16.0 * s) as u8),
+            Color32::from_black_alpha(220),
+        );
+        painter.text(
+            Pos2::new(rect.center().x, rect.min.y + 32.0 * s),
+            Align2::CENTER_CENTER,
+            volume_text(shown),
+            FontId::proportional(28.0 * s),
+            TEXT,
+        );
+        if let volume::Shown::Level(level) = shown {
+            let bar = Rect::from_min_size(
+                Pos2::new(rect.min.x + 36.0 * s, rect.max.y - 38.0 * s),
+                Vec2::new(rect.width() - 72.0 * s, 14.0 * s),
+            );
+            let radius = CornerRadius::same((7.0 * s) as u8);
+            painter.rect_filled(bar, radius, Color32::from_white_alpha(40));
+            let mut filled = bar;
+            filled.set_width(bar.width() * level.percent.min(100) as f32 / 100.0);
+            let color = if level.muted { TEXT_DIM } else { ACCENT };
+            painter.rect_filled(filled, radius, color);
+        }
     }
 
     /// Stop whatever runs (music, player, website) and show the home screen.
@@ -1585,6 +1733,7 @@ impl eframe::App for App {
                 let repeat_ok = e.value == 2;
                 if (e.value == 1 || repeat_ok)
                     && let Some(action) = self.remote_map.device_action(e.code)
+                    && action.volume().is_none() // see App::volume_keys
                     && (!repeat_ok
                         || matches!(
                             action,
@@ -1595,6 +1744,8 @@ impl eframe::App for App {
                 }
             }
         }
+        self.volume_keys(&ctx, &keys, &remote_events);
+        self.paint_volume(ui, screen_rect, s);
 
         if self.lock.is_some() {
             self.lock_screen(ui, &painter, screen_rect, s, &keys);
