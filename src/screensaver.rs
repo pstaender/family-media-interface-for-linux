@@ -4,7 +4,7 @@
 //!   shows the same thing for long) over a very dark background whose color changes a little
 //!   every minute (black to dark gray, with a faint tint). Painted by egui.
 //! - **Aerial:** the aerial videos the admin interface downloaded
-//!   (`$XDG_CACHE_HOME/familynovice/aerial/<id>.<quality>.mov`), played by mpv without sound in
+//!   (`$XDG_CACHE_HOME/curator/aerial/<id>.<quality>.mov`), played by mpv without sound in
 //!   random order (`player::screensaver_command`). Without any downloaded video: title.
 //!
 //! Any input ends it, and that input does nothing else. The pure parts (timing, motion,
@@ -155,7 +155,7 @@ mod tests {
 
     #[test]
     fn picks_downloaded_aerial_files() {
-        let dir = std::env::temp_dir().join(format!("familynovice-aerial-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("curator-aerial-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         for name in [
             "A.1080p_hevc.mov",

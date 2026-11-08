@@ -1,5 +1,5 @@
 [package]
-name = "familynovice"
+name = "curator"
 version = "0.1.0"
 edition = "2024"
 
@@ -19,6 +19,6 @@ url = "2.5.8"
 zbus = "5"
 
 # `cargo build` builds only the media center; the browser window needs WebKitGTK dev files:
-# `cargo build -p familynovice-web` (or `--workspace`).
+# `cargo build -p curator-web` (or `--workspace`).
 [workspace]
 members = [".", "web"]

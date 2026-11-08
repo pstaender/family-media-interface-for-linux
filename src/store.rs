@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-const APP: &str = "familynovice";
+const APP: &str = "curator";
 
-/// `$XDG_CACHE_HOME/familynovice/discs/<key>.json`: MakeMKV scan results.
+/// `$XDG_CACHE_HOME/curator/discs/<key>.json`: MakeMKV scan results.
 pub fn disc_cache_path(key: &str) -> Option<PathBuf> {
     Some(
         dirs::cache_dir()?
@@ -18,7 +18,7 @@ pub fn disc_cache_path(key: &str) -> Option<PathBuf> {
     )
 }
 
-/// `$XDG_DATA_HOME/familynovice/resume/<key>.json`: where a movie was stopped.
+/// `$XDG_DATA_HOME/curator/resume/<key>.json`: where a movie was stopped.
 pub fn resume_path(key: &str) -> Option<PathBuf> {
     Some(
         dirs::data_dir()?
@@ -28,22 +28,22 @@ pub fn resume_path(key: &str) -> Option<PathBuf> {
     )
 }
 
-/// `$XDG_DATA_HOME/familynovice/usage.json`: usage time, unlocks, PIN tries.
+/// `$XDG_DATA_HOME/curator/usage.json`: usage time, unlocks, PIN tries.
 pub fn usage_path() -> Option<PathBuf> {
     Some(dirs::data_dir()?.join(APP).join("usage.json"))
 }
 
-/// `$XDG_DATA_HOME/familynovice/recent.json`: recently played files per folder.
+/// `$XDG_DATA_HOME/curator/recent.json`: recently played files per folder.
 pub fn recent_path() -> Option<PathBuf> {
     Some(dirs::data_dir()?.join(APP).join("recent.json"))
 }
 
-/// `$XDG_DATA_HOME/familynovice/remote.json`: the remote's buttons (calibration).
+/// `$XDG_DATA_HOME/curator/remote.json`: the remote's buttons (calibration).
 pub fn remote_path() -> Option<PathBuf> {
     Some(dirs::data_dir()?.join(APP).join("remote.json"))
 }
 
-/// `$XDG_CACHE_HOME/familynovice/player`: where players may write (screenshots, …),
+/// `$XDG_CACHE_HOME/curator/player`: where players may write (screenshots, …),
 /// so they never write next to the media.
 pub fn player_cache_dir() -> Option<PathBuf> {
     Some(dirs::cache_dir()?.join(APP).join("player"))
@@ -80,12 +80,12 @@ pub fn prepare_player_cache() -> Option<PathBuf> {
     Some(dir)
 }
 
-/// `$XDG_CACHE_HOME/familynovice/web`: cookies, local storage and cache of the website window.
+/// `$XDG_CACHE_HOME/curator/web`: cookies, local storage and cache of the website window.
 pub fn web_data_dir() -> Option<PathBuf> {
     Some(dirs::cache_dir()?.join(APP).join("web"))
 }
 
-/// `$XDG_CACHE_HOME/familynovice/logos/<website id>.img`: the website's logo, fetched by the
+/// `$XDG_CACHE_HOME/curator/logos/<website id>.img`: the website's logo, fetched by the
 /// admin interface (`admin/src/logos.ts`); the media center only reads it.
 pub fn logo_path(website_id: &str) -> Option<PathBuf> {
     Some(
@@ -96,7 +96,7 @@ pub fn logo_path(website_id: &str) -> Option<PathBuf> {
     )
 }
 
-/// `$XDG_CACHE_HOME/familynovice/aerial`: the screensaver's aerial videos, downloaded by the
+/// `$XDG_CACHE_HOME/curator/aerial`: the screensaver's aerial videos, downloaded by the
 /// admin interface (`admin/src/aerial.ts`); the media center only reads them.
 pub fn aerial_dir() -> Option<PathBuf> {
     Some(dirs::cache_dir()?.join(APP).join("aerial"))
@@ -123,7 +123,70 @@ pub fn instance_lock_path() -> PathBuf {
         .join(format!("{APP}.lock"))
 }
 
-/// Were we started by a `familynovice-kiosk` loop whose session (cage) is gone? Such a loop
+/// The project's former name: its folders are taken over once (`migrate_old_folders`).
+const OLD_NAME: &str = "familynovice";
+
+/// curator was called "familynovice": rename its folders in the XDG config, data and cache
+/// dirs (only our own folders, only if the new one doesn't exist yet), and turn the old
+/// default title into the new one. Done by whichever part starts first (admin or media
+/// center; renaming is atomic). Not for a config dir set with `CURATOR_CONFIG_DIR`.
+pub fn migrate_old_folders() {
+    let override_config = std::env::var_os("CURATOR_CONFIG_DIR").is_some_and(|d| !d.is_empty());
+    let bases = [
+        (!override_config).then(dirs::config_dir).flatten(),
+        dirs::data_dir(),
+        dirs::cache_dir(),
+    ];
+    for (i, base) in bases.into_iter().enumerate() {
+        let Some(base) = base else { continue };
+        if migrate_folder(&base) && i == 0 {
+            rename_old_title(&base.join(APP).join("config.json"));
+        }
+    }
+}
+
+/// `<base>/familynovice` → `<base>/curator`. True if it was renamed.
+fn migrate_folder(base: &Path) -> bool {
+    let (old, new) = (base.join(OLD_NAME), base.join(APP));
+    if !old.is_dir() || new.exists() {
+        return false;
+    }
+    match std::fs::rename(&old, &new) {
+        Ok(()) => {
+            log::info!("renamed {} to {}", old.display(), new.display());
+            true
+        }
+        Err(e) => {
+            log::warn!("could not rename {}: {e}", old.display());
+            false
+        }
+    }
+}
+
+/// The old default title ("familynovice") becomes the new one.
+fn rename_old_title(config: &Path) {
+    let Ok(text) = std::fs::read_to_string(config) else {
+        return;
+    };
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return;
+    };
+    let Some(title) = value.pointer_mut("/home/title") else {
+        return;
+    };
+    if title != OLD_NAME {
+        return;
+    }
+    *title = serde_json::Value::from(APP);
+    if let Err(e) = save(config, &value) {
+        log::warn!("could not update the title in {}: {e}", config.display());
+    }
+}
+
+/// The kiosk loop's process name (`Name` in /proc is cut to 15 characters; this fits).
+const KIOSK_LOOP: &str = "curator-kiosk";
+
+/// Were we started by a `curator-kiosk` loop whose session (cage) is gone? Such a loop
 /// survives the logout (its parent is then init or a `systemd` manager) and would start the
 /// media center into the next session a second time. `proc` is `/proc`.
 pub fn started_by_orphaned_kiosk(proc: &Path, pid: u32) -> bool {
@@ -143,8 +206,7 @@ pub fn started_by_orphaned_kiosk(proc: &Path, pid: u32) -> bool {
     let Some((loop_name, session_pid)) = parent(&loop_pid) else {
         return false;
     };
-    // `Name` is cut to 15 characters: "familynovice-ki".
-    if !loop_name.starts_with("familynovice-ki") {
+    if loop_name != KIOSK_LOOP {
         return false;
     }
     if session_pid == "1" {
@@ -153,7 +215,7 @@ pub fn started_by_orphaned_kiosk(proc: &Path, pid: u32) -> bool {
     matches!(parent(&session_pid), Some((name, _)) if name == "systemd")
 }
 
-/// Were we started by the kiosk session's `familynovice-kiosk` loop (which restarts us)?
+/// Were we started by the kiosk session's `curator-kiosk` loop (which restarts us)?
 pub fn started_by_kiosk(proc: &Path, pid: u32) -> bool {
     let status = |pid: &str| std::fs::read_to_string(proc.join(pid).join("status")).ok();
     let field = |status: &str, name: &str| {
@@ -167,7 +229,7 @@ pub fn started_by_kiosk(proc: &Path, pid: u32) -> bool {
     };
     status(&parent)
         .and_then(|s| field(&s, "Name"))
-        .is_some_and(|n| n.starts_with("familynovice-ki"))
+        .is_some_and(|n| n == KIOSK_LOOP)
 }
 
 /// Take the single-instance lock. `Ok(None)`: another media center of this user runs.
@@ -255,8 +317,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn takes_over_the_old_folders_once() {
+        let base = std::env::temp_dir().join(format!("curator-migrate-{}", std::process::id()));
+        let old = base.join(OLD_NAME);
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(
+            old.join("config.json"),
+            r#"{"version":1,"home":{"title":"familynovice","show_title":true}}"#,
+        )
+        .unwrap();
+        assert!(migrate_folder(&base));
+        rename_old_title(&base.join(APP).join("config.json"));
+        assert!(!old.exists());
+        let text = std::fs::read_to_string(base.join(APP).join("config.json")).unwrap();
+        assert!(text.contains(r#""title": "curator""#), "{text}");
+        // Both exist: nothing is touched (the new one wins).
+        std::fs::create_dir_all(&old).unwrap();
+        assert!(!migrate_folder(&base));
+        assert!(old.exists());
+        // A title the parents chose stays.
+        let custom = base.join("custom.json");
+        std::fs::write(&custom, r#"{"version":1,"home":{"title":"Kino"}}"#).unwrap();
+        rename_old_title(&custom);
+        assert!(std::fs::read_to_string(&custom).unwrap().contains("Kino"));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
     fn detects_an_orphaned_kiosk_loop() {
-        let proc = std::env::temp_dir().join(format!("familynovice-proc-{}", std::process::id()));
+        let proc = std::env::temp_dir().join(format!("curator-proc-{}", std::process::id()));
         let add = |pid: u32, name: &str, ppid: u32| {
             let dir = proc.join(pid.to_string());
             std::fs::create_dir_all(&dir).unwrap();
@@ -269,16 +358,16 @@ mod tests {
         add(1669, "systemd", 1);
         // Live session: cage → kiosk loop → media center.
         add(21611, "cage", 21562);
-        add(21712, "familynovice-ki", 21611);
-        add(21714, "familynovice", 21712);
+        add(21712, "curator-kiosk", 21611);
+        add(21714, "curator", 21712);
         // Orphaned loop (its cage is gone): under the user's systemd, or init.
-        add(20196, "familynovice-ki", 1669);
-        add(21785, "familynovice", 20196);
-        add(30000, "familynovice-ki", 1);
-        add(30001, "familynovice", 30000);
+        add(20196, "curator-kiosk", 1669);
+        add(21785, "curator", 20196);
+        add(30000, "curator-kiosk", 1);
+        add(30001, "curator", 30000);
         // Development: started from a shell.
         add(500, "zsh", 400);
-        add(501, "familynovice", 500);
+        add(501, "curator", 500);
         assert!(!started_by_orphaned_kiosk(&proc, 21714));
         assert!(started_by_orphaned_kiosk(&proc, 21785));
         assert!(started_by_orphaned_kiosk(&proc, 30001));
@@ -292,7 +381,7 @@ mod tests {
 
     #[test]
     fn only_one_instance_gets_the_lock() {
-        let path = std::env::temp_dir().join(format!("familynovice-lock-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("curator-lock-{}", std::process::id()));
         let first = lock_instance(&path).unwrap();
         assert!(first.is_some());
         assert!(lock_instance(&path).unwrap().is_none());
@@ -312,7 +401,7 @@ mod tests {
 
     #[test]
     fn save_and_load_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("familynovice-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("curator-test-{}", std::process::id()));
         let path = dir.join("sub").join("x.json");
         save(&path, &vec![1, 2, 3]).unwrap();
         assert_eq!(load::<Vec<i32>>(&path), Some(vec![1, 2, 3]));

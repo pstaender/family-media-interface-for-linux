@@ -23,7 +23,7 @@ import { ICONS } from "./icons";
 async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
-    headers: { "Content-Type": "application/json", "X-Familynovice": "1" },
+    headers: { "Content-Type": "application/json", "X-Curator": "1" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
@@ -83,12 +83,12 @@ function App() {
     refresh();
   }, [refresh]);
 
-  if (error) return <Narrow title="familynovice"><div className="banner error">{error}</div></Narrow>;
+  if (error) return <Narrow title="curator"><div className="banner error">{error}</div></Narrow>;
   if (page === "loading") return null;
   if (page === "setup") {
     if (!setupAllowed) {
       return (
-        <Narrow title="Welcome to familynovice">
+        <Narrow title="Welcome to curator">
           <p className="hint">
             The admin password hasn't been set yet. For safety, it can only be set on the media
             center computer itself: open <code className="path">http://127.0.0.1:{location.port || 80}/</code> there.
@@ -136,7 +136,7 @@ function SetupPage({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <Narrow title="Welcome to familynovice">
+    <Narrow title="Welcome to curator">
       <p className="hint">
         Choose an admin password. You'll need it to change the media center's settings. Children
         shouldn't know it.
@@ -177,7 +177,7 @@ function LoginPage({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <Narrow title="familynovice admin">
+    <Narrow title="curator admin">
       {error && <div className="banner error">{error}</div>}
       <form onSubmit={submit}>
         <label className="field">
@@ -487,10 +487,10 @@ function HomeTab({ config, setConfig }: ConfigProps) {
           maxLength={60}
           value={config.home.title}
           disabled={!config.home.show_title}
-          placeholder="familynovice"
+          placeholder="curator"
           onChange={(e) => setConfig({ ...config, home: { ...config.home, title: e.target.value } })}
           onBlur={() => {
-            const title = config.home.title.trim().replace(/\p{Cc}/gu, "") || "familynovice";
+            const title = config.home.title.trim().replace(/\p{Cc}/gu, "") || "curator";
             setConfig({ ...config, home: { ...config.home, title } });
           }}
         />
@@ -1472,7 +1472,7 @@ function FoldersSection(props: { folders: FolderSettings[]; onChange: (folders: 
     <section className="card">
       <p className="hint">
         Folders appear as tiles on the media center and can be browsed there. Only videos, music and
-        pictures are shown. familynovice only reads them — it never changes, moves or deletes files.
+        pictures are shown. curator only reads them — it never changes, moves or deletes files.
       </p>
       {folders.length === 0 && <p>No folders yet.</p>}
       {folders.map((folder, i) => (

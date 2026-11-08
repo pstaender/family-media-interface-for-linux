@@ -26,9 +26,9 @@ test("command line > environment > file > defaults", async () => {
   writeFileSync(join(dir, "admin-server.json"), JSON.stringify({ port: 9000, host: "127.0.0.1", allowed_hosts: ["TV.fritz.box"] }));
   const fileOnly = await loadServerSettings(dir, [], {});
   expect(fileOnly).toEqual({ ok: true, value: { port: 9000, host: "127.0.0.1", allowedHosts: ["tv.fritz.box"] } });
-  const env = await loadServerSettings(dir, [], { FAMILYNOVICE_ADMIN_PORT: "9100", FAMILYNOVICE_ADMIN_HOST: "::" });
+  const env = await loadServerSettings(dir, [], { CURATOR_ADMIN_PORT: "9100", CURATOR_ADMIN_HOST: "::" });
   expect(env.ok && env.value).toMatchObject({ port: 9100, host: "::" });
-  const args = await loadServerSettings(dir, ["--port", "9200", "--host=0.0.0.0"], { FAMILYNOVICE_ADMIN_PORT: "9100" });
+  const args = await loadServerSettings(dir, ["--port", "9200", "--host=0.0.0.0"], { CURATOR_ADMIN_PORT: "9100" });
   expect(args.ok && args.value).toMatchObject({ port: 9200, host: "0.0.0.0" });
 });
 
@@ -37,7 +37,7 @@ test("rejects bad arguments, environment and files", async () => {
     expect(parseArgs(argv).ok).toBe(false);
   }
   expect(parseArgs(["--help"])).toEqual({ ok: true, value: { help: true } });
-  expect((await loadServerSettings(dir, [], { FAMILYNOVICE_ADMIN_PORT: "-1" })).ok).toBe(false);
+  expect((await loadServerSettings(dir, [], { CURATOR_ADMIN_PORT: "-1" })).ok).toBe(false);
   for (const bad of [[], "x", { port: "8787x" }, { host: "example.com" }, { allowed_hosts: "tv" }, { allowed_hosts: ["a b"] }, { listen: 1 }]) {
     expect(parseSettingsFile(bad).ok).toBe(false);
   }

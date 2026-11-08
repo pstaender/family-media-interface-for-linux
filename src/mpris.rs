@@ -14,7 +14,7 @@ use zbus::blocking::Connection;
 use zbus::interface;
 use zbus::zvariant::{ObjectPath, OwnedValue};
 
-const BUS_NAME: &str = "org.mpris.MediaPlayer2.familynovice";
+const BUS_NAME: &str = "org.mpris.MediaPlayer2.curator";
 const PATH: &str = "/org/mpris/MediaPlayer2";
 
 /// A media key, from MPRIS or from the keyboard / remote.
@@ -66,7 +66,7 @@ impl Root {
     }
     #[zbus(property)]
     fn identity(&self) -> String {
-        "familynovice".into()
+        "curator".into()
     }
     #[zbus(property)]
     fn supported_uri_schemes(&self) -> Vec<String> {
@@ -254,10 +254,7 @@ mod tests {
     fn media_keys_arrive_over_dbus() {
         let (tx, rx) = mpsc::channel();
         // Own name: the real one may belong to a running media center.
-        let name = format!(
-            "org.mpris.MediaPlayer2.familynovice_test{}",
-            std::process::id()
-        );
+        let name = format!("org.mpris.MediaPlayer2.curator_test{}", std::process::id());
         let mpris = Mpris::start_as(&name, tx, || {});
         let Some(_) = &mpris.connection else {
             eprintln!("no session bus: skipped");

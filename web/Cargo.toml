@@ -1,8 +1,8 @@
 [package]
-name = "familynovice-web"
+name = "curator-web"
 version = "0.1.0"
 edition = "2024"
-description = "Locked-down fullscreen browser window for familynovice (WebKitGTK via wry)"
+description = "Locked-down fullscreen browser window for curator (WebKitGTK via wry)"
 
 [dependencies]
 gtk = "0.18"

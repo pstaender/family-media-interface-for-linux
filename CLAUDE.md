@@ -4,7 +4,7 @@ This file gives Claude Code guidance for working in this repository.
 
 ## Project overview
 
-**familynovice** turns an ordinary Linux computer into a family-friendly media center. The target
+**curator** turns an ordinary Linux computer into a family-friendly media center. The target
 users are families, including children and non-technical adults, so simplicity, safety and
 reliability matter more than power-user features.
 
@@ -31,10 +31,10 @@ It has two parts:
 
 - Settings sections must be JSON objects on both sides (`config::settings_are_objects`:
   serde alone would also build a struct from a list).
-- Config files are **JSON**, stored in `$XDG_CONFIG_HOME/familynovice/` of the media center's
-  user account (falls back to `~/.config/familynovice/`). Resolve the path with the standard
+- Config files are **JSON**, stored in `$XDG_CONFIG_HOME/curator/` of the media center's
+  user account (falls back to `~/.config/curator/`). Resolve the path with the standard
   XDG rules (e.g. the `directories`/`dirs` crate in Rust), never hardcode `~/.config`.
-- Usage data/statistics go into `$XDG_DATA_HOME/familynovice/` (default `~/.local/share/familynovice/`).
+- Usage data/statistics go into `$XDG_DATA_HOME/curator/` (default `~/.local/share/curator/`).
 - The config schema is the contract between the two parts: `docs/config.schema.json`, with
   `docs/config.example.json` checked by the tests on both sides. Validation lives in
   `src/config.rs` (Rust) and `admin/src/config.ts` (TypeScript) and must accept and reject the
@@ -42,8 +42,8 @@ It has two parts:
   incompatible changes and update both sides together.
 - Files in the config dir: `config.json` (media center settings, written by the admin
   interface) and `admin.json` (admin password hash, mode 0600, never read by the media center).
-- `FAMILYNOVICE_CONFIG_DIR` overrides the config directory on both sides (tests, later the
-  hardened `/etc/familynovice/` setup).
+- `CURATOR_CONFIG_DIR` overrides the config directory on both sides (tests, later the
+  hardened `/etc/curator/` setup).
 - Missing `config.json`: defaults. Invalid at startup: locked-down settings (discs off),
   error reported via `status`. Invalid on reload: last valid config stays active.
 
@@ -54,12 +54,12 @@ It has two parts:
 
 ## Non-destructive: read-only media access
 
-familynovice is a **non-destructive media center**. It never writes, moves, renames or deletes
+curator is a **non-destructive media center**. It never writes, moves, renames or deletes
 anything outside its own folders:
 
-- `$XDG_CONFIG_HOME/familynovice/` (config, admin password hash),
-- `$XDG_DATA_HOME/familynovice/` (resume positions, later usage data),
-- `$XDG_CACHE_HOME/familynovice/` (disc info, build files, player screenshots),
+- `$XDG_CONFIG_HOME/curator/` (config, admin password hash),
+- `$XDG_DATA_HOME/curator/` (resume positions, later usage data),
+- `$XDG_CACHE_HOME/curator/` (disc info, build files, player screenshots),
 - `$XDG_RUNTIME_DIR` / temp dir (sockets).
 
 Media (discs, shared folders, everything else) is only ever **read**. Code that touches media
@@ -78,7 +78,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   "Recently used"). Only the most important functions are on the first screen. Use our own visual
   design; don't copy any existing product's look.
 - **Title (implemented):** the text in the top-left corner (`home.title`, default
-  "familynovice") can be changed or hidden (`home.show_title`) in the admin interface.
+  "curator") can be changed or hidden (`home.show_title`) in the admin interface.
 - **Smart search:** one search field covering everything the current profile may use (apps,
   websites, discs, media). Make it typo-tolerant (fuzzy matching) and never let it show
   items the profile isn't allowed to see.
@@ -98,7 +98,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
     **weekdays**, **this week** (stores the Monday; a week budget counts the whole week) or
     **every day**. Most specific wins: today > weekdays > this week > every day; a week budget
     applies in addition to a day budget.
-  - Usage (`src/usage.rs`, `$XDG_DATA_HOME/familynovice/usage.json`, last 60 days) counts only
+  - Usage (`src/usage.rs`, `$XDG_DATA_HOME/curator/usage.json`, last 60 days) counts only
     while something is open or within 60 s after the last input (an idle home screen doesn't
     use up time). The UI evaluates the limits every second.
   - Time up / outside the window / locked by a parent: players, music and websites are stopped
@@ -113,7 +113,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
     time is used up) and "Lock now" (control socket `unlock` / `end_unlock` / `lock`).
 - **Media keys (implemented):** next / previous / play-pause / stop of remotes and keyboards.
   Desktops grab these keys and send them to MPRIS players, so the media center is one
-  (`src/mpris.rs`, `org.mpris.MediaPlayer2.familynovice` via `zbus` 5 blocking API;
+  (`src/mpris.rs`, `org.mpris.MediaPlayer2.curator` via `zbus` 5 blocking API;
   `PlaybackStatus` follows the screen). Without MPRIS, Mint shows "unavailable". In the kiosk
   session the keys reach the window directly (egui `Key::Media*`). Music: next/previous
   track, pause, stop; pictures: next/previous; videos (mpv, via its IPC socket): chapters,
@@ -127,12 +127,12 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   on the HAOBO remote, USB 4842:0001), egui drops keys it doesn't know. So the media center
   also reads input devices directly (`/dev/input/event*`, read-only, never grabbed, hotplug
   every 3 s). Access only to the remote: `scripts/remote-access.sh` writes
-  `/etc/udev/rules.d/70-familynovice-remote.rules` (`TAG+="uaccess"` by USB id; logind gives
+  `/etc/udev/rules.d/70-curator-remote.rules` (`TAG+="uaccess"` by USB id; logind gives
   the active session's user an ACL); not the `input` group (that would expose every keyboard).
   Calibration (admin → Home screen & media → Remote → control socket `calibrate_remote` →
   `Screen::Calibrate`): OK, Back, Home, arrows, Play/Pause, Next, Previous; each press is
   gathered for 300 ms from the device and the window, a button already used is refused,
-  10 s without a press skips. Saved to `$XDG_DATA_HOME/familynovice/remote.json`. **No double
+  10 s without a press skips. Saved to `$XDG_DATA_HOME/curator/remote.json`. **No double
   actions:** a button whose press also reached the window stays the window's (its key names
   are added as extra bindings); device codes act only for buttons the window doesn't get,
   and only while our window has focus. Without calibration: KEY_OK/KEY_SELECT = OK, KEY_NEXT/KEY_PREVIOUS (407/412) = next/previous. Calibrated HAOBO remote (non-pointer mode): OK 353, back 158, home 172, play/pause 164, next 163, previous 165; Cinnamon swallowed 163-165 (neither window nor MPRIS got them), so they are read from the device.
@@ -142,7 +142,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   `Key::BrowserHome`, mpv `HOMEPAGE`, GDK `HomePage`) for 3 s stops everything and shows the
   home screen. Media center window: `App::home_button` / `go_home` (hint while held). mpv:
   `player::MPV_HOME_SCRIPT` (Lua, `--script`, tested via IPC `keydown`) quits with
-  `player::EXIT_GO_HOME` (4); familynovice-web exits with the same code; the "Playing"
+  `player::EXIT_GO_HOME` (4); curator-web exits with the same code; the "Playing"
   screen then goes home instead of back to the folder. VLC (disc menus) has no hold
   detection. Not yet confirmed which key the tested remote sends for home.
 - **Volume (implemented, `src/volume.rs`):** the remote's volume up/down/mute change the
@@ -154,8 +154,8 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   codes only for buttons the window doesn't get. While a player/website is in front: every
   volume button from the device (`RemoteMap::device_volume`). mpv/VLC don't change their own
   volume on these keys (`VOLUME_UP ignore` …, `--key-vol-up=Ctrl+Up` …). A desktop handles
-  the standard keys (113–115) itself, so we skip them unless `FAMILYNOVICE_KIOSK=1` (set by
-  `familynovice-session`) or `XDG_CURRENT_DESKTOP` is empty. Feedback: bar at the bottom for
+  the standard keys (113–115) itself, so we skip them unless `CURATOR_KIOSK=1` (set by
+  `curator-session`) or `XDG_CURRENT_DESKTOP` is empty. Feedback: bar at the bottom for
   2 s, and `show-text` in mpv. "No volume control found" if neither tool works.
 - **Screensaver (implemented, `src/screensaver.rs`, `screensaver` in config.json):** after
   `idle_minutes` (default 10) without input on our own screens (never over a player, website
@@ -168,7 +168,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   `org.gnome.SessionManager.Inhibit` idle), so the TV keeps its signal. Aerial videos: list
   from AerialWindows/Aerial `videos.json` (only `https://sylvan.apple.com/…mov` used),
   downloaded by the admin (`admin/src/aerial.ts`, Apple Root CA pinned: `apple-root-ca.pem`)
-  to `$XDG_CACHE_HOME/familynovice/aerial/<id>.<quality>.mov`: one at a time, `.part` then
+  to `$XDG_CACHE_HOME/curator/aerial/<id>.<quality>.mov`: one at a time, `.part` then
   rename, size = Content-Length, QuickTime magic bytes, free space + 1 GB checked, 60 s stall
   abort; started on save (`PUT /api/config` → `Aerial.sync`) and at admin start; only files
   named like ours are deleted (not chosen any more; other quality once the new one is there;
@@ -249,11 +249,11 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
 - **Disc id:** `<ID_FS_UUID>_<ID_FS_LABEL>`. The label alone isn't unique: the 2D and 3D
   discs of "Kubo and the Two Strings" both have `KUBO_TWO_STRINGS`.
 - **Disc info cache (`src/store.rs`):** scan results are stored as JSON in
-  `$XDG_CACHE_HOME/familynovice/discs/<disc id>.json`, so a known disc is ready right away.
+  `$XDG_CACHE_HOME/curator/discs/<disc id>.json`, so a known disc is ready right away.
   Playback still takes ~16 s to start, because libmmbd unlocks the disc again in the player.
-- **Resume (`src/resume.rs`):** mpv gets `--input-ipc-server=$XDG_RUNTIME_DIR/familynovice-mpv.sock`.
+- **Resume (`src/resume.rs`):** mpv gets `--input-ipc-server=$XDG_RUNTIME_DIR/curator-mpv.sock`.
   A thread observes `time-pos`/`duration`, saves every 5 s and when mpv exits, to
-  `$XDG_DATA_HOME/familynovice/resume/<disc id>.json`. Resume is offered from 1 min on and
+  `$XDG_DATA_HOME/curator/resume/<disc id>.json`. Resume is offered from 1 min on and
   dropped within the end credits: the last 5 min, but at most the last 10 % (short videos). Resuming passes `--start=<secs>`.
   Unix socket paths are limited to 107 characters.
 - **Stopping playback:** Esc, Backspace and the back keys of remotes/gamepads/mice close mpv
@@ -311,7 +311,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   can't be read is shown semi-transparent.
 - **Recently played (`src/recent.rs`):** the folder's first page ends with a "Recently
   played" heading and the last 5 videos/music files played from it (newest first; label
-  `subfolder › file`). Stored per folder id in `$XDG_DATA_HOME/familynovice/recent.json`
+  `subfolder › file`). Stored per folder id in `$XDG_DATA_HOME/curator/recent.json`
   (relative paths, 20 kept); music playing on through a folder counts once (the next track
   of the same folder replaces the previous one). Every item is checked again when shown
   (`library::file_entry`: no hidden names, inside the folder, filter allows it), so removed
@@ -324,7 +324,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
     turned upright (EXIF orientation), scaled to the screen; ←/→ previous/next, Esc back.
   - **Music:** built-in player screen (`src/audio.rs`). The sound comes from mpv without any
     window (`--no-video --force-window=no`), controlled over its IPC socket
-    (`$XDG_RUNTIME_DIR/familynovice-audio.sock`): pause, previous/next, ±30 s; plays from the
+    (`$XDG_RUNTIME_DIR/curator-audio.sock`): pause, previous/next, ±30 s; plays from the
     chosen track to the end of the folder. **Cover art** (`src/cover.rs`, read-only, in a
     thread): the picture embedded in the file (`lofty`; front cover first), else a cover file
     in the track's folder (`cover`, `folder`, `front`, `album`, `albumart`, `thumb`, exact
@@ -351,7 +351,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   - … **except** local addresses and non-web schemes, blocked for every frame: `localhost`,
     `*.localhost`, `*.local`, loopback/private/link-local/CGNAT IPs (also IPv4-mapped IPv6),
     `file:` and other schemes. So a website can't reach the admin interface or devices at home.
-- **Browser window `familynovice-web`** (`web/`, WebKitGTK via `wry` + `tao`): fullscreen,
+- **Browser window `curator-web`** (`web/`, WebKitGTK via `wry` + `tao`): fullscreen,
   no address bar, only a round "‹" back button (top left, page history, dimmed without a
   previous page) and a ✕ close button (top right; both GTK overlays the page can't hide;
   hidden while the page itself is fullscreen, e.g. a video, via WebKit's enter/leave-fullscreen
@@ -364,7 +364,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   website"**. Frames: wry's navigation handler (fires for all
   frames) only blocks local addresses. Pop-ups never open a new window: allowed ones load in
   the same window, others show the same dialog. **Downloads are blocked** (non-destructive). Cookies/cache live in
-  `$XDG_CACHE_HOME/familynovice/web`.
+  `$XDG_CACHE_HOME/curator/web`.
 - **Logos (`show_logo`, default on):** when the config is saved (and at admin start for
   missing ones), the admin interface (`admin/src/logos.ts`, Bun `fetch` + `HTMLRewriter`)
   reads the start page and picks the largest usable picture: icons ≥ 96 px (web app
@@ -372,14 +372,14 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   (`og:image`/`twitter:image`), then small icons, then `/favicon.ico`; no SVG. Only http(s)
   to public domain names (DNS answers in the home network are refused too), redirects
   checked per hop, 10 s / 4 MB limits, magic-byte check (PNG/JPEG/GIF/WebP/ICO/BMP). Stored
-  as `$XDG_CACHE_HOME/familynovice/logos/<id>.img` + `<id>.json` (source), atomically;
+  as `$XDG_CACHE_HOME/curator/logos/<id>.img` + `<id>.json` (source), atomically;
   turned-off/removed ones are deleted. The media center never fetches anything: it checks
   the files' times every 5 s, decodes in a thread and draws the logo on a light plate
   (`WebsiteTile`); otherwise the globe. Admin: preview + "Look again"
   (`GET|POST /api/websites/:id/logo`, POST only for the saved website's URL).
 - The media center starts it like a player (`--url`, `--allow` rules, `--title`,
   `--data-dir`), keeps it in front and can stop it (Esc on the "Playing…" screen). It looks
-  for `familynovice-web` next to its own binary, then in `PATH`; if missing, website tiles are
+  for `curator-web` next to its own binary, then in `PATH`; if missing, website tiles are
   semi-transparent ("Not installed").
 - Known limits: sub-resource requests (images, `fetch`) to local IPs aren't filtered (only
   navigations); a public domain that resolves to a local IP (DNS rebinding) isn't detected.
@@ -428,7 +428,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
 
 - **Server (`admin/src/app.ts`):** `Bun.serve` on `0.0.0.0:8787` by default. Port and address
   (`admin/src/settings.ts`, tested): command line `--port`/`--host` > env
-  `FAMILYNOVICE_ADMIN_PORT`/`FAMILYNOVICE_ADMIN_HOST` > `<config dir>/admin-server.json`
+  `CURATOR_ADMIN_PORT`/`CURATOR_ADMIN_HOST` > `<config dir>/admin-server.json`
   (`port`, `host`, `allowed_hosts`; unknown keys rejected) > defaults. Invalid values: exit with
   an error. pm2: `ecosystem.config.js` in the repo root (CommonJS; `admin/` is an ES module
   package), one fork instance (sessions are in memory).
@@ -437,7 +437,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   `GET /api/status`.
 - **Security checks on every API call:** `Host` must carry our port and be an IP address,
   `localhost`, this computer's name (`<hostname>`, `<hostname>.local`) or an `allowed_hosts`
-  entry; never another domain name (DNS rebinding); changing requests need `X-Familynovice: 1` and, if
+  entry; never another domain name (DNS rebinding); changing requests need `X-Curator: 1` and, if
   present, a same-origin `Origin` (CSRF); session cookie `HttpOnly; SameSite=Strict`, 8 h,
   in memory (a server restart logs everyone out); request bodies ≤ 64 KB.
 - **Auth (`admin/src/auth.ts`):** first visit sets the admin password (≥ 8 characters), **only
@@ -447,7 +447,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   repeated). 5 wrong passwords within 15 min lock the login for 60 s.
 - **Apply:** `PUT /api/config` validates, writes `config.json` atomically, then sends
   `{"command":"reload"}` to the media center's control socket (`src/control.rs`,
-  `$XDG_RUNTIME_DIR/familynovice.sock`, mode 0600). If the media center isn't running, the
+  `$XDG_RUNTIME_DIR/curator.sock`, mode 0600). If the media center isn't running, the
   config is still saved and applies at its next start.
 - **Settings so far:** discs on/off, offer "Disc menu", preferred audio and subtitle languages
   (ISO 639-2/T codes; players also get the /B variant, e.g. `deu,ger`).
@@ -487,7 +487,7 @@ scripts/
   remote-access.sh  udev rule: read access to the remote only (for src/remote.rs)
   config.rs       config.json: types, validation, load/reload (fail closed)
   control.rs      control socket for the admin interface (reload/status)
-web/              familynovice-web: locked-down fullscreen browser window (WebKitGTK via wry),
+web/              curator-web: locked-down fullscreen browser window (WebKitGTK via wry),
                   workspace member; includes src/sites.rs via #[path]
 ecosystem.config.js  pm2 config for the admin panel (CommonJS, so it lives outside admin/)
 admin/            Bun + React admin web interface
@@ -520,7 +520,7 @@ cargo test                                   # run all tests
 cargo test <name>                            # run tests matching a name
 cargo fmt                                    # format code
 cargo clippy --all-targets -- -D warnings    # lint (treat warnings as errors)
-cargo build -p familynovice-web              # website window (needs libwebkit2gtk-4.1-dev, libdbus-1-dev)
+cargo build -p curator-web              # website window (needs libwebkit2gtk-4.1-dev, libdbus-1-dev)
 cargo clippy --workspace --all-targets -- -D warnings   # lint both, once the WebKit dev files exist
 ```
 
@@ -547,7 +547,7 @@ bun test             # run tests
 ```
 
 For experiments without touching the real config, run both parts with
-`FAMILYNOVICE_CONFIG_DIR=/some/tmp/dir` (and `FAMILYNOVICE_ADMIN_PORT` for a second server).
+`CURATOR_CONFIG_DIR=/some/tmp/dir` (and `CURATOR_ADMIN_PORT` for a second server).
 
 Before you consider a change done, run the formatter, linter and tests for every part you touched.
 
@@ -575,7 +575,7 @@ Before you consider a change done, run the formatter, linter and tests for every
 - Security- and child-safety-relevant code (PIN checks, domain matching, time limits, launcher)
   must have tests, including tests for ways around it.
 - Fail closed: if config is missing or invalid, or a check errors, deny access instead of allowing it.
-- Non-destructive: never write outside familynovice's own folders (see "Non-destructive:
+- Non-destructive: never write outside curator's own folders (see "Non-destructive:
   read-only media access"). Review every new file operation against this.
 - No telemetry and no unneeded network calls. Usage data and config stay on the machine.
   (The only fetches besides the websites themselves, all by the admin interface: the website
@@ -592,15 +592,15 @@ Before you consider a change done, run the formatter, linter and tests for every
 ### Admin interface: user, permissions, authentication
 
 - **v1:** the Bun admin server runs as a **systemd user service of the media center user**. It
-  owns `$XDG_CONFIG_HOME/familynovice/` and needs no extra permissions. It listens on all
+  owns `$XDG_CONFIG_HOME/curator/` and needs no extra permissions. It listens on all
   interfaces by default, so parents reach it from their own account or from other devices.
 - **Known weakness:** every process of the media center user can write the config, including
   registered apps and scripts. Registered apps must therefore not give file access (no file
   managers, terminals, "save as" dialogs with free paths). Document this in the admin interface
   where apps are registered.
 - **Later hardening:** the admin server runs as a separate system user and the config moves to
-  `/etc/familynovice/` (writable by the admin user, read-only for the media center user). To make
-  this switch easy, the Rust app reads `$XDG_CONFIG_HOME/familynovice/` by default but accepts an
+  `/etc/curator/` (writable by the admin user, read-only for the media center user). To make
+  this switch easy, the Rust app reads `$XDG_CONFIG_HOME/curator/` by default but accepts an
   override path (command-line flag / environment variable).
 - **Authentication:** on first start, the admin interface asks to set an admin password.
   Passwords and the PIN are hashed with argon2 via `Bun.password.hash()`. The result is a
@@ -610,7 +610,7 @@ Before you consider a change done, run the formatter, linter and tests for every
 
 ### Applying config changes (reload / restart)
 
-- The Rust app opens a **Unix socket at `$XDG_RUNTIME_DIR/familynovice.sock`** with the commands
+- The Rust app opens a **Unix socket at `$XDG_RUNTIME_DIR/curator.sock`** with the commands
   `reload`, `restart` and `status`. Replies are structured (JSON), e.g. "ok" or the exact
   validation error, so the admin interface can show the result immediately.
 - **Reload is the normal case:** load the new config, validate it, swap it in live. If it's
@@ -620,18 +620,18 @@ Before you consider a change done, run the formatter, linter and tests for every
   (`POST /api/restart` → control socket `restart`): players/music/screensaver are stopped,
   usage saved, then the app `exec`s `argv[0]` (the kiosk starts it by its installed path).
   Not `/proc/self/exe`: after `install.sh --update` that names the deleted old file in its
-  old folder (`/opt/familynovice.old/… (deleted)`), so the restart failed with ENOENT. If
+  old folder (`/opt/curator.old/… (deleted)`), so the restart failed with ENOENT. If
   `exec` fails under the kiosk loop, the app exits 1 and the loop starts it again. No dependency on systemd's graphical-session support, which
   isn't equally reliable on every desktop. Only needed for changes that can't be applied live
   (e.g. switching the playback backend).
-- **Crash recovery:** a small supervisor mode (`familynovice --supervise`, started at login)
+- **Crash recovery:** a small supervisor mode (`curator --supervise`, started at login)
   restarts the app if it exits unexpectedly. Back off if it keeps crashing, and show an error
   screen instead of the desktop.
 
 ### Dedicated media center account and session
 
 - **Default: kiosk session.** A minimal Wayland kiosk compositor (e.g. **cage**) runs only
-  familynovice. It's installed as its own session entry (`/usr/share/wayland-sessions/`), next
+  curator. It's installed as its own session entry (`/usr/share/wayland-sessions/`), next
   to GNOME, KDE, Cinnamon, …, and the display manager logs the media center user into it
   automatically. This is desktop-environment independent and has no desktop to escape to (no
   panels, Super key, Alt+Tab, notifications). Registered apps and the browser show fullscreen
@@ -659,25 +659,25 @@ Before you consider a change done, run the formatter, linter and tests for every
   itself stays desktop-agnostic.
 - **Implemented (example, `scripts/install.sh` / `scripts/uninstall.sh`, apt + systemd):** for
   the current account or `--user NAME` (run from an admin account; per-user steps via
-  `sudo -u` / `systemctl --user --machine=NAME@`). It builds and installs to `/opt/familynovice` (root-owned, own copy of
-  `bun`), and adds `/usr/share/wayland-sessions/familynovice.desktop`, which runs
-  `bin/familynovice-session`: `cage -s` (VT switching stays) plus the system keyboard layout
-  from `/etc/default/keyboard`, logging via `systemd-cat -t familynovice`. Inside cage,
-  `bin/familynovice-kiosk` restarts the media center after crashes (exit 0 = Ctrl+Q ends the
+  `sudo -u` / `systemctl --user --machine=NAME@`). It builds and installs to `/opt/curator` (root-owned, own copy of
+  `bun`), and adds `/usr/share/wayland-sessions/curator.desktop`, which runs
+  `bin/curator-session`: `cage -s` (VT switching stays) plus the system keyboard layout
+  from `/etc/default/keyboard`, logging via `systemd-cat -t curator`. Inside cage,
+  `bin/curator-kiosk` restarts the media center after crashes (exit 0 = Ctrl+Q ends the
   session; 5 quick crashes end it too) and stops once its cage is gone (`kill -0 $PPID`):
   an orphaned loop once started a second media center into the next session, hidden from
   the admin panel. Also, only one media center runs per user (`flock` on
-  `$XDG_RUNTIME_DIR/familynovice.lock`, `store::lock_instance`; released on exit/exec); a
-  second one exits with 0. And a media center started by a `familynovice-kiosk` loop whose
+  `$XDG_RUNTIME_DIR/curator.lock`, `store::lock_instance`; released on exit/exec); a
+  second one exits with 0. And a media center started by a `curator-kiosk` loop whose
   parent is init or a `systemd` manager (the loop outlived its session; logout doesn't end
   user processes on Ubuntu) exits at once (`store::started_by_orphaned_kiosk`), also with
   loops from older installs. The admin panel warns when more media centers of the user run than
   the one on the control socket (`status` reports its `pid`; `admin/src/processes.ts` reads
-  `/proc`: comm exactly `familynovice`, same uid) and offers "End the extra one"
+  `/proc`: comm exactly `curator`, same uid) and offers "End the extra one"
   (`POST /api/instances/stop-extra`, SIGTERM, only while one is connected), plus the
   `sudo kill <pids>` command for a terminal. The default session is set via AccountsService
   (`SetSession`/`SetXSession`/`SetSessionType`, read by GDM and LightDM). The admin panel is a
-  systemd user service (`familynovice-admin.service`) with lingering. `install-state`
+  systemd user service (`curator-admin.service`) with lingering. `install-state`
   (KEY=VALUE, read as data, never sourced) keeps the previous session and linger state for
   the uninstaller. No autologin changes (system settings do that).
 - **Kiosk escapes closed so far:** mpv's console (`` ` `` / `:`, its `run` command starts
@@ -685,6 +685,13 @@ Before you consider a change done, run the formatter, linter and tests for every
   dialogs (file browsing, nothing can be started).
 
 ## Decisions made
+
+- **Name:** the project was called "familynovice" until 2026-11-08 and is now **curator**
+  (binaries `curator`, `curator-web`, `curator-kiosk`; folders `…/curator`; env
+  `CURATOR_*`; D-Bus `org.mpris.MediaPlayer2.curator`; header `X-Curator`). Old folders are
+  taken over on first start (`store::migrate_old_folders` / `files.ts migrateOldFolders`);
+  `scripts/install.sh` takes over an installation under the old name (`/opt/familynovice`,
+  its session, admin service and remote udev rule). The only places the old name may appear.
 
 - **UI toolkit:** `egui` via `eframe` (wgpu renderer; runs on Wayland and X11). The home screen
   is painted by hand (`Painter`) for a 10-foot look, scaled relative to a 1080p layout.

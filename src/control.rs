@@ -1,4 +1,4 @@
-//! Local control socket (`$XDG_RUNTIME_DIR/familynovice.sock`), used by the admin interface.
+//! Local control socket (`$XDG_RUNTIME_DIR/curator.sock`), used by the admin interface.
 //!
 //! Protocol: one JSON object per line in each direction.
 //! - `{"command":"reload"}` → `{"ok":true}` or `{"ok":false,"error":"…"}`
@@ -152,7 +152,7 @@ fn remote_status(devices: &SharedDevices) -> Value {
 pub fn spawn_server(socket: PathBuf, control: Control, notify: impl Fn() + Send + Sync + 'static) {
     if UnixStream::connect(&socket).is_ok() {
         log::error!(
-            "{} is in use: another familynovice instance is running; control socket disabled",
+            "{} is in use: another curator instance is running; control socket disabled",
             socket.display()
         );
         return;
@@ -206,8 +206,7 @@ mod tests {
         // One directory per test: tests run in parallel and would overwrite each other's file.
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("familynovice-control-{}-{n}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("curator-control-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.json");
         std::fs::write(&path, content).unwrap();

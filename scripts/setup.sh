@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# familynovice setup: installs the disc players and builds MakeMKV from source.
+# curator setup: installs the disc players and builds MakeMKV from source.
 #
 # MakeMKV provides decryption for copy-protected Blu-rays (via libmmbd) and disc analysis
 # (makemkvcon). It is downloaded from makemkv.com at install time and never stored in this
@@ -9,13 +9,13 @@
 # Usage:  scripts/setup.sh [--no-makemkv]
 #         --no-makemkv: only install the system packages (no Blu-ray support)
 # Env:    MAKEMKV_VERSION (default 2.0.0), PREFIX (default /usr/local),
-#         BUILD_DIR (default ~/.cache/familynovice/build)
+#         BUILD_DIR (default ~/.cache/curator/build)
 
 set -euo pipefail
 
 MAKEMKV_VERSION="${MAKEMKV_VERSION:-2.0.0}"
 PREFIX="${PREFIX:-/usr/local}"
-BUILD_DIR="${BUILD_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/familynovice/build}"
+BUILD_DIR="${BUILD_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/curator/build}"
 MAKEMKV_URL="https://www.makemkv.com/download"
 
 APT_PACKAGES=(
@@ -27,7 +27,7 @@ APT_PACKAGES=(
     eject
     # Blu-ray Java (BD-J) menus
     libbluray-bdj default-jre
-    # Website window (familynovice-web: WebKitGTK via wry/tao)
+    # Website window (curator-web: WebKitGTK via wry/tao)
     libwebkit2gtk-4.1-dev libdbus-1-dev
 )
 

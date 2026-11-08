@@ -3,7 +3,7 @@
 // The list of videos comes from the AerialWindows/Aerial project (videos.json, MIT); the
 // videos themselves are Apple's and are downloaded from Apple's server (sylvan.apple.com),
 // only the ones the parents choose (at most 10), into
-// $XDG_CACHE_HOME/familynovice/aerial/<id>.<quality>.mov. The media center plays these files
+// $XDG_CACHE_HOME/curator/aerial/<id>.<quality>.mov. The media center plays these files
 // and never fetches anything itself.
 //
 // Safety:
@@ -33,13 +33,13 @@ const STALL_MS = 60_000;
 const TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 3;
 const SIZE_REQUESTS_AT_ONCE = 4;
-const USER_AGENT = "familynovice/0.1 (family media center; screensaver videos)";
+const USER_AGENT = "curator/0.1 (family media center; screensaver videos)";
 
 const APPLE_ROOT_CA = Bun.file(new URL("./apple-root-ca.pem", import.meta.url)).text();
 
 export function defaultAerialDir(): string {
   const cache = process.env.XDG_CACHE_HOME || join(homedir(), ".cache");
-  return join(cache, "familynovice", "aerial");
+  return join(cache, "curator", "aerial");
 }
 
 export const VIDEO_TYPES = ["landscape", "cityscape", "underwater", "space", "other"] as const;

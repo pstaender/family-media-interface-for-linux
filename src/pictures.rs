@@ -58,8 +58,7 @@ mod tests {
 
     #[test]
     fn loads_and_shrinks_but_never_enlarges() {
-        let dir =
-            std::env::temp_dir().join(format!("familynovice-pictures-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("curator-pictures-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.png");
         image::RgbImage::from_pixel(400, 200, image::Rgb([200, 10, 10]))

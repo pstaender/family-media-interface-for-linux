@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# familynovice uninstaller: undoes scripts/install.sh.
+# curator uninstaller: undoes scripts/install.sh.
 #
 #   - restores the account's previous login session (e.g. the normal desktop),
 #   - stops and removes the admin panel service, turns lingering off again (if it was off),
-#   - removes /opt/familynovice and the "familynovice" login session.
+#   - removes /opt/curator and the "curator" login session.
 #
 # Settings, usage times, resume positions and caches of the media center account are kept,
 # unless --purge is given. System packages (mpv, VLC, cage, …) and MakeMKV stay installed,
@@ -14,14 +14,14 @@
 #
 # Usage:  scripts/uninstall.sh [--yes] [--purge]
 #   --yes    don't ask for confirmation
-#   --purge  also delete familynovice's settings, data and cache of the media center account
+#   --purge  also delete curator's settings, data and cache of the media center account
 
 set -euo pipefail
 
-PREFIX=/opt/familynovice
-SESSION_FILE=/usr/share/wayland-sessions/familynovice.desktop
+PREFIX=/opt/curator
+SESSION_FILE=/usr/share/wayland-sessions/curator.desktop
 STATE_FILE=$PREFIX/install-state
-SERVICE_NAME=familynovice-admin.service
+SERVICE_NAME=curator-admin.service
 
 info() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33mwarning: %s\033[0m\n' "$*" >&2; }
@@ -39,7 +39,7 @@ for arg in "$@"; do
 done
 
 [[ $EUID -ne 0 ]] || die "run this as a normal user (it uses sudo where needed)"
-[[ -f $STATE_FILE ]] || die "familynovice is not installed ($STATE_FILE is missing)"
+[[ -f $STATE_FILE ]] || die "curator is not installed ($STATE_FILE is missing)"
 
 # Read the state as data (KEY=VALUE lines), never execute it.
 state() { sed -n "s/^$1=//p" "$STATE_FILE" | head -n1; }
@@ -57,9 +57,9 @@ This removes the media center from the account '$INSTALL_USER':
   * removes $PREFIX, $SESSION_FILE and the admin panel service.
 EOF
 if [[ $PURGE -eq 1 ]]; then
-    echo "  * DELETES the familynovice settings, usage times, resume positions and caches of '$INSTALL_USER'."
+    echo "  * DELETES the curator settings, usage times, resume positions and caches of '$INSTALL_USER'."
 else
-    echo "  * Keeps the familynovice settings and data (use --purge to delete them)."
+    echo "  * Keeps the curator settings and data (use --purge to delete them)."
 fi
 if [[ $ASSUME_YES -eq 0 ]]; then
     echo
@@ -104,22 +104,22 @@ fi
 
 info "Removing $PREFIX, the login session and the remote access rule"
 sudo rm -f "$SESSION_FILE"
-if [[ -f /etc/udev/rules.d/70-familynovice-remote.rules ]]; then
-    sudo rm -f /etc/udev/rules.d/70-familynovice-remote.rules
+if [[ -f /etc/udev/rules.d/70-curator-remote.rules ]]; then
+    sudo rm -f /etc/udev/rules.d/70-curator-remote.rules
     sudo udevadm control --reload-rules || true
 fi
 sudo rm -rf "$PREFIX" "$PREFIX.new" "$PREFIX.old"
 
 if [[ $PURGE -eq 1 ]]; then
-    info "Deleting familynovice's settings, data and cache of '$INSTALL_USER'"
-    # Default XDG locations of that account (only familynovice's own folders).
-    as_user rm -rf "$INSTALL_HOME/.config/familynovice" "$INSTALL_HOME/.local/share/familynovice" \
-        "$INSTALL_HOME/.cache/familynovice"
+    info "Deleting curator's settings, data and cache of '$INSTALL_USER'"
+    # Default XDG locations of that account (only curator's own folders).
+    as_user rm -rf "$INSTALL_HOME/.config/curator" "$INSTALL_HOME/.local/share/curator" \
+        "$INSTALL_HOME/.cache/curator"
 fi
 
 cat <<EOF
 
-$(printf '\033[1;32m')Done.$(printf '\033[0m') familynovice is removed; '$INSTALL_USER' gets the previous session at the next login.
+$(printf '\033[1;32m')Done.$(printf '\033[0m') curator is removed; '$INSTALL_USER' gets the previous session at the next login.
 
 Still installed (shared with other programs): mpv, VLC, cage, Java and the build packages
 (see scripts/setup.sh), Rust (~/.cargo, ~/.rustup), Bun (~/.bun) and MakeMKV in /usr/local

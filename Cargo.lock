@@ -1050,6 +1050,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "curator"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "chrono",
+ "dirs",
+ "eframe",
+ "env_logger",
+ "image",
+ "libc",
+ "lofty",
+ "log",
+ "serde",
+ "serde_json",
+ "url",
+ "zbus",
+]
+
+[[package]]
+name = "curator-web"
+version = "0.1.0"
+dependencies = [
+ "gtk",
+ "tao",
+ "url",
+ "webkit2gtk",
+ "wry",
+]
+
+[[package]]
 name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1577,36 +1607,6 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener",
  "pin-project-lite",
-]
-
-[[package]]
-name = "familynovice"
-version = "0.1.0"
-dependencies = [
- "argon2",
- "chrono",
- "dirs",
- "eframe",
- "env_logger",
- "image",
- "libc",
- "lofty",
- "log",
- "serde",
- "serde_json",
- "url",
- "zbus",
-]
-
-[[package]]
-name = "familynovice-web"
-version = "0.1.0"
-dependencies = [
- "gtk",
- "tao",
- "url",
- "webkit2gtk",
- "wry",
 ]
 
 [[package]]

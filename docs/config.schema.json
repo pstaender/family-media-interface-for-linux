@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://familynovice.local/config.schema.json",
-  "title": "familynovice media center config",
-  "description": "Stored as $XDG_CONFIG_HOME/familynovice/config.json of the media center user. Written by the admin interface (admin/src/config.ts), read by the media center (src/config.rs). Change both sides together and bump `version` for incompatible changes.",
+  "$id": "https://curator.local/config.schema.json",
+  "title": "curator media center config",
+  "description": "Stored as $XDG_CONFIG_HOME/curator/config.json of the media center user. Written by the admin interface (admin/src/config.ts), read by the media center (src/config.rs). Change both sides together and bump `version` for incompatible changes.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -21,7 +21,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 60,
-          "default": "familynovice",
+          "default": "curator",
           "description": "Shown in the top-left corner. No control characters, no leading/trailing spaces."
         },
         "show_title": {
@@ -146,7 +146,7 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9-]{1,64}$"
           },
-          "description": "Ids of the chosen aerial videos (from AerialWindows/Aerial's videos.json). The admin interface downloads them to $XDG_CACHE_HOME/familynovice/aerial/<id>.<quality>.mov."
+          "description": "Ids of the chosen aerial videos (from AerialWindows/Aerial's videos.json). The admin interface downloads them to $XDG_CACHE_HOME/curator/aerial/<id>.<quality>.mov."
         }
       }
     },
@@ -271,7 +271,7 @@
         "show_logo": {
           "type": "boolean",
           "default": true,
-          "description": "Show the website's own logo on the tile. The admin interface fetches it (largest icon of the page: web app manifest, apple-touch-icon, icon links, og:image, favicon) into $XDG_CACHE_HOME/familynovice/logos/<id>.img; otherwise the generic website icon."
+          "description": "Show the website's own logo on the tile. The admin interface fetches it (largest icon of the page: web app manifest, apple-touch-icon, icon links, og:image, favicon) into $XDG_CACHE_HOME/curator/logos/<id>.img; otherwise the generic website icon."
         }
       }
     },

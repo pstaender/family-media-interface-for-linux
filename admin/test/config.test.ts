@@ -77,7 +77,7 @@ test("home title", () => {
   const v = validateConfig(example);
   expect(v.ok && v.config.home).toEqual({ title: "Family Cinema", show_title: true, language: "de" });
   const w = validateConfig({ version: 1, home: { show_title: false } });
-  expect(w.ok && w.config.home).toEqual({ title: "familynovice", show_title: false, language: "auto" });
+  expect(w.ok && w.config.home).toEqual({ title: "curator", show_title: false, language: "auto" });
 });
 
 test("paths are checked like on the Rust side", () => {
@@ -189,4 +189,22 @@ const BAD: unknown[] = [
 // Wrapped in [ ] because test.each spreads array entries into arguments.
 test.each(BAD.map((input) => [input]))("rejects %p", (input) => {
   expect(validateConfig(input).ok).toBe(false);
+});
+
+test("the old folders (familynovice) are taken over once", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { migrateOldFolders } = await import("../src/files");
+  const home = mkdtempSync("/tmp/curator-migrate-");
+  mkdirSync(join(home, ".config", "familynovice"), { recursive: true });
+  writeFileSync(join(home, ".config", "familynovice", "config.json"), JSON.stringify({ version: 1, home: { title: "familynovice" } }));
+  mkdirSync(join(home, ".cache", "familynovice", "aerial"), { recursive: true });
+  mkdirSync(join(home, ".local", "share", "curator"), { recursive: true });
+  mkdirSync(join(home, ".local", "share", "familynovice"), { recursive: true });
+  await migrateOldFolders(home, {});
+  expect(existsSync(join(home, ".config", "familynovice"))).toBe(false);
+  expect(JSON.parse(readFileSync(join(home, ".config", "curator", "config.json"), "utf8")).home.title).toBe("curator");
+  expect(existsSync(join(home, ".cache", "curator", "aerial"))).toBe(true);
+  // Both there: nothing touched.
+  expect(existsSync(join(home, ".local", "share", "familynovice"))).toBe(true);
 });

@@ -218,7 +218,7 @@ mod tests {
     /// Build a test tree (the only place where this module writes: test temp dirs).
     fn tree() -> PathBuf {
         let base = std::env::temp_dir().join(format!(
-            "familynovice-library-{}-{:?}",
+            "curator-library-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));

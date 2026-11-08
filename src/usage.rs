@@ -1,6 +1,6 @@
 //! Usage time, unlocks, the parent's lock and wrong PIN tries.
 //!
-//! Persisted in `$XDG_DATA_HOME/familynovice/usage.json` (our own folder), so restarting the
+//! Persisted in `$XDG_DATA_HOME/curator/usage.json` (our own folder), so restarting the
 //! media center neither resets the used time nor the PIN waiting time.
 
 use std::collections::BTreeMap;

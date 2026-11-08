@@ -5,7 +5,7 @@
 //   address, localhost or this computer's name (DNS rebinding),
 // - the admin password can only be set up from this computer (not from the network),
 // - session cookie: HttpOnly, SameSite=Strict,
-// - changing requests need the header `X-Familynovice: 1` and a matching Origin (CSRF),
+// - changing requests need the header `X-Curator: 1` and a matching Origin (CSRF),
 // - all input is validated before anything is written.
 
 import { readdir, stat } from "node:fs/promises";
@@ -39,9 +39,9 @@ export interface AdminOptions {
   development?: boolean;
   /** Tests only: pretend requests come from this client address. */
   clientAddress?: string;
-  /** Website logos ($XDG_CACHE_HOME/familynovice/logos). */
+  /** Website logos ($XDG_CACHE_HOME/curator/logos). */
   logoDir?: string;
-  /** Screensaver videos ($XDG_CACHE_HOME/familynovice/aerial). */
+  /** Screensaver videos ($XDG_CACHE_HOME/curator/aerial). */
   aerialDir?: string;
   /** Tests only: the running media centers' pids (default: from /proc). */
   listMediaCenters?: () => Promise<number[]>;
@@ -102,7 +102,7 @@ function sourceMatches(sources: Record<string, string>, quality: AerialQuality, 
 
 export function createAdminServer(options: AdminOptions) {
   const configPath = join(options.configDir, "config.json");
-  const socketPath = join(options.runtimeDir, "familynovice.sock");
+  const socketPath = join(options.runtimeDir, "curator.sock");
   const auth = new Auth(join(options.configDir, "admin.json"));
   const logoDir = options.logoDir ?? defaultLogoDir();
   const aerial = new Aerial(options.aerialDir);
@@ -143,7 +143,7 @@ export function createAdminServer(options: AdminOptions) {
       if (!isAllowedHost(host, server.port!, options.allowedHosts)) return json({ error: "Forbidden host." }, 403);
       if (mutating) {
         const origin = req.headers.get("origin");
-        if (req.headers.get("x-familynovice") !== "1" || (origin !== null && origin !== `http://${host}`)) {
+        if (req.headers.get("x-curator") !== "1" || (origin !== null && origin !== `http://${host}`)) {
           return json({ error: "Forbidden." }, 403);
         }
       }

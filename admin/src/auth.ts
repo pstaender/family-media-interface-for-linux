@@ -115,7 +115,7 @@ export function checkPassword(password: unknown): string | null {
   return null;
 }
 
-export const SESSION_COOKIE = "familynovice_session";
+export const SESSION_COOKIE = "curator_session";
 
 export function sessionCookie(token: string): string {
   return `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`;

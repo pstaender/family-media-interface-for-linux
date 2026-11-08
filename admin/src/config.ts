@@ -148,7 +148,7 @@ export interface Config {
 export function defaultConfig(): Config {
   return {
     version: CONFIG_VERSION,
-    home: { title: "familynovice", show_title: true, language: "auto" },
+    home: { title: "curator", show_title: true, language: "auto" },
     parental: { pin_backoff_doubling: true, limits: [] },
     discs: {
       enabled: true,

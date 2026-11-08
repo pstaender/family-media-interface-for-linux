@@ -7,7 +7,7 @@
 //   2. the page's preview image (og:image / twitter:image),
 //   3. smaller icons, then /favicon.ico.
 // SVG is skipped (the media center can't decode it). The picture is stored in
-// $XDG_CACHE_HOME/familynovice/logos/<id>.img plus <id>.json (where it came from); the media
+// $XDG_CACHE_HOME/curator/logos/<id>.img plus <id>.json (where it came from); the media
 // center notices the new file and shows it. Nothing is fetched at runtime by the media center.
 //
 // Safety: only http(s) to public domain names (same rules as website start pages; names that
@@ -26,13 +26,13 @@ const MANIFEST_MAX_BYTES = 256 * 1024;
 const IMAGE_MAX_BYTES = 4 * 1024 * 1024;
 const TIMEOUT_MS = 10_000;
 const MAX_REDIRECTS = 4;
-const USER_AGENT = "familynovice/0.1 (family media center; fetches the site logo)";
+const USER_AGENT = "curator/0.1 (family media center; fetches the site logo)";
 /** Icons at least this big count as "large"; smaller ones come after the preview image. */
 const LARGE_ICON = 96;
 
 export function defaultLogoDir(): string {
   const cache = process.env.XDG_CACHE_HOME || join(homedir(), ".cache");
-  return join(cache, "familynovice", "logos");
+  return join(cache, "curator", "logos");
 }
 
 export interface Candidate {

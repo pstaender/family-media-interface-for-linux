@@ -1,4 +1,4 @@
-//! Recently played files per configured folder: `$XDG_DATA_HOME/familynovice/recent.json`.
+//! Recently played files per configured folder: `$XDG_DATA_HOME/curator/recent.json`.
 //!
 //! The folder browser shows the last `SHOWN` of them at the end of the folder's first page.
 //! Paths are stored relative to the folder (subfolder names + file name) and checked again

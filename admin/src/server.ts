@@ -1,16 +1,17 @@
 // Entry point: `bun run dev` (development) or `bun run start`.
 // Port and listen address: command line, env or admin-server.json (see settings.ts, --help).
-// Env: FAMILYNOVICE_ADMIN_PORT, FAMILYNOVICE_ADMIN_HOST, FAMILYNOVICE_CONFIG_DIR,
+// Env: CURATOR_ADMIN_PORT, CURATOR_ADMIN_HOST, CURATOR_CONFIG_DIR,
 //      XDG_CONFIG_HOME, XDG_RUNTIME_DIR.
 
 import { createAdminServer } from "./app";
-import { defaultConfigDir, defaultRuntimeDir } from "./files";
+import { defaultConfigDir, defaultRuntimeDir, migrateOldFolders } from "./files";
 import { defaultLogoDir, refreshLogos } from "./logos";
 import { readJson } from "./files";
 import { validateConfig } from "./config";
 import { join } from "node:path";
 import { USAGE, loadServerSettings, reachableUrls } from "./settings";
 
+await migrateOldFolders();
 const configDir = defaultConfigDir();
 const settings = await loadServerSettings(configDir, process.argv.slice(2), process.env);
 if (settings.help) {
@@ -18,7 +19,7 @@ if (settings.help) {
   process.exit(0);
 }
 if (!settings.ok) {
-  console.error(`familynovice admin: ${settings.error}\n\n${USAGE}`);
+  console.error(`curator admin: ${settings.error}\n\n${USAGE}`);
   process.exit(2);
 }
 
@@ -32,7 +33,7 @@ const server = createAdminServer({
   development: process.env.NODE_ENV !== "production",
 });
 
-console.log("familynovice admin:");
+console.log("curator admin:");
 for (const url of reachableUrls(host, server.port!)) console.log(`  ${url}`);
 console.log(`config directory: ${configDir}`);
 

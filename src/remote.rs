@@ -120,7 +120,7 @@ pub struct Button {
     pub window: Vec<String>,
 }
 
-/// The learned buttons: `$XDG_DATA_HOME/familynovice/remote.json`.
+/// The learned buttons: `$XDG_DATA_HOME/curator/remote.json`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RemoteMap {
     #[serde(default)]

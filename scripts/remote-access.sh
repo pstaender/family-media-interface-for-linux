@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Give the user logged in at the screen read access to the remote control (only that device),
-# so familynovice sees every button, also those X11 can't deliver to any app (e.g. OK in
+# so curator sees every button, also those X11 can't deliver to any app (e.g. OK in
 # non-pointer mode = KEY_SELECT). Normal keyboards stay off-limits.
 #
 # It writes a udev rule that tags the remote's input devices with "uaccess": systemd-logind
 # then grants the user of the active session read/write access to them (like for game
-# controllers). familynovice only reads; it never grabs the device.
+# controllers). curator only reads; it never grabs the device.
 #
 # Usage:  scripts/remote-access.sh                 choose the remote from a list
 #         scripts/remote-access.sh 4842:0001       by USB id (vendor:product), several allowed
@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-RULE=/etc/udev/rules.d/70-familynovice-remote.rules
+RULE=/etc/udev/rules.d/70-curator-remote.rules
 
 info() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -72,7 +72,7 @@ fi
 
 info "Writing $RULE"
 {
-    echo "# familynovice: read access to these remote controls for the user at the screen"
+    echo "# curator: read access to these remote controls for the user at the screen"
     echo "# (scripts/remote-access.sh; remove with: scripts/remote-access.sh --remove)."
     # Keep remotes allowed earlier.
     [[ -f $RULE ]] && grep '^SUBSYSTEM' "$RULE" || true

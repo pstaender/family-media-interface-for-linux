@@ -1,4 +1,4 @@
-//! The media center config (`$XDG_CONFIG_HOME/familynovice/config.json`).
+//! The media center config (`$XDG_CONFIG_HOME/curator/config.json`).
 //!
 //! Written by the admin interface (`admin/src/config.ts`); the format is documented in
 //! `docs/config.schema.json`. Rules:
@@ -83,7 +83,7 @@ pub struct ScreensaverSettings {
     /// Which file of the aerial videos is downloaded and played.
     pub aerial_quality: AerialQuality,
     /// Ids of the chosen aerial videos (AerialWindows/Aerial's `videos.json`), downloaded by
-    /// the admin interface into `$XDG_CACHE_HOME/familynovice/aerial/<id>.<quality>.mov`.
+    /// the admin interface into `$XDG_CACHE_HOME/curator/aerial/<id>.<quality>.mov`.
     pub aerial_videos: Vec<String>,
 }
 
@@ -315,7 +315,7 @@ pub const LANGUAGES: &[&str] = &["auto", "en", "de"];
 impl Default for HomeSettings {
     fn default() -> Self {
         Self {
-            title: "familynovice".into(),
+            title: "curator".into(),
             show_title: true,
             language: "auto".into(),
         }
@@ -425,11 +425,11 @@ pub struct ConfigState {
     pub error: Option<String>,
 }
 
-/// `$FAMILYNOVICE_CONFIG_DIR`, or `$XDG_CONFIG_HOME/familynovice`.
+/// `$CURATOR_CONFIG_DIR`, or `$XDG_CONFIG_HOME/curator`.
 pub fn config_dir() -> Option<PathBuf> {
-    match std::env::var_os("FAMILYNOVICE_CONFIG_DIR") {
+    match std::env::var_os("CURATOR_CONFIG_DIR") {
         Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
-        _ => Some(dirs::config_dir()?.join("familynovice")),
+        _ => Some(dirs::config_dir()?.join("curator")),
     }
 }
 
@@ -680,7 +680,7 @@ mod tests {
     use super::*;
 
     fn temp_file(name: &str, content: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("familynovice-config-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("curator-config-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(name);
         std::fs::write(&path, content).unwrap();
@@ -733,7 +733,7 @@ mod tests {
         let config = parse(include_str!("../docs/config.example.json")).unwrap();
         assert_eq!(config.home.title, "Family Cinema");
         let c = parse(r#"{"version":1,"home":{"show_title":false}}"#).unwrap();
-        assert_eq!(c.home.title, "familynovice");
+        assert_eq!(c.home.title, "curator");
         assert!(!c.home.show_title);
         assert!(parse(r#"{"version":1}"#).unwrap().home.show_title);
         assert_eq!(c.home.language, "auto");
@@ -914,7 +914,7 @@ mod tests {
 
     #[test]
     fn missing_file_means_defaults() {
-        let path = std::env::temp_dir().join("familynovice-does-not-exist.json");
+        let path = std::env::temp_dir().join("curator-does-not-exist.json");
         let state = load_initial(Some(&path));
         assert_eq!(state.config, Config::default());
         assert_eq!(state.error, None);

@@ -2,7 +2,7 @@
 //
 // Sources, highest priority first:
 //   1. command line:  --port 8787  --host 0.0.0.0
-//   2. environment:   FAMILYNOVICE_ADMIN_PORT, FAMILYNOVICE_ADMIN_HOST
+//   2. environment:   CURATOR_ADMIN_PORT, CURATOR_ADMIN_HOST
 //   3. file:          <config dir>/admin-server.json
 //                     {"port": 8787, "host": "0.0.0.0", "allowed_hosts": ["tv.fritz.box"]}
 //   4. defaults:      port 8787 on all interfaces (reachable from other devices in the network)
@@ -73,10 +73,10 @@ export function parseSettingsFile(value: unknown): Result<Partial<ServerSettings
 
 export const USAGE = `Usage: bun src/server.ts [--port N] [--host ADDRESS]
 
-  --port N        port (default ${DEFAULT_PORT}; env FAMILYNOVICE_ADMIN_PORT)
+  --port N        port (default ${DEFAULT_PORT}; env CURATOR_ADMIN_PORT)
   --host ADDRESS  address to listen on (default ${DEFAULT_HOST} = all interfaces, reachable
                   from other devices; 127.0.0.1 = only this computer;
-                  env FAMILYNOVICE_ADMIN_HOST)
+                  env CURATOR_ADMIN_HOST)
 
 Both can also be set in <config dir>/${SETTINGS_FILE}:
   {"port": ${DEFAULT_PORT}, "host": "${DEFAULT_HOST}", "allowed_hosts": ["tv.fritz.box"]}
@@ -130,13 +130,13 @@ export async function loadServerSettings(
 
   let envPort: number | undefined;
   let envHost: string | undefined;
-  if (env.FAMILYNOVICE_ADMIN_PORT) {
-    const r = parsePort(env.FAMILYNOVICE_ADMIN_PORT, "FAMILYNOVICE_ADMIN_PORT");
+  if (env.CURATOR_ADMIN_PORT) {
+    const r = parsePort(env.CURATOR_ADMIN_PORT, "CURATOR_ADMIN_PORT");
     if (!r.ok) return r;
     envPort = r.value;
   }
-  if (env.FAMILYNOVICE_ADMIN_HOST) {
-    const r = parseHost(env.FAMILYNOVICE_ADMIN_HOST, "FAMILYNOVICE_ADMIN_HOST");
+  if (env.CURATOR_ADMIN_HOST) {
+    const r = parseHost(env.CURATOR_ADMIN_HOST, "CURATOR_ADMIN_HOST");
     if (!r.ok) return r;
     envHost = r.value;
   }

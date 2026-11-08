@@ -28,7 +28,7 @@ beforeAll(async () => {
       }
     });
   });
-  await new Promise<void>((resolve) => fakeMediaCenter.listen(join(runtimeDir, "familynovice.sock"), resolve));
+  await new Promise<void>((resolve) => fakeMediaCenter.listen(join(runtimeDir, "curator.sock"), resolve));
   // Own logo/aerial folders: the tests must never touch the real cache.
   server = createAdminServer({
     configDir,
@@ -50,7 +50,7 @@ afterAll(() => {
 });
 
 let cookie = "";
-const mutating = { "Content-Type": "application/json", "X-Familynovice": "1" };
+const mutating = { "Content-Type": "application/json", "X-Curator": "1" };
 
 async function call(method: string, path: string, body?: unknown, headers: Record<string, string> = mutating) {
   const res = await fetch(base + path, {
@@ -98,7 +98,7 @@ test("setup needs the CSRF header and a long enough password", async () => {
 test("setup sets the password once, stored only as argon2 hash", async () => {
   const r = await call("POST", "/api/setup", { password: "correct horse" });
   expect(r.status).toBe(200);
-  expect(cookie).toStartWith("familynovice_session=");
+  expect(cookie).toStartWith("curator_session=");
   const adminFile = join(configDir, "admin.json");
   const stored = readFileSync(adminFile, "utf8");
   expect(stored).toContain("$argon2id$");
@@ -144,7 +144,7 @@ test("reads default config, rejects invalid, saves and applies valid config", as
   const written = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
   expect(written).toEqual({
     version: 1,
-    home: { title: "familynovice", show_title: true, language: "auto" },
+    home: { title: "curator", show_title: true, language: "auto" },
     parental: { pin_backoff_doubling: true, limits: [] },
     discs: { enabled: true, allow_disc_menu: false, audio_languages: ["deu"], subtitle_languages: [] },
     folders: [],

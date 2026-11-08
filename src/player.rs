@@ -62,9 +62,9 @@ pub const EXIT_GO_HOME: i32 = 4;
 /// mpv script (written next to `MPV_INPUT_CONF`): holding the home button (`HOMEPAGE`,
 /// XF86HomePage) for 3 s quits with `EXIT_GO_HOME`. Plain input.conf bindings can't tell a
 /// held key from a press.
-pub const MPV_HOME_SCRIPT: &str = r#"-- familynovice: hold the remote's home button for 3 s to go to the home screen.
+pub const MPV_HOME_SCRIPT: &str = r#"-- curator: hold the remote's home button for 3 s to go to the home screen.
 local timer = nil
-mp.add_forced_key_binding("HOMEPAGE", "familynovice-home", function(e)
+mp.add_forced_key_binding("HOMEPAGE", "curator-home", function(e)
     if e.event == "down" then
         if timer then timer:kill() end
         mp.osd_message("{hold}", 3)
@@ -76,7 +76,7 @@ mp.add_forced_key_binding("HOMEPAGE", "familynovice-home", function(e)
     end
 end, { complex = true })
 "#;
-pub const MPV_HOME_SCRIPT_NAME: &str = "familynovice-home.lua";
+pub const MPV_HOME_SCRIPT_NAME: &str = "curator-home.lua";
 
 /// `MPV_HOME_SCRIPT` with the hint in the interface language.
 pub fn mpv_home_script() -> String {
@@ -166,8 +166,8 @@ pub fn video_file_command(file: &Path, movie: &MovieOptions) -> Command {
     cmd
 }
 
-/// Music from a folder: mpv without any window, controlled by familynovice over its IPC
-/// socket (familynovice shows the player screen). Plays `files` from `start` to the end.
+/// Music from a folder: mpv without any window, controlled by curator over its IPC
+/// socket (curator shows the player screen). Plays `files` from `start` to the end.
 pub fn audio_command(
     files: &[PathBuf],
     start: usize,
@@ -298,7 +298,7 @@ pub fn screensaver_command(files: &[PathBuf], cache_dir: Option<&Path>) -> Optio
         "--cursor-autohide=always",
         "--no-input-default-bindings",
         "--no-resume-playback",
-        "--title=familynovice screensaver",
+        "--title=curator screensaver",
     ]);
     mpv_no_writes(&mut cmd, cache_dir);
     if let Some(dir) = cache_dir {
@@ -542,7 +542,7 @@ mod tests {
                 ..Default::default()
             },
         ));
-        assert!(a.contains(&"--script=/c/familynovice-home.lua".to_string()));
+        assert!(a.contains(&"--script=/c/curator-home.lua".to_string()));
     }
 
     #[test]
@@ -581,7 +581,7 @@ mod tests {
 
     #[test]
     fn main_movie_resume_and_ipc() {
-        let socket = Path::new("/run/user/1000/familynovice-mpv.sock");
+        let socket = Path::new("/run/user/1000/curator-mpv.sock");
         let cmd = command(
             PlayMode::MainMovie,
             Path::new("/dev/sr0"),
@@ -594,7 +594,7 @@ mod tests {
         );
         let a = args(&cmd);
         assert!(a.contains(&"--start=2533.0".to_string()));
-        assert!(a.contains(&"--input-ipc-server=/run/user/1000/familynovice-mpv.sock".to_string()));
+        assert!(a.contains(&"--input-ipc-server=/run/user/1000/curator-mpv.sock".to_string()));
         assert_eq!(a.last().unwrap(), "bd://longest");
     }
 
@@ -651,7 +651,7 @@ mod tests {
 
     #[test]
     fn players_write_only_into_our_cache() {
-        let cache = Path::new("/home/u/.cache/familynovice/player");
+        let cache = Path::new("/home/u/.cache/curator/player");
         let options = MovieOptions {
             cache_dir: Some(cache),
             ..Default::default()

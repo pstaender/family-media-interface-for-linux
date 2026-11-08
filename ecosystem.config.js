@@ -1,9 +1,9 @@
-// pm2 configuration for the familynovice admin panel (alternative to the systemd user service
+// pm2 configuration for the curator admin panel (alternative to the systemd user service
 // that scripts/install.sh sets up; use only one of them).
 //
 //   cd admin && bun install && cd ..
 //   pm2 start ecosystem.config.js        # start
-//   pm2 logs familynovice-admin          # logs (shows the URLs it is reachable at)
+//   pm2 logs curator-admin          # logs (shows the URLs it is reachable at)
 //   pm2 save && pm2 startup              # start again after a reboot
 //
 // Run pm2 as the media center's user: the panel writes that user's config and talks to the
@@ -33,7 +33,7 @@ function findBun() {
 module.exports = {
   apps: [
     {
-      name: "familynovice-admin",
+      name: "curator-admin",
       cwd: join(__dirname, "admin"),
       script: findBun(),
       interpreter: "none",
@@ -47,7 +47,7 @@ module.exports = {
       max_restarts: 10,
       env: {
         NODE_ENV: "production",
-        // No transpiler cache outside familynovice's folders.
+        // No transpiler cache outside curator's folders.
         BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
         // pm2 started at boot (pm2 startup) may lack it; the control socket lives there.
         XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid()}`,

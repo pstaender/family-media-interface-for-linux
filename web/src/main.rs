@@ -1,7 +1,7 @@
-//! familynovice-web: a locked-down fullscreen browser window for one website.
+//! curator-web: a locked-down fullscreen browser window for one website.
 //!
 //! Started by the media center:
-//! `familynovice-web --url <start page> --allow <rule>… [--title <name>] [--data-dir <dir>]
+//! `curator-web --url <start page> --allow <rule>… [--title <name>] [--data-dir <dir>]
 //! [--lang en|de]`
 //! (`--windowed` for development). Rules: `kika.de` (exactly) or `*.kika.de` (with
 //! subdomains), see `src/sites.rs`, which is shared with the media center.
@@ -88,7 +88,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut args = std::env::args().skip(1);
     let (mut url, mut rules, mut title, mut data_dir, mut windowed) =
-        (None, Vec::new(), String::from("familynovice"), None, false);
+        (None, Vec::new(), String::from("curator"), None, false);
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
         match arg.as_str() {
@@ -206,15 +206,15 @@ fn main() {
         Ok(a) => a,
         Err(e) => {
             eprintln!(
-                "familynovice-web: {e}\n\
-                 usage: familynovice-web --url URL --allow RULE [--allow RULE…] \
+                "curator-web: {e}\n\
+                 usage: curator-web --url URL --allow RULE [--allow RULE…] \
                  [--title NAME] [--data-dir DIR] [--lang en|de] [--windowed]"
             );
             std::process::exit(2);
         }
     };
     if let Err(e) = run(args) {
-        eprintln!("familynovice-web: {e}");
+        eprintln!("curator-web: {e}");
         std::process::exit(1);
     }
 }
@@ -304,7 +304,7 @@ fn run(args: Args) -> Result<(), String> {
         .with_navigation_handler(|url| {
             let blocked = sites::is_always_blocked(&url);
             if blocked {
-                eprintln!("familynovice-web: blocked {url}");
+                eprintln!("curator-web: blocked {url}");
             }
             !blocked
         })
@@ -318,7 +318,7 @@ fn run(args: Args) -> Result<(), String> {
                         view.load_uri(&url);
                     }
                 } else {
-                    eprintln!("familynovice-web: blocked pop-up {url}");
+                    eprintln!("curator-web: blocked pop-up {url}");
                     dialog_for_popups.show(&url);
                 }
                 NewWindowResponse::Deny
@@ -326,7 +326,7 @@ fn run(args: Args) -> Result<(), String> {
         })
         // Non-destructive: never write downloads.
         .with_download_started_handler(|url, _path| {
-            eprintln!("familynovice-web: blocked download {url}");
+            eprintln!("curator-web: blocked download {url}");
             false
         })
         .build_gtk(&page)
@@ -349,7 +349,7 @@ fn run(args: Args) -> Result<(), String> {
             if sites::is_allowed_page(&uri, &rules) {
                 return;
             }
-            eprintln!("familynovice-web: blocked page {uri}");
+            eprintln!("curator-web: blocked page {uri}");
             view.stop_loading();
             dialog.show(&uri);
         });

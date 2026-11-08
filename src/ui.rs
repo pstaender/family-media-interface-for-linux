@@ -515,7 +515,7 @@ pub struct App {
     /// Horizontal scroll per row kind, vertical scroll of the rows.
     row_scroll_x: [f32; 4],
     rows_scroll_y: f32,
-    /// The browser window program (`familynovice-web`), if installed.
+    /// The browser window program (`curator-web`), if installed.
     web_helper: Option<PathBuf>,
     /// Whether each folder (by id) can be read; refreshed every few seconds.
     folder_ok: HashMap<String, bool>,
@@ -837,7 +837,7 @@ impl App {
 
     /// Holding the remote's home button (XF86HomePage) for 3 s stops what is playing and
     /// shows the home screen. While a player or website is in front, they handle it
-    /// themselves (`player::MPV_HOME_SCRIPT`, `familynovice-web`).
+    /// themselves (`player::MPV_HOME_SCRIPT`, `curator-web`).
     fn home_button(&mut self, ui: &egui::Ui, screen_rect: Rect, s: f32) {
         let ctx = ui.ctx();
         let window_home = ctx.input(|i| {
@@ -942,7 +942,7 @@ impl App {
                 let [r, g, b] = screensaver::background(t);
                 painter.rect_filled(screen_rect, 0.0, Color32::from_rgb(r, g, b));
                 let title = if config.home.title.is_empty() {
-                    "familynovice".to_string()
+                    "curator".to_string()
                 } else {
                     config.home.title.clone()
                 };
@@ -1940,7 +1940,7 @@ impl App {
         };
     }
 
-    /// Open a file from the folder browser: pictures and music inside familynovice, videos
+    /// Open a file from the folder browser: pictures and music inside curator, videos
     /// with the same mpv setup as the disc's main movie.
     fn open_file(&mut self, browse: Browse, entry: Entry) {
         let same_kind: Vec<Entry> = browse
@@ -2008,7 +2008,7 @@ impl App {
         };
     }
 
-    /// Open a website in the locked-down browser window (`familynovice-web`).
+    /// Open a website in the locked-down browser window (`curator-web`).
     fn open_website(&mut self, site: &crate::config::WebsiteSettings) {
         let Some(helper) = self.web_helper.clone() else {
             return;
@@ -3303,9 +3303,9 @@ impl App {
     }
 }
 
-/// `familynovice-web` next to our own binary (development and installed layout), else in PATH.
+/// `curator-web` next to our own binary (development and installed layout), else in PATH.
 fn find_web_helper() -> Option<PathBuf> {
-    let name = "familynovice-web";
+    let name = "curator-web";
     let next_to_us = std::env::current_exe()
         .ok()
         .map(|exe| exe.with_file_name(name))
@@ -3318,7 +3318,7 @@ fn find_web_helper() -> Option<PathBuf> {
             .find(|p| p.is_file())
     });
     if found.is_none() {
-        log::warn!("{name} not found: websites can't be opened (cargo build -p familynovice-web)");
+        log::warn!("{name} not found: websites can't be opened (cargo build -p curator-web)");
     }
     found
 }
@@ -3588,7 +3588,7 @@ fn exec_self() -> std::io::Error {
 
 /// The program to start again: how we were started (`argv[0]`: the kiosk uses the installed
 /// path; a bare name is looked up in `PATH` again). Not `/proc/self/exe`: after an update
-/// it names the deleted old file, in its old folder (`/opt/familynovice.old/… (deleted)`).
+/// it names the deleted old file, in its old folder (`/opt/curator.old/… (deleted)`).
 fn restart_program(
     argv0: Option<std::ffi::OsString>,
     current_exe: Option<PathBuf>,
@@ -4063,16 +4063,16 @@ mod tests {
 
     #[test]
     fn restart_uses_how_we_were_started() {
-        let installed = std::ffi::OsString::from("/opt/familynovice/bin/familynovice");
-        let deleted = PathBuf::from("/opt/familynovice.old/bin/familynovice (deleted)");
+        let installed = std::ffi::OsString::from("/opt/curator/bin/curator");
+        let deleted = PathBuf::from("/opt/curator.old/bin/curator (deleted)");
         assert_eq!(
             restart_program(Some(installed.clone()), Some(deleted.clone())),
             Some(installed)
         );
         // Started by name: found in PATH again.
         assert_eq!(
-            restart_program(Some("familynovice".into()), Some(deleted.clone())),
-            Some("familynovice".into())
+            restart_program(Some("curator".into()), Some(deleted.clone())),
+            Some("curator".into())
         );
         assert_eq!(
             restart_program(Some("".into()), Some(deleted.clone())),

@@ -34,13 +34,13 @@ use eframe::egui;
 
 fn main() -> eframe::Result {
     env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("warn,familynovice=info"),
+        env_logger::Env::default().default_filter_or("warn,curator=info"),
     )
     .init();
 
     // Started by a kiosk loop that outlived its session: don't show up in the next one.
     if store::started_by_orphaned_kiosk(std::path::Path::new("/proc"), std::process::id()) {
-        log::error!("started by a familynovice-kiosk loop whose session has ended; exiting");
+        log::error!("started by a curator-kiosk loop whose session has ended; exiting");
         return Ok(());
     }
     // One media center per user: a second one (e.g. started by a kiosk loop whose session
@@ -48,7 +48,7 @@ fn main() -> eframe::Result {
     let _instance = match store::lock_instance(&store::instance_lock_path()) {
         Ok(Some(lock)) => Some(lock),
         Ok(None) => {
-            log::error!("another familynovice is already running for this user; exiting");
+            log::error!("another curator is already running for this user; exiting");
             return Ok(());
         }
         Err(e) => {
@@ -60,6 +60,7 @@ fn main() -> eframe::Result {
     // `--windowed` for development; the media center normally runs fullscreen.
     let windowed = std::env::args().any(|a| a == "--windowed");
 
+    store::migrate_old_folders();
     let config_path = config::config_path();
     if let Some(path) = &config_path {
         log::info!("config: {}", path.display());
@@ -68,13 +69,13 @@ fn main() -> eframe::Result {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("familynovice")
+            .with_title("curator")
             .with_inner_size([1280.0, 720.0])
             .with_fullscreen(!windowed),
         ..Default::default()
     };
     eframe::run_native(
-        "familynovice",
+        "curator",
         options,
         Box::new(move |cc| {
             let tracker = usage::Tracker::load().shared();

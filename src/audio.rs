@@ -1,7 +1,7 @@
-//! Music playback inside familynovice.
+//! Music playback inside curator.
 //!
 //! The sound comes from an mpv process without any window (it plays every audio format);
-//! familynovice shows the player screen and controls mpv over its JSON IPC socket.
+//! curator shows the player screen and controls mpv over its JSON IPC socket.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;

@@ -94,9 +94,9 @@ pub fn parse_pactl_mute(out: &str) -> Option<bool> {
 }
 
 /// Does a desktop handle the standard volume keys (`KEY_VOLUMEUP` …)? Not in our kiosk
-/// session (`FAMILYNOVICE_KIOSK=1`, set by the session script) nor without any desktop.
+/// session (`CURATOR_KIOSK=1`, set by the session script) nor without any desktop.
 pub fn desktop_handles_keys() -> bool {
-    std::env::var_os("FAMILYNOVICE_KIOSK").is_none_or(|v| v.is_empty())
+    std::env::var_os("CURATOR_KIOSK").is_none_or(|v| v.is_empty())
         && std::env::var_os("XDG_CURRENT_DESKTOP").is_some_and(|v| !v.is_empty())
 }
 

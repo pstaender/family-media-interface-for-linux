@@ -1,4 +1,4 @@
-# familynovice
+# curator
 
 A family-friendly media center for Linux. It turns an ordinary Linux computer into a fullscreen
 "TV" interface that children can use on their own: Blu-rays, shared folders (videos, music,
@@ -11,7 +11,7 @@ It has two parts:
   on the computer or `http://<computer's IP>:8787/` from a phone or laptop in the home network.
   It writes the settings and applies them to the running media center.
 
-familynovice only **reads** media. It never changes, moves or deletes files outside its own
+curator only **reads** media. It never changes, moves or deletes files outside its own
 folders (see [Where files are stored](#where-files-are-stored)).
 
 > **Built and tested on Linux Mint** (22, Cinnamon). Other distributions and desktops should
@@ -26,16 +26,16 @@ own (admin) account; without `--user` it converts the current account:
 ```sh
 sudo adduser tv                 # recommended: a separate account without admin rights
 scripts/install.sh --user tv    # options: --no-makemkv, --skip-packages, --yes
-scripts/install.sh --user tv --update   # later: only rebuild and replace familynovice
+scripts/install.sh --user tv --update   # later: only rebuild and replace curator
 ```
 
 `--update` skips packages, MakeMKV, the Rust/Bun installs, the questions and the session
 settings; it rebuilds the media center, website window and admin panel, replaces them in
-`/opt/familynovice` and restarts the admin panel. The running media center keeps the old
+`/opt/curator` and restarts the admin panel. The running media center keeps the old
 version until it restarts.
 
-It installs everything (packages, MakeMKV, Rust, Bun; builds familynovice into
-`/opt/familynovice`). It also adds a login session **"familynovice"** and makes it the
+It installs everything (packages, MakeMKV, Rust, Bun; builds curator into
+`/opt/curator`). It also adds a login session **"curator"** and makes it the
 account's default session. That session runs the media center in the kiosk compositor
 [cage](https://github.com/cage-kiosk/cage), with no desktop, panels, app menu, Alt+Tab or
 notifications. Players and the website window open on top, and the media center comes back
@@ -46,14 +46,14 @@ when they close. If it crashes, it restarts.
   Window).
 - **Admin panel:** runs as a user service of that account, also without a login, at
   http://127.0.0.1:8787/ or `http://<IP>:8787/` from other devices (the address is in
-  `journalctl --user -u familynovice-admin` of that account). Set the admin password on the
+  `journalctl --user -u curator-admin` of that account). Set the admin password on the
   computer itself first.
 - **Normal desktop again:** choose it in the session menu of the login screen (only for this
   login), or uninstall:
 
 ```sh
-scripts/uninstall.sh           # restores the previous session, removes /opt/familynovice
-scripts/uninstall.sh --purge   # also deletes familynovice's settings, usage and cache
+scripts/uninstall.sh           # restores the previous session, removes /opt/curator
+scripts/uninstall.sh --purge   # also deletes curator's settings, usage and cache
 ```
 
 Run the uninstaller from an account with sudo rights (for `--user tv`: your own account). System packages and
@@ -108,7 +108,7 @@ Without Blu-rays you can skip MakeMKV; folders and websites work without it.
 ### 3. Build
 
 ```sh
-cargo build --workspace --release   # media center + website window (familynovice-web)
+cargo build --workspace --release   # media center + website window (curator-web)
 cd admin && bun install             # admin panel
 ```
 
@@ -124,8 +124,8 @@ Start both parts (two terminals):
 cd admin && bun run start           # or: bun run dev (port 8686, reloads on code changes)
 
 # Media center
-./target/release/familynovice               # fullscreen
-./target/release/familynovice --windowed    # in a window (development)
+./target/release/curator               # fullscreen
+./target/release/curator --windowed    # in a window (development)
 ```
 
 ### Admin panel: port, network access, pm2
@@ -136,10 +136,10 @@ variables or a file (highest priority first):
 
 ```sh
 bun run start -- --port 8080 --host 127.0.0.1   # 127.0.0.1 = only this computer
-FAMILYNOVICE_ADMIN_PORT=8080 FAMILYNOVICE_ADMIN_HOST=127.0.0.1 bun run start
+CURATOR_ADMIN_PORT=8080 CURATOR_ADMIN_HOST=127.0.0.1 bun run start
 ```
 
-`~/.config/familynovice/admin-server.json`:
+`~/.config/curator/admin-server.json`:
 
 ```json
 { "port": 8080, "host": "0.0.0.0", "allowed_hosts": ["tv.fritz.box"] }
@@ -155,13 +155,13 @@ With **pm2** instead of `bun run start` (as the media center's user):
 
 ```sh
 pm2 start ecosystem.config.js      # repository root; port/host: see args in the file
-pm2 logs familynovice-admin
+pm2 logs curator-admin
 pm2 save && pm2 startup            # start again after a reboot
 ```
 
 (`scripts/install.sh` uses a systemd user service instead; use only one of them.)
 
-Use the same build profile for both binaries: the media center finds `familynovice-web` next
+Use the same build profile for both binaries: the media center finds `curator-web` next
 to itself (`target/release/` or `target/debug/`), otherwise in `PATH`.
 
 ### First steps in the admin panel
@@ -197,7 +197,7 @@ previous, volume up / down, mute):
 2. Admin panel → **Home screen & media → Remote → Set up the remote on the TV**. Switch the
    remote's mouse / pointer mode off first (in that mode it sends other buttons). The TV asks
    for one button after the other; a button your remote doesn't have is skipped after 10 s.
-   The result is saved in `~/.local/share/familynovice/remote.json` and shown in the admin
+   The result is saved in `~/.local/share/curator/remote.json` and shown in the admin
    panel.
 
 ### Using the media center
@@ -225,21 +225,21 @@ Both parts log to the terminal they were started from. The media center logs at 
 default; more detail with `RUST_LOG`:
 
 ```sh
-RUST_LOG=debug ./target/debug/familynovice --windowed
-RUST_LOG=warn,familynovice=debug ./target/debug/familynovice --windowed   # only our code
+RUST_LOG=debug ./target/debug/curator --windowed
+RUST_LOG=warn,curator=debug ./target/debug/curator --windowed   # only our code
 ```
 
-Player commands (mpv, VLC, `familynovice-web`) are logged with all arguments, so you can run
+Player commands (mpv, VLC, `curator-web`) are logged with all arguments, so you can run
 them by hand to see their own error messages.
 
 ### Test without touching your real settings
 
-Both parts read `FAMILYNOVICE_CONFIG_DIR`; a second admin panel can run on another port:
+Both parts read `CURATOR_CONFIG_DIR`; a second admin panel can run on another port:
 
 ```sh
-export FAMILYNOVICE_CONFIG_DIR=/tmp/fn-test
-(cd admin && FAMILYNOVICE_ADMIN_PORT=8788 bun run dev)
-./target/debug/familynovice --windowed
+export CURATOR_CONFIG_DIR=/tmp/fn-test
+(cd admin && CURATOR_ADMIN_PORT=8788 bun run dev)
+./target/debug/curator --windowed
 ```
 
 `docs/config.example.json` is a complete example config (format: `docs/config.schema.json`).
@@ -250,7 +250,7 @@ The media center listens on a local socket (only for your user). `status` shows 
 state, lock state and usage:
 
 ```sh
-python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.connect("/run/user/'$(id -u)'/familynovice.sock"); s.sendall(b"{\"command\":\"status\"}\n"); print(s.makefile().readline())'
+python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.connect("/run/user/'$(id -u)'/curator.sock"); s.sendall(b"{\"command\":\"status\"}\n"); print(s.makefile().readline())'
 ```
 
 Other commands: `reload`, `unlock` (`"minutes": 30` or `"rest_of_day": true`), `end_unlock`,
@@ -259,10 +259,10 @@ Other commands: `reload`, `unlock` (`"minutes": 30` or `"rest_of_day": true`), `
 ### Website window alone
 
 ```sh
-./target/debug/familynovice-web --windowed --url https://www.kika.de/ --allow kika.de --allow '*.kika.de'
+./target/debug/curator-web --windowed --url https://www.kika.de/ --allow kika.de --allow '*.kika.de'
 ```
 
-Blocked pages are logged as `familynovice-web: blocked …`.
+Blocked pages are logged as `curator-web: blocked …`.
 
 ### Common problems
 
@@ -270,10 +270,10 @@ Blocked pages are logged as `familynovice-web: blocked …`.
 | --- | --- |
 | Blu-ray tile says "Reading disc…" for long | First read of a disc takes 1–2 min (copy protection). Known discs are cached. |
 | "The player stopped right away" for a Blu-ray | MakeMKV missing or no key: run `scripts/setup.sh`, check `~/.MakeMKV/settings.conf`. Test with `makemkvcon -r info disc:0`. |
-| Website tiles say "Not installed" | Build the website window: `cargo build -p familynovice-web` (same profile as the media center). |
+| Website tiles say "Not installed" | Build the website window: `cargo build -p curator-web` (same profile as the media center). |
 | Video window invisible or slow over remote desktop | No graphics acceleration there; mpv falls back to SDL. Works normally on the machine itself. |
-| Kiosk session goes back to the login screen | The media center crashed 5 times in a row: `journalctl -t familynovice -b`. |
-| Admin panel not reachable after install | `systemctl --user status familynovice-admin` (as the media center account). Port 8787 already used by a development server? |
+| Kiosk session goes back to the login screen | The media center crashed 5 times in a row: `journalctl -t curator -b`. |
+| Admin panel not reachable after install | `systemctl --user status curator-admin` (as the media center account). Port 8787 already used by a development server? |
 | Media center shows "Discs are turned off" / "Settings could not be loaded" | `config.json` is invalid; the admin panel shows the error. The media center then fails closed (locked-down settings). |
 | Locked and no PIN set | Unlock in the admin panel: Parental control → Status. |
 | Admin panel: "Too many wrong passwords" | Wait 60 s. To reset the password: stop the admin panel, delete `admin.json` (see below), open the panel again. |
@@ -282,15 +282,15 @@ Blocked pages are logged as `familynovice-web: blocked …`.
 
 | Path | Content |
 | --- | --- |
-| `~/.config/familynovice/config.json` | settings (written by the admin panel) |
-| `~/.config/familynovice/admin.json` | admin password hash |
-| `~/.local/share/familynovice/` | resume positions, usage time (`usage.json`), remote buttons (`remote.json`), recently played files per folder (`recent.json`) |
-| `/etc/udev/rules.d/70-familynovice-remote.rules` | read access to the remote (`scripts/remote-access.sh`) |
-| `~/.cache/familynovice/` | disc info, website cookies and logos, screensaver videos (`aerial/`), player screenshots, MakeMKV build |
-| `/run/user/<uid>/familynovice*.sock` | control sockets |
-| `/opt/familynovice/` | installed programs (`scripts/install.sh`), `install-state` for the uninstaller |
-| `/usr/share/wayland-sessions/familynovice.desktop` | the kiosk login session |
-| `~/.config/systemd/user/familynovice-admin.service` | admin panel service |
+| `~/.config/curator/config.json` | settings (written by the admin panel) |
+| `~/.config/curator/admin.json` | admin password hash |
+| `~/.local/share/curator/` | resume positions, usage time (`usage.json`), remote buttons (`remote.json`), recently played files per folder (`recent.json`) |
+| `/etc/udev/rules.d/70-curator-remote.rules` | read access to the remote (`scripts/remote-access.sh`) |
+| `~/.cache/curator/` | disc info, website cookies and logos, screensaver videos (`aerial/`), player screenshots, MakeMKV build |
+| `/run/user/<uid>/curator*.sock` | control sockets |
+| `/opt/curator/` | installed programs (`scripts/install.sh`), `install-state` for the uninstaller |
+| `/usr/share/wayland-sessions/curator.desktop` | the kiosk login session |
+| `~/.config/systemd/user/curator-admin.service` | admin panel service |
 
 (The standard XDG variables `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` are respected.)
 

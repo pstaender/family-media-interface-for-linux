@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# familynovice installer (example for Ubuntu / Linux Mint and other apt + systemd systems).
+# curator installer (example for Ubuntu / Linux Mint and other apt + systemd systems).
 #
 # Turns a user account (default: the current one) into a media center account:
 #   - installs the system packages, MakeMKV (scripts/setup.sh) and the kiosk compositor "cage",
-#   - builds familynovice and installs it to /opt/familynovice (owned by root, read-only),
-#   - adds a login session "familynovice" (cage runs only the media center: no desktop, panels,
+#   - builds curator and installs it to /opt/curator (owned by root, read-only),
+#   - adds a login session "curator" (cage runs only the media center: no desktop, panels,
 #     app menu, Alt+Tab or notifications) and makes it this account's default session,
 #   - runs the admin panel as a systemd user service on port 8787 (reachable from the home
 #     network; port/address: admin-server.json, see README), also while nobody is logged in.
@@ -30,15 +30,24 @@
 
 set -euo pipefail
 
-PREFIX=/opt/familynovice
-SESSION_NAME=familynovice
+PREFIX=/opt/curator
+SESSION_NAME=curator
 SESSION_FILE=/usr/share/wayland-sessions/$SESSION_NAME.desktop
 STATE_FILE=$PREFIX/install-state
-SERVICE_NAME=familynovice-admin.service
+SERVICE_NAME=curator-admin.service
+# curator was called "familynovice": an installation under the old name is taken over
+# (its settings and data folders are renamed by the programs themselves on first start).
+OLD_PREFIX=/opt/familynovice
+OLD_STATE_FILE=$OLD_PREFIX/install-state
+OLD_SESSION_NAME=familynovice
+OLD_SESSION_FILE=/usr/share/wayland-sessions/$OLD_SESSION_NAME.desktop
+OLD_SERVICE_NAME=familynovice-admin.service
+OLD_REMOTE_RULE=/etc/udev/rules.d/70-familynovice-remote.rules
+NEW_REMOTE_RULE=/etc/udev/rules.d/70-curator-remote.rules
 KIOSK_PACKAGES=(cage xwayland)
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STAGING="${XDG_CACHE_HOME:-$HOME/.cache}/familynovice/build/install"
+STAGING="${XDG_CACHE_HOME:-$HOME/.cache}/curator/build/install"
 
 info() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33mwarning: %s\033[0m\n' "$*" >&2; }
@@ -93,12 +102,20 @@ target_systemctl() {
     fi
 }
 
-if [[ -f $STATE_FILE ]] && ! grep -qx "INSTALL_USER=$TARGET_USER" "$STATE_FILE"; then
-    die "familynovice is already installed for another user ($(grep '^INSTALL_USER=' "$STATE_FILE" | cut -d= -f2)). Run scripts/uninstall.sh first."
+# Taking over an installation under the old name: its state file counts as ours.
+if [[ ! -f $STATE_FILE && -f $OLD_STATE_FILE ]]; then
+    TAKE_OVER_OLD=1
+    PREVIOUS_STATE=$OLD_STATE_FILE
+else
+    TAKE_OVER_OLD=0
+    PREVIOUS_STATE=$STATE_FILE
+fi
+if [[ -f $PREVIOUS_STATE ]] && ! grep -qx "INSTALL_USER=$TARGET_USER" "$PREVIOUS_STATE"; then
+    die "curator is already installed for another user ($(grep '^INSTALL_USER=' "$PREVIOUS_STATE" | cut -d= -f2)). Run scripts/uninstall.sh first."
 fi
 
 if [[ $UPDATE -eq 1 ]]; then
-    [[ -f $STATE_FILE ]] || die "--update: familynovice isn't installed yet (run scripts/install.sh without --update)"
+    [[ -f $PREVIOUS_STATE ]] || die "--update: curator isn't installed yet (run scripts/install.sh without --update)"
     for tool in cargo bun; do
         command -v "$tool" >/dev/null || [[ -x $HOME/.$tool/bin/$tool ]] ||
             die "--update: $tool is missing (run scripts/install.sh without --update)"
@@ -127,7 +144,7 @@ EOF
 fi
 case "$DISPLAY_MANAGER" in
     gdm | gdm3 | lightdm) ;;
-    *) [[ $UPDATE -eq 1 ]] || warn "display manager '${DISPLAY_MANAGER:-unknown}': choose the session 'familynovice' once at the login screen; it should be remembered." ;;
+    *) [[ $UPDATE -eq 1 ]] || warn "display manager '${DISPLAY_MANAGER:-unknown}': choose the session 'curator' once at the login screen; it should be remembered." ;;
 esac
 if [[ $ASSUME_YES -eq 0 ]]; then
     echo
@@ -172,7 +189,7 @@ cargo build --release --workspace --manifest-path "$REPO/Cargo.toml"
 info "Preparing the admin panel"
 rm -rf "$STAGING"
 mkdir -p "$STAGING/bin" "$STAGING/admin"
-cp "$REPO/target/release/familynovice" "$REPO/target/release/familynovice-web" "$STAGING/bin/"
+cp "$REPO/target/release/curator" "$REPO/target/release/curator-web" "$STAGING/bin/"
 cp "$(command -v bun)" "$STAGING/bin/bun" # own copy: the service doesn't depend on ~/.bun
 cp -r "$REPO/admin/src" "$REPO/admin/package.json" "$REPO/admin/bun.lock" "$REPO/admin/tsconfig.json" "$STAGING/admin/"
 (cd "$STAGING/admin" && "$STAGING/bin/bun" install --production --frozen-lockfile)
@@ -180,9 +197,9 @@ cp -r "$REPO/admin/src" "$REPO/admin/package.json" "$REPO/admin/bun.lock" "$REPO
 # Session: cage shows one fullscreen app at a time (the newest on top: players and the
 # website window cover the media center and it comes back when they close).
 # -s keeps Ctrl+Alt+F1…F6 working (those consoles ask for a password).
-cat >"$STAGING/bin/familynovice-session" <<'EOF'
+cat >"$STAGING/bin/curator-session" <<'EOF'
 #!/bin/sh
-# Started by the display manager for the "familynovice" session (see scripts/install.sh).
+# Started by the display manager for the "curator" session (see scripts/install.sh).
 # Keyboard layout of the system (cage doesn't read the desktop's settings).
 if [ -r /etc/default/keyboard ]; then
     . /etc/default/keyboard
@@ -192,17 +209,17 @@ if [ -r /etc/default/keyboard ]; then
     export XKB_DEFAULT_OPTIONS="${XKB_DEFAULT_OPTIONS:-$XKBOPTIONS}"
 fi
 # No desktop handles the volume keys here: the media center does (src/volume.rs).
-export FAMILYNOVICE_KIOSK=1
-# Logs: journalctl -t familynovice
+export CURATOR_KIOSK=1
+# Logs: journalctl -t curator
 if command -v systemd-cat >/dev/null; then
-    exec systemd-cat -t familynovice -- cage -s -- /opt/familynovice/bin/familynovice-kiosk
+    exec systemd-cat -t curator -- cage -s -- /opt/curator/bin/curator-kiosk
 fi
-exec cage -s -- /opt/familynovice/bin/familynovice-kiosk
+exec cage -s -- /opt/curator/bin/curator-kiosk
 EOF
 
 # Inside cage: restart the media center if it crashes. Quitting normally (exit code 0) ends
 # the session; five crashes in a row (each within a minute) end it too, back to the login screen.
-cat >"$STAGING/bin/familynovice-kiosk" <<'EOF'
+cat >"$STAGING/bin/curator-kiosk" <<'EOF'
 #!/bin/sh
 # $PPID is cage: once it is gone (session ended), stop instead of starting the media center
 # into whatever display comes next (it would run twice, hidden from the admin panel).
@@ -210,11 +227,11 @@ crashes=0
 while :; do
     kill -0 "$PPID" 2>/dev/null || exit 0
     started=$(date +%s)
-    /opt/familynovice/bin/familynovice && exit 0
+    /opt/curator/bin/curator && exit 0
     code=$?
     [ $(($(date +%s) - started)) -gt 60 ] && crashes=0
     crashes=$((crashes + 1))
-    echo "familynovice exited with code $code (crash $crashes)" >&2
+    echo "curator exited with code $code (crash $crashes)" >&2
     [ "$crashes" -ge 5 ] && exit "$code"
     sleep $((crashes * 2))
 done
@@ -229,8 +246,8 @@ USER_PATH="$(busctl call org.freedesktop.Accounts /org/freedesktop/Accounts org.
 get_prop() {
     busctl get-property org.freedesktop.Accounts "$USER_PATH" org.freedesktop.Accounts.User "$1" | sed 's/^s "\(.*\)"$/\1/'
 }
-if [[ -f $STATE_FILE ]]; then
-    cp "$STATE_FILE" "$STAGING/install-state"
+if [[ -f $PREVIOUS_STATE ]]; then
+    cp "$PREVIOUS_STATE" "$STAGING/install-state"
 else
     {
         echo "INSTALL_USER=$TARGET_USER"
@@ -255,15 +272,34 @@ sudo rm -rf "$PREFIX.old"
 info "Adding the login session '$SESSION_NAME'"
 sudo tee "$SESSION_FILE" >/dev/null <<EOF
 [Desktop Entry]
-Name=familynovice
+Name=curator
 Comment=Family media center (only the media center, no desktop)
-Exec=$PREFIX/bin/familynovice-session
+Exec=$PREFIX/bin/curator-session
 Type=Application
-DesktopNames=familynovice
+DesktopNames=curator
 EOF
 
-# An update keeps the account's session choice (maybe changed on purpose since).
-if [[ $UPDATE -eq 0 ]]; then
+# The installation under the old name: its session, admin service and remote rule go (the
+# admin service before the new one starts: same port).
+SESSION_WAS_OLD=0
+if [[ $TAKE_OVER_OLD -eq 1 || -d $OLD_PREFIX ]]; then
+    info "Taking over the installation under the old name (familynovice → curator)"
+    [[ $(get_prop Session) == "$OLD_SESSION_NAME" || $(get_prop XSession) == "$OLD_SESSION_NAME" ]] && SESSION_WAS_OLD=1
+    target_systemctl disable --now "$OLD_SERVICE_NAME" 2>/dev/null || true
+    as_target rm -f "$UNIT_DIR/$OLD_SERVICE_NAME"
+    target_systemctl daemon-reload || true
+    sudo rm -f "$OLD_SESSION_FILE"
+    if [[ -f $OLD_REMOTE_RULE ]]; then
+        sudo sed 's/familynovice/curator/g' "$OLD_REMOTE_RULE" | sudo tee "$NEW_REMOTE_RULE" >/dev/null
+        sudo rm -f "$OLD_REMOTE_RULE"
+        sudo udevadm control --reload-rules || true
+    fi
+    sudo rm -rf "$OLD_PREFIX"
+fi
+
+# An update keeps the account's session choice (maybe changed on purpose since), unless it
+# was the session under the old name, which is gone now.
+if [[ $UPDATE -eq 0 || $SESSION_WAS_OLD -eq 1 ]]; then
     info "Making '$SESSION_NAME' the default session of '$TARGET_USER'"
     # AccountsService is read by GDM (Session) and LightDM (XSession).
     accounts_set() {
@@ -285,7 +321,7 @@ done
 as_target mkdir -p "$UNIT_DIR"
 as_target tee "$UNIT_DIR/$SERVICE_NAME" >/dev/null <<EOF
 [Unit]
-Description=familynovice admin panel
+Description=curator admin panel
 
 [Service]
 WorkingDirectory=$PREFIX/admin
@@ -318,6 +354,14 @@ fi
 
 sleep 1
 if [[ $UPDATE -eq 1 ]]; then
+    if [[ $SESSION_WAS_OLD -eq 1 ]]; then
+        cat <<EOF
+
+  * Renamed familynovice → curator: the session '$TARGET_USER' runs right now is the old one.
+    Log '$TARGET_USER' out and in again (or restart the computer) to start curator.
+    Logs from now on: journalctl -t curator; settings: ~/.config/curator (moved over).
+EOF
+    fi
     cat <<EOF
 
 $(printf '\033[1;32m')Updated.$(printf '\033[0m')
@@ -343,5 +387,5 @@ $(printf '\033[1;32m')Done.$(printf '\033[0m')
   * Leave the media center: Ctrl+Q (ends the session, back to the login screen).
   * Back to the normal desktop for this account: pick it in the session menu of the login
     screen, or run scripts/uninstall.sh.
-  * Logs: journalctl -t familynovice (media center), journalctl --user -u $SERVICE_NAME (admin; both as '$TARGET_USER')
+  * Logs: journalctl -t curator (media center), journalctl --user -u $SERVICE_NAME (admin; both as '$TARGET_USER')
 EOF

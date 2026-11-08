@@ -1,4 +1,4 @@
-//! Keep the computer from blanking the screen or switching the signal off while familynovice
+//! Keep the computer from blanking the screen or switching the signal off while curator
 //! has its own screensaver: a TV that loses the signal shows "no signal" or goes to standby.
 //!
 //! Standard session D-Bus interfaces, tried in order (both stay held while the connection
@@ -14,8 +14,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use zbus::blocking::Connection;
 
-const APP: &str = "familynovice";
-const REASON: &str = "familynovice shows its own screensaver";
+const APP: &str = "curator";
+const REASON: &str = "curator shows its own screensaver";
 
 pub struct Inhibitor {
     tx: Sender<bool>,
