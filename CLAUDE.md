@@ -29,6 +29,8 @@ It has two parts:
 
 ### Configuration
 
+- Settings sections must be JSON objects on both sides (`config::settings_are_objects`:
+  serde alone would also build a struct from a list).
 - Config files are **JSON**, stored in `$XDG_CONFIG_HOME/familynovice/` of the media center's
   user account (falls back to `~/.config/familynovice/`). Resolve the path with the standard
   XDG rules (e.g. the `directories`/`dirs` crate in Rust), never hardcode `~/.config`.
@@ -173,6 +175,24 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   all when the mode isn't aerial). List cached a week (`catalog.json`, checked again when
   read), sizes via HEAD (`sizes.json`). Admin: Home screen & media → Screensaver
   (`GET /api/aerial?quality=…[&refresh=1]`).
+- **Programs row / Ping Pong (implemented, `programs.pong` in config.json, admin: Home screen
+  & media → Programs):** "Programs" (not "Apps": that name is kept for Android apps later)
+  will also hold registered programs; for now a built-in game. `src/pong.rs`: field 16 × 9,
+  pure `Game::step` (wall/paddle bounces, steeper off the paddle's edge, +6 % per hit up to
+  15 u/s, sub-steps against tunneling, serve to whoever lost the point), computer opponent
+  (`computer_level` easy/normal/hard: speed, aiming error, reaction line; tested that hard >
+  normal > easy), `points_to_win` 3–21. 1 player: every input moves the left paddle; 2
+  players: 1st gamepad + W/S left, 2nd gamepad + arrows/remote right. Pause: Esc/back/
+  start/select. No screensaver while a game runs; usage time counts.
+- **Gamepads (implemented, `src/gamepad.rs`, read in `remote.rs`):** devices with joystick/
+  gamepad buttons (`EVIOCGBIT`, 0x120–0x13f) also report `PadEvent`s: buttons and the
+  axes X/Y/HAT0X/HAT0Y normalized with `EVIOCGABS` (SNES-style 0…255 d-pads, Xbox/PS sticks
+  and hats alike). Access: systemd's `70-uaccess.rules` already tags joysticks for the
+  active session. In menus (only while our window has focus): d-pad/stick = arrows (edges),
+  B/circle/select = back, start = OK, every other button = OK.
+- **Just-opened screens:** a screen ignores OK and clicks for 350 ms after it opened
+  (`App::just_opened`), and a tile's activation ends the frame: the click / OK that opened
+  the disc's start options used to pick one of them at once.
 - **Languages (implemented, `src/i18n.rs`):** English and German. `home.language`: `auto`
   (default: `LC_ALL` / `LC_MESSAGES` / `LANG`, then the `LANGUAGE` list as in gettext;
   English if none is known), `en`, `de`; set in the admin panel (Home screen tab), applied
@@ -452,6 +472,8 @@ src/
   audio.rs        built-in music player (windowless mpv controlled over IPC)
   volume.rs       system volume for the remote's volume buttons (wpctl / pactl)
   screensaver.rs  screensaver timing, title motion/colors, aerial files
+  pong.rs         the Ping Pong game (rules, computer player, menus, drawing)
+  gamepad.rs      gamepad state and menu navigation (events from remote.rs)
   inhibit.rs      keeps the computer from blanking the screen (D-Bus inhibit)
   makemkv.rs      makemkvcon robot-output parser, main title selection
   player.rs       builds the player commands (mpv / VLC with libmmbd)

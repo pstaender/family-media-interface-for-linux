@@ -150,6 +150,7 @@ test("reads default config, rejects invalid, saves and applies valid config", as
     folders: [],
     websites: [],
     screensaver: { mode: "title", idle_minutes: 10, aerial_quality: "1080p_h264", aerial_videos: [] },
+    programs: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 } },
   });
 });
 

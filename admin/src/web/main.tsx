@@ -6,6 +6,7 @@ import {
   websiteDomain,
   type AerialQuality,
   type Config,
+  type PongLevel,
   type ScreensaverMode,
   type FolderSettings,
   type Language,
@@ -237,6 +238,7 @@ const PAGES: { id: string; label: string; icon: string; tabs: TabDef[] }[] = [
       { id: "folders", label: "Folders", icon: "folder", saves: true },
       { id: "websites", label: "Websites", icon: "world", saves: true },
       { id: "screensaver", label: "Screensaver", icon: "moon-stars", saves: true },
+      { id: "programs", label: "Programs", icon: "device-gamepad-2", saves: true },
       { id: "remote", label: "Remote", icon: "device-remote" },
     ],
   },
@@ -355,6 +357,9 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
       break;
     case "media/websites":
       content = <WebsitesSection websites={config.websites} onChange={(websites) => setConfig({ ...config, websites })} />;
+      break;
+    case "media/programs":
+      content = <ProgramsTab config={config} setConfig={setConfig} />;
       break;
     case "media/screensaver":
       content = <ScreensaverTab config={config} setConfig={setConfig} />;
@@ -503,6 +508,56 @@ function HomeTab({ config, setConfig }: ConfigProps) {
         <small className="hint">Language of the media center on the TV (and of the website window).</small>
       </label>
     </section>
+  );
+}
+
+function ProgramsTab({ config, setConfig }: ConfigProps) {
+  const pong = config.programs.pong;
+  const setPong = (patch: Partial<typeof pong>) =>
+    setConfig({ ...config, programs: { ...config.programs, pong: { ...pong, ...patch } } });
+  return (
+    <>
+      <section className="card">
+        <p className="hint">
+          Programs appear in the "Programs" row of the home screen. For now there is a built-in game; programs
+          installed on this computer can be added here later.
+        </p>
+        <label className="toggle">
+          <input type="checkbox" checked={pong.enabled} onChange={(e) => setPong({ enabled: e.target.checked })} />
+          <span>
+            Ping Pong
+            <small>
+              For 1 player (against the computer) or 2 players against each other. Played with USB gamepads (SNES,
+              Xbox or PlayStation style; just plug them in), the remote's arrows or the keyboard (W/S and the arrow
+              keys). Counts as usage time like everything else.
+            </small>
+          </span>
+        </label>
+        <label className="field" style={{ marginTop: 10 }}>
+          <span>The computer plays</span>
+          <select
+            value={pong.computer_level}
+            disabled={!pong.enabled}
+            onChange={(e) => setPong({ computer_level: e.target.value as PongLevel })}
+          >
+            <option value="easy">Easy (for younger children)</option>
+            <option value="normal">Normal</option>
+            <option value="hard">Hard</option>
+          </select>
+        </label>
+        <label className="field inline">
+          <span>Points to win</span>
+          <input
+            type="number"
+            min={3}
+            max={21}
+            value={pong.points_to_win}
+            disabled={!pong.enabled}
+            onChange={(e) => setPong({ points_to_win: Math.min(21, Math.max(3, Math.round(Number(e.target.value) || 7))) })}
+          />
+        </label>
+      </section>
+    </>
   );
 }
 

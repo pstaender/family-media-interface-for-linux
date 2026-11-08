@@ -259,28 +259,124 @@ pub struct KeyEvent {
 }
 
 const EV_KEY: u16 = 1;
+const EV_ABS: u16 = 3;
 /// `struct input_event`: struct timeval (two longs), u16 type, u16 code, i32 value.
 const TIME_SIZE: usize = 2 * std::mem::size_of::<libc::c_long>();
 const EVENT_SIZE: usize = TIME_SIZE + 8;
 
-/// Key events in a buffer of raw `input_event`s (other event types are skipped).
-pub fn parse_events(buf: &[u8]) -> Vec<KeyEvent> {
+/// All events in a buffer of raw `input_event`s: (type, code, value).
+fn parse_raw(buf: &[u8]) -> Vec<(u16, u16, i32)> {
     buf.as_chunks::<EVENT_SIZE>()
         .0
         .iter()
-        .filter_map(|e| {
+        .map(|e| {
             let field = |at: usize| [e[TIME_SIZE + at], e[TIME_SIZE + at + 1]];
-            let kind = u16::from_ne_bytes(field(0));
-            let code = u16::from_ne_bytes(field(2));
             let value = i32::from_ne_bytes([
                 e[TIME_SIZE + 4],
                 e[TIME_SIZE + 5],
                 e[TIME_SIZE + 6],
                 e[TIME_SIZE + 7],
             ]);
-            (kind == EV_KEY).then_some(KeyEvent { code, value })
+            (
+                u16::from_ne_bytes(field(0)),
+                u16::from_ne_bytes(field(2)),
+                value,
+            )
         })
         .collect()
+}
+
+/// Key events in a buffer of raw `input_event`s (other event types are skipped).
+#[cfg(test)]
+fn parse_events(buf: &[u8]) -> Vec<KeyEvent> {
+    parse_raw(buf)
+        .into_iter()
+        .filter(|(kind, _, _)| *kind == EV_KEY)
+        .map(|(_, code, value)| KeyEvent { code, value })
+        .collect()
+}
+
+// ------------------------------------------------------------------------------- gamepads
+
+/// Joystick and gamepad buttons (`BTN_JOYSTICK` … `BTN_THUMBR`); keyboards have none.
+pub const PAD_BUTTONS: std::ops::RangeInclusive<u16> = 0x120..=0x13f;
+
+/// The axes we use: left stick and d-pad (the d-pad of simple pads is `X`/`Y`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PadAxis {
+    X,
+    Y,
+    HatX,
+    HatY,
+}
+
+const PAD_AXES: [(u16, PadAxis); 4] = [
+    (0x00, PadAxis::X),    // ABS_X
+    (0x01, PadAxis::Y),    // ABS_Y
+    (0x10, PadAxis::HatX), // ABS_HAT0X
+    (0x11, PadAxis::HatY), // ABS_HAT0Y
+];
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PadInput {
+    Connected(String),
+    Button {
+        code: u16,
+        pressed: bool,
+    },
+    /// -1 (left / up) … 1 (right / down).
+    Axis(PadAxis, f32),
+    Gone,
+}
+
+/// Something a gamepad did; `pad` is its event device number (`/dev/input/event<pad>`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PadEvent {
+    pub pad: u32,
+    pub input: PadInput,
+}
+
+/// A raw axis value in -1 … 1, from the device's range.
+pub fn normalize(value: i32, min: i32, max: i32) -> f32 {
+    if max <= min {
+        return 0.0;
+    }
+    let f = (f64::from(value) - f64::from(min)) / (f64::from(max) - f64::from(min));
+    (f * 2.0 - 1.0).clamp(-1.0, 1.0) as f32
+}
+
+/// `_IOC(_IOC_READ, 'E', nr, size)` (the generic Linux layout: x86, ARM, RISC-V).
+const fn eviocg(nr: u32, size: u32) -> libc::c_ulong {
+    ((2u32 << 30) | (size << 16) | ((b'E' as u32) << 8) | nr) as libc::c_ulong
+}
+
+/// The ranges of the axes we use, if the device is a gamepad / joystick.
+fn pad_axes(fd: std::os::fd::RawFd) -> Option<Vec<(u16, PadAxis, i32, i32)>> {
+    // EVIOCGBIT(EV_KEY): which keys / buttons the device has (KEY_MAX = 0x2ff).
+    let mut keys = [0u8; 0x300 / 8];
+    // SAFETY: the buffer is as long as the size encoded in the request.
+    let n = unsafe {
+        libc::ioctl(
+            fd,
+            eviocg(0x20 + u32::from(EV_KEY), keys.len() as u32),
+            keys.as_mut_ptr(),
+        )
+    };
+    let has = |code: u16| keys[usize::from(code / 8)] & (1 << (code % 8)) != 0;
+    if n < 0 || !PAD_BUTTONS.into_iter().any(has) {
+        return None;
+    }
+    let mut axes = Vec::new();
+    for (code, axis) in PAD_AXES {
+        // struct input_absinfo: value, minimum, maximum, fuzz, flat, resolution.
+        let mut info = [0i32; 6];
+        // SAFETY: as above, 24 bytes.
+        let r = unsafe { libc::ioctl(fd, eviocg(0x40 + u32::from(code), 24), info.as_mut_ptr()) };
+        if r >= 0 {
+            axes.push((code, axis, info[1], info[2]));
+        }
+    }
+    Some(axes)
 }
 
 /// Names of the input devices being read (for the admin panel).
@@ -288,7 +384,11 @@ pub type SharedDevices = Arc<Mutex<BTreeMap<PathBuf, String>>>;
 
 /// Read every input device this user may read (normally only the remote, see the module
 /// docs), now and when plugged in later. Events go to `events`; `notify` wakes the UI.
-pub fn spawn(events: Sender<KeyEvent>, notify: impl Fn() + Send + Sync + 'static) -> SharedDevices {
+pub fn spawn(
+    events: Sender<KeyEvent>,
+    pads: Sender<PadEvent>,
+    notify: impl Fn() + Send + Sync + 'static,
+) -> SharedDevices {
     let devices: SharedDevices = Arc::default();
     let notify = Arc::new(notify);
     let open = devices.clone();
@@ -305,10 +405,28 @@ pub fn spawn(events: Sender<KeyEvent>, notify: impl Fn() + Send + Sync + 'static
                         continue;
                     };
                     log::info!("remote: reading {} ({name})", node.display());
+                    use std::os::fd::AsRawFd;
+                    let pad = pad_axes(file.as_raw_fd()).and_then(|axes| {
+                        let number = node.to_str()?.strip_prefix("/dev/input/event")?;
+                        log::info!("gamepad: {name}");
+                        let pad = number.parse::<u32>().ok()?;
+                        let _ = pads.send(PadEvent {
+                            pad,
+                            input: PadInput::Connected(name.clone()),
+                        });
+                        Some((pad, axes, pads.clone()))
+                    });
                     devices.insert(node.clone(), name);
                     let (events, notify, open) = (events.clone(), notify.clone(), open.clone());
                     std::thread::spawn(move || {
-                        read_device(file, &events, &*notify);
+                        read_device(file, &events, pad.as_ref(), &*notify);
+                        if let Some((pad, _, pads)) = &pad {
+                            let _ = pads.send(PadEvent {
+                                pad: *pad,
+                                input: PadInput::Gone,
+                            });
+                            notify();
+                        }
                         log::info!("remote: {} is gone", node.display());
                         open.lock().unwrap_or_else(|p| p.into_inner()).remove(&node);
                     });
@@ -349,22 +467,57 @@ fn readable_devices(sys: &Path) -> Vec<(PathBuf, String)> {
     out
 }
 
-fn read_device(mut file: std::fs::File, events: &Sender<KeyEvent>, notify: &dyn Fn()) {
+type PadInfo = (u32, Vec<(u16, PadAxis, i32, i32)>, Sender<PadEvent>);
+
+fn read_device(
+    mut file: std::fs::File,
+    events: &Sender<KeyEvent>,
+    pad: Option<&PadInfo>,
+    notify: &dyn Fn(),
+) {
     let mut buf = vec![0u8; EVENT_SIZE * 64];
     loop {
         match file.read(&mut buf) {
             Ok(0) | Err(_) => return,
             Ok(n) => {
-                let parsed = parse_events(&buf[..n - n % EVENT_SIZE]);
-                if parsed.is_empty() {
-                    continue;
-                }
-                for event in parsed {
-                    if events.send(event).is_err() {
-                        return;
+                let mut any = false;
+                for (kind, code, value) in parse_raw(&buf[..n - n % EVENT_SIZE]) {
+                    if kind == EV_KEY {
+                        any = true;
+                        if events.send(KeyEvent { code, value }).is_err() {
+                            return;
+                        }
+                    }
+                    let Some((number, axes, pads)) = pad else {
+                        continue;
+                    };
+                    let input = match kind {
+                        EV_KEY if PAD_BUTTONS.contains(&code) && value != 2 => {
+                            Some(PadInput::Button {
+                                code,
+                                pressed: value != 0,
+                            })
+                        }
+                        EV_ABS => {
+                            axes.iter()
+                                .find(|(c, ..)| *c == code)
+                                .map(|(_, axis, min, max)| {
+                                    PadInput::Axis(*axis, normalize(value, *min, *max))
+                                })
+                        }
+                        _ => None,
+                    };
+                    if let Some(input) = input {
+                        any = true;
+                        let _ = pads.send(PadEvent {
+                            pad: *number,
+                            input,
+                        });
                     }
                 }
-                notify();
+                if any {
+                    notify();
+                }
             }
         }
     }
@@ -520,6 +673,22 @@ mod tests {
             ]
         );
         assert_eq!(parse_events(&buf[..EVENT_SIZE - 1]), []);
+    }
+
+    #[test]
+    fn pad_axes_are_normalized() {
+        // Simple USB pads: d-pad as 0…255 with the middle at 127/128.
+        assert_eq!(normalize(0, 0, 255), -1.0);
+        assert_eq!(normalize(255, 0, 255), 1.0);
+        assert!(normalize(127, 0, 255).abs() < 0.01);
+        // Xbox-style stick, hat switch.
+        assert_eq!(normalize(-32768, -32768, 32767), -1.0);
+        assert!(normalize(0, -32768, 32767).abs() < 0.001);
+        assert_eq!(normalize(1, -1, 1), 1.0);
+        assert_eq!(normalize(5, 3, 3), 0.0);
+        assert_eq!(normalize(900, 0, 255), 1.0);
+        // EVIOCGABS(ABS_Y) as in linux/input.h: 0x80184541.
+        assert_eq!(eviocg(0x41, 24), 0x8018_4541);
     }
 
     #[test]

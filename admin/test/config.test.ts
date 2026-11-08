@@ -25,6 +25,13 @@ test("the screensaver settings", () => {
   expect(d.ok && d.config.screensaver).toEqual({ mode: "title", idle_minutes: 10, aerial_quality: "1080p_h264", aerial_videos: [] });
 });
 
+test("the programs settings", () => {
+  const v = validateConfig(example);
+  expect(v.ok && v.config.programs).toEqual({ pong: { enabled: true, computer_level: "easy", points_to_win: 5 } });
+  const d = validateConfig({ version: 1 });
+  expect(d.ok && d.config.programs).toEqual({ pong: { enabled: false, computer_level: "normal", points_to_win: 7 } });
+});
+
 test("the removed extensions option is ignored", () => {
   const v = validateConfig({ version: 1, folders: [{ id: "a", name: "A", path: "/x", video: true, extensions: ["pdf"] }] });
   expect(v.ok && v.config.folders[0]).toEqual({ id: "a", name: "A", path: "/x", video: true, audio: false, images: false });
@@ -158,6 +165,22 @@ const BAD: unknown[] = [
   { version: 1, screensaver: { aerial_videos: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"] } },
   { version: 1, screensaver: { aerial_videos: [1] } },
   { version: 1, screensaver: { urls: [] } },
+  { version: 1, programs: { pong: { enabled: "yes" } } },
+  { version: 1, programs: { pong: { computer_level: "expert" } } },
+  { version: 1, programs: { pong: { points_to_win: 2 } } },
+  { version: 1, programs: { pong: { points_to_win: 22 } } },
+  { version: 1, programs: { pong: { sound: true } } },
+  { version: 1, programs: { chess: {} } },
+  { version: 1, programs: [] },
+  { version: 1, programs: { pong: [] } },
+  { version: 1, home: [] },
+  { version: 1, discs: [true] },
+  { version: 1, parental: [] },
+  { version: 1, screensaver: ["title"] },
+  { version: 1, folders: [["a", "A", "/x", true]] },
+  { version: 1, websites: [[]] },
+  { version: 1, parental: { limits: [["budget", 60]] } },
+  { version: 1, parental: { limits: [{ type: "budget", minutes: 60, scope: ["every_day"] }] } },
   "not an object",
   null,
   [],

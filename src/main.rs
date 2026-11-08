@@ -3,6 +3,7 @@ mod config;
 mod control;
 mod cover;
 mod disc;
+mod gamepad;
 mod i18n;
 mod inhibit;
 mod library;
@@ -13,6 +14,7 @@ mod mpris;
 mod pictures;
 mod pin;
 mod player;
+mod pong;
 mod recent;
 mod remote;
 mod resume;
@@ -76,8 +78,9 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             let tracker = usage::Tracker::load().shared();
             let (remote_tx, remote_rx) = std::sync::mpsc::channel();
+            let (pads_tx, pads_rx) = std::sync::mpsc::channel();
             let ctx = cc.egui_ctx.clone();
-            let remote_devices = remote::spawn(remote_tx, move || ctx.request_repaint());
+            let remote_devices = remote::spawn(remote_tx, pads_tx, move || ctx.request_repaint());
             let (ui_tx, ui_rx) = std::sync::mpsc::channel();
             if let Some(path) = config_path {
                 let ctx = cc.egui_ctx.clone();
@@ -99,6 +102,7 @@ fn main() -> eframe::Result {
                 tracker,
                 ui::Inputs {
                     remote: remote_rx,
+                    pads: pads_rx,
                     requests: ui_rx,
                 },
             )))

@@ -176,6 +176,8 @@ to itself (`target/release/` or `target/debug/`), otherwise in `PATH`.
    from Apple's server after saving (100–900 MB each, depending on the quality). While a
    screensaver is set up, the computer doesn't switch the screen off.
    **Home screen → Restart media center** starts it again (e.g. after `install.sh --update`).
+   **Programs:** Ping Pong for 1 player (against the computer) or 2 players, with USB gamepads
+   (SNES, Xbox or PlayStation style; just plug them in), the remote's arrows or the keyboard.
 3. **Password & PIN:** set a PIN (4–8 digits). It unlocks the media center when time is up and
    enables the lock button on the home screen.
 4. **Parental control → Time limits:** time budgets or time windows for today, specific

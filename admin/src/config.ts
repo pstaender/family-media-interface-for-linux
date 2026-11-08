@@ -97,6 +97,43 @@ export function isAerialId(id: unknown): id is string {
   return typeof id === "string" && /^[A-Za-z0-9-]{1,64}$/.test(id);
 }
 
+export const PONG_LEVELS = ["easy", "normal", "hard"] as const;
+export type PongLevel = (typeof PONG_LEVELS)[number];
+
+/** The "Programs" row (src/config.rs `ProgramSettings`): built-in games, later registered programs. */
+export interface ProgramSettings {
+  pong: { enabled: boolean; computer_level: PongLevel; points_to_win: number };
+}
+
+function validatePrograms(input: unknown): ProgramSettings | string {
+  if (!isObject(input)) return "programs: must be an object";
+  const extra = unknownKey(input, ["pong"], "programs");
+  if (extra) return extra;
+  const programs = defaultConfig().programs;
+  if (input.pong !== undefined) {
+    const p = input.pong;
+    if (!isObject(p)) return "programs.pong: must be an object";
+    const extraPong = unknownKey(p, ["enabled", "computer_level", "points_to_win"], "programs.pong");
+    if (extraPong) return extraPong;
+    if (p.enabled !== undefined) {
+      if (typeof p.enabled !== "boolean") return "programs.pong.enabled: must be true or false";
+      programs.pong.enabled = p.enabled;
+    }
+    if (p.computer_level !== undefined) {
+      if (!(PONG_LEVELS as readonly unknown[]).includes(p.computer_level)) {
+        return `programs.pong.computer_level must be one of ${PONG_LEVELS.join(", ")}`;
+      }
+      programs.pong.computer_level = p.computer_level as PongLevel;
+    }
+    if (p.points_to_win !== undefined) {
+      const n = p.points_to_win;
+      if (typeof n !== "number" || !Number.isInteger(n) || n < 3 || n > 21) return "programs.pong.points_to_win must be 3 to 21";
+      programs.pong.points_to_win = n;
+    }
+  }
+  return programs;
+}
+
 export interface Config {
   version: number;
   home: HomeSettings;
@@ -105,6 +142,7 @@ export interface Config {
   folders: FolderSettings[];
   websites: WebsiteSettings[];
   screensaver: ScreensaverSettings;
+  programs: ProgramSettings;
 }
 
 export function defaultConfig(): Config {
@@ -121,6 +159,7 @@ export function defaultConfig(): Config {
     folders: [],
     websites: [],
     screensaver: { mode: "title", idle_minutes: 10, aerial_quality: "1080p_h264", aerial_videos: [] },
+    programs: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 } },
   };
 }
 
@@ -415,7 +454,7 @@ function languages(value: unknown, field: string): string[] | string {
 /** Validate untrusted input and fill in defaults. */
 export function validateConfig(input: unknown): Validation {
   if (!isObject(input)) return { ok: false, error: "config must be an object" };
-  const top = unknownKey(input, ["version", "home", "parental", "discs", "folders", "websites", "screensaver"], "config");
+  const top = unknownKey(input, ["version", "home", "parental", "discs", "folders", "websites", "screensaver", "programs"], "config");
   if (top) return { ok: false, error: top };
   if (input.version !== CONFIG_VERSION) {
     return {
@@ -481,6 +520,11 @@ export function validateConfig(input: unknown): Validation {
     const parental = validateParental(input.parental);
     if (typeof parental === "string") return { ok: false, error: parental };
     config.parental = parental;
+  }
+  if (input.programs !== undefined) {
+    const programs = validatePrograms(input.programs);
+    if (typeof programs === "string") return { ok: false, error: programs };
+    config.programs = programs;
   }
   if (input.screensaver !== undefined) {
     const s = validateScreensaver(input.screensaver);

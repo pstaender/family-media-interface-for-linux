@@ -34,6 +34,43 @@ pub struct Config {
     pub parental: ParentalSettings,
     #[serde(default)]
     pub screensaver: ScreensaverSettings,
+    #[serde(default)]
+    pub programs: ProgramSettings,
+}
+
+/// The "Programs" row: built-in games now, registered programs later.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ProgramSettings {
+    pub pong: PongSettings,
+}
+
+/// The built-in Ping Pong game (`src/pong.rs`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PongSettings {
+    pub enabled: bool,
+    /// How well the computer plays (1-player game).
+    pub computer_level: PongLevel,
+    pub points_to_win: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PongLevel {
+    Easy,
+    Normal,
+    Hard,
+}
+
+impl Default for PongSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            computer_level: PongLevel::Normal,
+            points_to_win: 7,
+        }
+    }
 }
 
 /// The screensaver (`src/screensaver.rs`), started after `idle_minutes` without input on the
@@ -356,6 +393,7 @@ impl Default for Config {
             websites: Vec::new(),
             parental: ParentalSettings::default(),
             screensaver: ScreensaverSettings::default(),
+            programs: ProgramSettings::default(),
         }
     }
 }
@@ -375,6 +413,7 @@ impl Config {
             websites: Vec::new(),
             parental: ParentalSettings::default(),
             screensaver: ScreensaverSettings::default(),
+            programs: ProgramSettings::default(),
         }
     }
 }
@@ -400,9 +439,44 @@ pub fn config_path() -> Option<PathBuf> {
 
 /// Parse and validate config JSON.
 pub fn parse(text: &str) -> Result<Config, String> {
-    let config: Config = serde_json::from_str(text).map_err(|e| format!("invalid config: {e}"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("invalid config: {e}"))?;
+    settings_are_objects(&value)?;
+    let config: Config =
+        serde_json::from_value(value).map_err(|e| format!("invalid config: {e}"))?;
     validate(&config)?;
     Ok(config)
+}
+
+/// serde also builds a settings struct from a list (`"home": []`); the admin interface (and
+/// the schema) only accept objects, so lists are refused here, at every level.
+fn settings_are_objects(value: &serde_json::Value) -> Result<(), String> {
+    use serde_json::Value;
+    fn object(v: Option<&Value>, path: &str) -> Result<(), String> {
+        match v {
+            None | Some(Value::Object(_)) => Ok(()),
+            Some(_) => Err(format!("invalid config: {path} must be an object")),
+        }
+    }
+    object(Some(value), "the config")?;
+    for key in ["home", "discs", "parental", "screensaver", "programs"] {
+        object(value.get(key), key)?;
+    }
+    object(value.pointer("/programs/pong"), "programs.pong")?;
+    for list in ["folders", "websites"] {
+        if let Some(Value::Array(items)) = value.get(list) {
+            for (i, item) in items.iter().enumerate() {
+                object(Some(item), &format!("{list}[{i}]"))?;
+            }
+        }
+    }
+    if let Some(Value::Array(rules)) = value.pointer("/parental/limits") {
+        for (i, rule) in rules.iter().enumerate() {
+            object(Some(rule), &format!("parental.limits[{i}]"))?;
+            object(rule.get("scope"), &format!("parental.limits[{i}].scope"))?;
+        }
+    }
+    Ok(())
 }
 
 fn validate(config: &Config) -> Result<(), String> {
@@ -457,6 +531,9 @@ fn validate(config: &Config) -> Result<(), String> {
         }
     }
     validate_screensaver(&config.screensaver).map_err(|e| format!("screensaver.{e}"))?;
+    if !(3..=21).contains(&config.programs.pong.points_to_win) {
+        return Err("programs.pong.points_to_win must be 3 to 21".into());
+    }
     if config.folders.len() > MAX_FOLDERS {
         return Err(format!("folders: at most {MAX_FOLDERS} folders"));
     }
@@ -702,6 +779,18 @@ mod tests {
     }
 
     #[test]
+    fn programs() {
+        let c = parse(r#"{"version":1}"#).unwrap();
+        assert!(!c.programs.pong.enabled);
+        assert_eq!(c.programs.pong.computer_level, PongLevel::Normal);
+        assert_eq!(c.programs.pong.points_to_win, 7);
+        let config = parse(include_str!("../docs/config.example.json")).unwrap();
+        assert!(config.programs.pong.enabled);
+        assert_eq!(config.programs.pong.computer_level, PongLevel::Easy);
+        assert_eq!(config.programs.pong.points_to_win, 5);
+    }
+
+    #[test]
     fn paths() {
         for ok in ["/", "/a", "/srv/media movies/x.y", "/a/.hidden"] {
             assert!(is_normalized_absolute_path(ok), "{ok}");
@@ -791,6 +880,23 @@ mod tests {
             r#"{"version":1,"screensaver":{"aerial_videos":["1","2","3","4","5","6","7","8","9","10","11"]}}"#,
             r#"{"version":1,"screensaver":{"aerial_videos":[1]}}"#,
             r#"{"version":1,"screensaver":{"urls":[]}}"#,
+            r#"{"version":1,"programs":{"pong":{"enabled":"yes"}}}"#,
+            r#"{"version":1,"programs":{"pong":{"computer_level":"expert"}}}"#,
+            r#"{"version":1,"programs":{"pong":{"points_to_win":2}}}"#,
+            r#"{"version":1,"programs":{"pong":{"points_to_win":22}}}"#,
+            r#"{"version":1,"programs":{"pong":{"sound":true}}}"#,
+            r#"{"version":1,"programs":{"chess":{}}}"#,
+            r#"{"version":1,"programs":[]}"#,
+            r#"{"version":1,"programs":{"pong":[]}}"#,
+            r#"{"version":1,"home":[]}"#,
+            r#"{"version":1,"discs":[true]}"#,
+            r#"{"version":1,"parental":[]}"#,
+            r#"{"version":1,"screensaver":["title"]}"#,
+            r#"{"version":1,"folders":[["a","A","/x",true]]}"#,
+            r#"{"version":1,"websites":[[]]}"#,
+            r#"{"version":1,"parental":{"limits":[["budget",60]]}}"#,
+            r#"{"version":1,"parental":{"limits":[{"type":"budget","minutes":60,"scope":["every_day"]}]}}"#,
+            "[1]",
             "not json",
         ] {
             assert!(parse(bad).is_err(), "should reject {bad}");

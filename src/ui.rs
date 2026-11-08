@@ -15,6 +15,7 @@ use crate::config::{Config, FolderSettings};
 use crate::control::SharedConfig;
 use crate::control::UiRequest;
 use crate::disc::{self, DriveReport, DriveState, MediaKind};
+use crate::gamepad::{PadNav, Pads};
 use crate::library::{self, Entry, EntryKind, Filter};
 use crate::limits::{self, Status};
 use crate::lock::{LockAction, LockInfo, LockView, Nav};
@@ -22,6 +23,7 @@ use crate::makemkv::{self, DiscInfo, ScanProgress};
 use crate::mpris::{MediaCommand, Mpris, Status as PlayStatus};
 use crate::pictures::{self, Picture};
 use crate::player::{self, MovieOptions, PlayMode};
+use crate::pong::{PongAction, PongInput, PongState, PongView};
 use crate::recent;
 use crate::remote::{self, Action, Calibration, RemoteMap};
 use crate::tr;
@@ -32,6 +34,8 @@ use crate::{inhibit, screensaver};
 
 /// How long the remote's home button must be held to go to the home screen.
 const HOME_HOLD: Duration = Duration::from_secs(3);
+/// See `App::just_opened`.
+const JUST_OPENED: Duration = Duration::from_millis(350);
 const BG: Color32 = Color32::from_rgb(0x12, 0x14, 0x1c);
 const TILE_BG: Color32 = Color32::from_rgb(0x22, 0x26, 0x34);
 pub const TEXT: Color32 = Color32::from_rgb(0xf2, 0xf4, 0xf8);
@@ -120,6 +124,8 @@ enum Screen {
         text: String,
         back: Option<Browse>,
     },
+    /// The built-in Ping Pong game ("Programs" row).
+    Pong(Box<PongView>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -135,6 +141,7 @@ enum RowKind {
     Discs = 0,
     Folders = 1,
     Websites = 2,
+    Programs = 3,
 }
 
 fn message(text: impl Into<String>) -> Screen {
@@ -300,6 +307,8 @@ struct CalibrateView {
 pub struct Inputs {
     /// Keys of remotes read directly from their device (`remote::spawn`).
     pub remote: Receiver<remote::KeyEvent>,
+    /// Gamepads (also read in `remote::spawn`).
+    pub pads: Receiver<remote::PadEvent>,
     /// Requests from the admin interface (control socket).
     pub requests: Receiver<UiRequest>,
 }
@@ -489,7 +498,7 @@ pub struct App {
     /// The lock button (top right) has the focus instead of a tile.
     lock_button_focused: bool,
     /// Horizontal scroll per row kind, vertical scroll of the rows.
-    row_scroll_x: [f32; 3],
+    row_scroll_x: [f32; 4],
     rows_scroll_y: f32,
     /// The browser window program (`familynovice-web`), if installed.
     web_helper: Option<PathBuf>,
@@ -529,6 +538,12 @@ pub struct App {
     last_activity: Instant,
     /// Keeps the computer from blanking the screen while we have our own screensaver.
     inhibitor: inhibit::Inhibitor,
+    /// Connected gamepads, and when the game was last advanced.
+    pads: Pads,
+    pong_tick: Instant,
+    /// The current kind of screen and since when (see `just_opened`).
+    screen_kind: std::mem::Discriminant<Screen>,
+    screen_since: Instant,
 }
 
 impl App {
@@ -582,7 +597,7 @@ impl App {
             screen: Screen::Home,
             focus: (0, 0),
             lock_button_focused: false,
-            row_scroll_x: [0.0; 3],
+            row_scroll_x: [0.0; 4],
             rows_scroll_y: 0.0,
             web_helper: find_web_helper(),
             folder_ok: HashMap::new(),
@@ -608,7 +623,16 @@ impl App {
             saver: None,
             last_activity: Instant::now(),
             inhibitor: inhibit::Inhibitor::spawn(),
+            pads: Pads::default(),
+            pong_tick: Instant::now(),
+            screen_kind: std::mem::discriminant(&Screen::Home),
+            screen_since: Instant::now(),
         }
+    }
+
+    /// Did the current screen open less than `JUST_OPENED` ago? Then it takes no OK / clicks.
+    fn just_opened(&self) -> bool {
+        self.screen_since.elapsed() < JUST_OPENED
     }
 
     /// The current config (may change at any time through a reload).
@@ -874,7 +898,8 @@ impl App {
         }
         // Never over a player, website or the remote setup; only if turned on.
         let blocked = settings.mode == crate::config::ScreensaverMode::Off
-            || matches!(self.screen, Screen::Playing { .. } | Screen::Calibrate(_));
+            || matches!(self.screen, Screen::Playing { .. } | Screen::Calibrate(_))
+            || matches!(&self.screen, Screen::Pong(v) if matches!(v.state, PongState::Playing(_)));
         if activity || blocked {
             self.last_activity = Instant::now();
             if self.saver.is_some() {
@@ -958,6 +983,74 @@ impl App {
             let _ = child.wait();
         }
         log::info!("screensaver: ended");
+    }
+
+    /// The Ping Pong game: paddles from gamepads, keyboard (W/S, arrows) and the remote.
+    fn pong_screen(
+        &mut self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        screen_rect: Rect,
+        s: f32,
+        keys: &Keys,
+        nav: PadNav,
+    ) {
+        let dt = self.pong_tick.elapsed().as_secs_f32();
+        self.pong_tick = Instant::now();
+        let held = |up: Key, down: Key| {
+            ui.ctx().input(|i| {
+                f32::from(u8::from(i.key_down(down))) - f32::from(u8::from(i.key_down(up)))
+            })
+        };
+        let (keys_left, keys_right) = (held(Key::W, Key::S), held(Key::ArrowUp, Key::ArrowDown));
+        // Remote arrows only its input device reports (held down).
+        let remote: f32 = self
+            .remote_down
+            .iter()
+            .filter_map(|c| self.remote_map.device_action(*c))
+            .map(|a| match a {
+                Action::Up => -1.0,
+                Action::Down => 1.0,
+                _ => 0.0,
+            })
+            .sum();
+        let pads = self.pads.vertical();
+        let gamepads = self.pads.count();
+        let just_opened = self.just_opened();
+        let Screen::Pong(view) = &mut self.screen else {
+            return;
+        };
+        let two_players = match &view.state {
+            PongState::Playing(g) | PongState::Paused { game: g, .. } => g.computer.is_none(),
+            _ => false,
+        };
+        // 2 players: 1st gamepad + W/S left, 2nd gamepad + arrows / remote right.
+        // 1 player: everything moves the left paddle.
+        let (left, right) = if two_players {
+            (
+                pads.first().copied().unwrap_or(0.0) + keys_left,
+                pads.get(1).copied().unwrap_or(0.0) + keys_right + remote,
+            )
+        } else {
+            (
+                pads.iter().sum::<f32>() + keys_left + keys_right + remote,
+                0.0,
+            )
+        };
+        let input = PongInput {
+            left,
+            right,
+            up: keys.up || nav.up,
+            down: keys.down || nav.down,
+            enter: keys.enter || nav.enter || nav.pause,
+            back: keys.back || nav.back,
+            pause: nav.pause,
+            gamepads,
+            clicks: !just_opened,
+        };
+        if let PongAction::Quit = view.show(ui, painter, screen_rect, s, dt, &input) {
+            self.screen = Screen::Home;
+        }
     }
 
     /// The remote's volume buttons change the system volume (`volume`): from the window
@@ -1911,6 +2004,13 @@ impl eframe::App for App {
         painter.rect_filled(screen_rect, 0.0, BG);
 
         let mut keys = Keys::read(&ctx);
+        // A screen that just opened ignores OK and clicks for a moment: the press that opened
+        // it (its release, a key repeat) must not choose something on it.
+        let kind = std::mem::discriminant(&self.screen);
+        if kind != self.screen_kind {
+            self.screen_kind = kind;
+            self.screen_since = Instant::now();
+        }
         // Media keys the desktop grabbed and passed on via MPRIS (Cinnamon, GNOME, KDE, …).
         let desktop_media: Vec<MediaCommand> = self.media_rx.try_iter().collect();
         keys.media.extend(&desktop_media);
@@ -1930,6 +2030,22 @@ impl eframe::App for App {
                     self.last_input = Instant::now();
                 }
             }
+        }
+        // Gamepads: menu navigation while the media center itself is in front (not over a
+        // player or website); the game reads them itself.
+        let pad_events: Vec<remote::PadEvent> = self.inputs.pads.try_iter().collect();
+        let pad_activity = !pad_events.is_empty();
+        for e in pad_events {
+            self.pads.apply(e);
+        }
+        let nav = self.pads.frame();
+        if ctx.input(|i| i.focused) && !matches!(self.screen, Screen::Pong(_)) {
+            keys.up |= nav.up;
+            keys.down |= nav.down;
+            keys.left |= nav.left;
+            keys.right |= nav.right;
+            keys.enter |= nav.enter || nav.pause;
+            keys.back |= nav.back;
         }
         let requests: Vec<UiRequest> = self.inputs.requests.try_iter().collect();
         if requests.contains(&UiRequest::Restart) {
@@ -1970,7 +2086,12 @@ impl eframe::App for App {
         }
         // Any input (also a remote button only the device reports) ends the screensaver and
         // does nothing else.
+        if self.just_opened() {
+            keys.enter = false;
+            ctx.request_repaint_after(JUST_OPENED);
+        }
         let activity = !desktop_media.is_empty()
+            || pad_activity
             || remote_events.iter().any(|e| e.value == 1)
             || ctx.input(|i| {
                 i.events.iter().any(|e| {
@@ -2021,6 +2142,7 @@ impl eframe::App for App {
             Screen::VideoChoose { .. } => {
                 self.video_choose_screen(ui, &painter, screen_rect, s, &keys)
             }
+            Screen::Pong(_) => self.pong_screen(ui, &painter, screen_rect, s, &keys, nav),
             _ => self.home_screen(ui, &painter, screen_rect, s, &keys),
         }
         self.paint_time_warning(&painter, screen_rect, s);
@@ -2052,10 +2174,15 @@ impl App {
         if !websites.is_empty() {
             rows.push(RowKind::Websites);
         }
+        let pong = &config.programs.pong;
+        if pong.enabled {
+            rows.push(RowKind::Programs);
+        }
         let row_len = |kind: RowKind| match kind {
             RowKind::Discs => 1,
             RowKind::Folders => folders.len(),
             RowKind::Websites => websites.len(),
+            RowKind::Programs => 1,
         };
 
         // The lock button (only with a PIN, so nobody gets locked out): "up" from the top row.
@@ -2138,6 +2265,7 @@ impl App {
                 RowKind::Discs => tr!("Discs"),
                 RowKind::Folders => tr!("Folders"),
                 RowKind::Websites => tr!("Websites"),
+                RowKind::Programs => tr!("Programs"),
             };
             painter.text(
                 screen_rect.min + Vec2::new(margin, y),
@@ -2212,6 +2340,7 @@ impl App {
                         };
                         paint_website_tile(painter, rect, s, &tile, focus);
                     }
+                    RowKind::Programs => paint_pong_tile(painter, rect, s, focus),
                 }
                 if home && response.clicked() {
                     self.focus = (r, i);
@@ -2268,7 +2397,25 @@ impl App {
                         self.open_website(site);
                     }
                 }
+                Some(RowKind::Programs) => {
+                    let seed = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(1, |d| d.as_nanos() as u64);
+                    log::info!("starting Ping Pong");
+                    self.pong_tick = Instant::now();
+                    self.screen = Screen::Pong(Box::new(PongView::new(
+                        pong.computer_level,
+                        pong.points_to_win,
+                        seed,
+                    )));
+                }
                 _ => {}
+            }
+            // The click / OK that opened something must not also act on it (e.g. pick
+            // the first of the disc's start options): the new screen starts next frame.
+            if !matches!(self.screen, Screen::Home) {
+                ctx.request_repaint();
+                return;
             }
         }
 
@@ -2279,6 +2426,7 @@ impl App {
             | Screen::Browse(_)
             | Screen::Picture(_)
             | Screen::Music(_)
+            | Screen::Pong(_)
             | Screen::VideoChoose { .. } => {}
             Screen::Choose { selected, resume } => {
                 let (mut selected, resume) = (*selected, *resume);
@@ -2300,6 +2448,7 @@ impl App {
                     selected,
                     scan_ready,
                 );
+                let clicked = clicked.filter(|_| !self.just_opened());
                 let activated = clicked.or(keys.enter.then_some(selected));
                 self.screen = Screen::Choose { selected, resume };
                 if keys.back || !tile.available {
@@ -2951,7 +3100,8 @@ impl App {
             selected = (selected + 1).min(items.len() - 1);
         }
         let title = entry.name.clone();
-        let clicked = paint_menu(ui, painter, screen_rect, s, &title, &items, selected);
+        let clicked = paint_menu(ui, painter, screen_rect, s, &title, &items, selected)
+            .filter(|_| !self.just_opened());
         match clicked.or(keys.enter.then_some(selected)) {
             _ if keys.back => self.screen = Screen::Browse(back),
             Some(0) => self.start_video(back, entry, Some(position)),
@@ -3213,6 +3363,66 @@ fn paint_folder_tile(
     let center = Pos2::new(rect.center().x, rect.min.y + rect.height() * 0.36);
     paint_folder_icon(painter, center, rect.width() * 0.58, alpha);
     paint_tile_texts(painter, rect, s, title, subtitle, alpha);
+}
+
+/// The Ping Pong tile: a small field with paddles and ball.
+fn paint_pong_tile(painter: &egui::Painter, rect: Rect, s: f32, focus: f32) {
+    let rect = rect.expand(focus * 12.0 * s);
+    let radius = CornerRadius::same((18.0 * s) as u8);
+    painter.rect_filled(rect, radius, TILE_BG);
+    if focus > 0.0 {
+        painter.rect_stroke(
+            rect,
+            radius,
+            Stroke::new(4.0 * s, ACCENT.gamma_multiply(focus)),
+            StrokeKind::Outside,
+        );
+    }
+    let w = rect.width() * 0.62;
+    let field = Rect::from_center_size(
+        Pos2::new(rect.center().x, rect.min.y + rect.height() * 0.36),
+        Vec2::new(w, w * 9.0 / 16.0),
+    );
+    painter.rect_filled(
+        field,
+        CornerRadius::same((8.0 * s) as u8),
+        Color32::from_rgb(0x10, 0x24, 0x3a),
+    );
+    let u = field.width() / 16.0;
+    for i in 0..5 {
+        painter.rect_filled(
+            Rect::from_min_size(
+                Pos2::new(
+                    field.center().x - 0.05 * u,
+                    field.min.y + (i as f32 * 2.0 + 0.5) * u * 0.9,
+                ),
+                Vec2::new(0.1 * u, 0.9 * u),
+            ),
+            0.0,
+            Color32::from_white_alpha(60),
+        );
+    }
+    let paddle = |x: f32, y: f32, color| {
+        painter.rect_filled(
+            Rect::from_center_size(
+                field.min + Vec2::new(x * u, y * u),
+                Vec2::new(0.4 * u, 2.2 * u),
+            ),
+            CornerRadius::same((0.2 * u) as u8),
+            color,
+        );
+    };
+    paddle(1.0, 3.2, Color32::from_rgb(0x5c, 0xc8, 0xff));
+    paddle(15.0, 5.6, Color32::from_rgb(0xff, 0xa0, 0x5c));
+    painter.circle_filled(field.min + Vec2::new(10.5 * u, 3.6 * u), 0.35 * u, TEXT);
+    paint_tile_texts(
+        painter,
+        rect,
+        s,
+        tr!("Ping Pong"),
+        tr!("Game for 1 or 2 players"),
+        1.0,
+    );
 }
 
 /// A folder: tab plus body, `width` wide, centered on `center`.

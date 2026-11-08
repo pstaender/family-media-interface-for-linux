@@ -109,5 +109,12 @@
       "B876B645-3955-420E-99DF-60139E451CF3",
       "6C3D54AE-0871-498A-81D0-56ED24E5FE9F"
     ]
+  },
+  "programs": {
+    "pong": {
+      "enabled": true,
+      "computer_level": "easy",
+      "points_to_win": 5
+    }
   }
 }

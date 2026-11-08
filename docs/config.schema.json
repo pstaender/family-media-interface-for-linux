@@ -149,6 +149,37 @@
           "description": "Ids of the chosen aerial videos (from AerialWindows/Aerial's videos.json). The admin interface downloads them to $XDG_CACHE_HOME/familynovice/aerial/<id>.<quality>.mov."
         }
       }
+    },
+    "programs": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The \"Programs\" row of the home screen: built-in games (later also registered programs). Missing fields take their defaults.",
+      "properties": {
+        "pong": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Ping Pong for 1 player (against the computer) or 2 players; gamepads, remote or keyboard.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Show the game in the \"Programs\" row."
+            },
+            "computer_level": {
+              "type": "string",
+              "enum": ["easy", "normal", "hard"],
+              "default": "normal",
+              "description": "How well the computer plays in the 1-player game."
+            },
+            "points_to_win": {
+              "type": "integer",
+              "minimum": 3,
+              "maximum": 21,
+              "default": 7
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
