@@ -161,11 +161,11 @@ mod tests {
     use crate::usage::Tracker;
 
     fn setup(content: &str) -> Control {
-        let dir = std::env::temp_dir().join(format!(
-            "familynovice-control-{}-{}",
-            std::process::id(),
-            content.len()
-        ));
+        // One directory per test: tests run in parallel and would overwrite each other's file.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("familynovice-control-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.json");
         std::fs::write(&path, content).unwrap();

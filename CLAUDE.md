@@ -284,21 +284,30 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   show the desktop. If the app doesn't come back, show an error in the admin interface.
 - The Rust app must check config files and handle invalid ones safely
   (keep the last valid config, log the error, report it to the admin interface).
-- Security: the admin interface must require authentication. By default it should only listen
-  on localhost. Allow LAN access only when explicitly turned on. Never store the PIN or
+- Security: the admin interface must require authentication. It is reachable from the home
+  network by default (decided: parents use it from their phone or laptop); `--host 127.0.0.1`
+  limits it to the computer itself. Never store the PIN or
   passwords in plaintext; store a slow hash (e.g. argon2) that both sides verify the same way.
 
 #### Implemented (v1)
 
-- **Server (`admin/src/app.ts`):** `Bun.serve` on `127.0.0.1:8787` (`FAMILYNOVICE_ADMIN_PORT`).
+- **Server (`admin/src/app.ts`):** `Bun.serve` on `0.0.0.0:8787` by default. Port and address
+  (`admin/src/settings.ts`, tested): command line `--port`/`--host` > env
+  `FAMILYNOVICE_ADMIN_PORT`/`FAMILYNOVICE_ADMIN_HOST` > `<config dir>/admin-server.json`
+  (`port`, `host`, `allowed_hosts`; unknown keys rejected) > defaults. Invalid values: exit with
+  an error. pm2: `ecosystem.config.js` in the repo root (CommonJS; `admin/` is an ES module
+  package), one fork instance (sessions are in memory).
   Serves the React app (`src/web/`, bundled by Bun via HTML import) and a JSON API:
   `GET /api/state`, `POST /api/setup|login|logout|password`, `GET|PUT /api/config`,
   `GET /api/status`.
-- **Security checks on every API call:** `Host` must be `127.0.0.1:<port>` or
-  `localhost:<port>` (DNS rebinding); changing requests need `X-Familynovice: 1` and, if
+- **Security checks on every API call:** `Host` must carry our port and be an IP address,
+  `localhost`, this computer's name (`<hostname>`, `<hostname>.local`) or an `allowed_hosts`
+  entry; never another domain name (DNS rebinding); changing requests need `X-Familynovice: 1` and, if
   present, a same-origin `Origin` (CSRF); session cookie `HttpOnly; SameSite=Strict`, 8 h,
   in memory (a server restart logs everyone out); request bodies ≤ 64 KB.
-- **Auth (`admin/src/auth.ts`):** first visit sets the admin password (≥ 8 characters),
+- **Auth (`admin/src/auth.ts`):** first visit sets the admin password (≥ 8 characters), **only
+  from the computer itself** (loopback client address; otherwise someone in the network could
+  claim a fresh installation; `/api/state` returns `setupAllowed`),
   stored as argon2id PHC string in `admin.json` (created with `O_EXCL`, so setup can't be
   repeated). 5 wrong passwords within 15 min lock the login for 60 s.
 - **Apply:** `PUT /api/config` validates, writes `config.json` atomically, then sends
@@ -335,11 +344,13 @@ scripts/
   control.rs      control socket for the admin interface (reload/status)
 web/              familynovice-web: locked-down fullscreen browser window (WebKitGTK via wry),
                   workspace member; includes src/sites.rs via #[path]
+ecosystem.config.js  pm2 config for the admin panel (CommonJS, so it lives outside admin/)
 admin/            Bun + React admin web interface
   src/server.ts   entry point
   src/app.ts      HTTP server, API routes, security checks
   src/auth.ts     admin password (argon2id), sessions, login rate limit
   src/config.ts   config types + validation (mirror of src/config.rs)
+  src/settings.ts port / listen address / allowed Host names (args, env, admin-server.json)
   src/control.ts  control socket client
   src/files.ts    XDG paths, atomic JSON writes
   src/web/        React app (index.html, main.tsx, styles.css)
@@ -431,8 +442,8 @@ Before you consider a change done, run the formatter, linter and tests for every
 ### Admin interface: user, permissions, authentication
 
 - **v1:** the Bun admin server runs as a **systemd user service of the media center user**. It
-  owns `$XDG_CONFIG_HOME/familynovice/` and needs no extra permissions. It listens on
-  `127.0.0.1` by default, so parents can also reach it from their own account on the same computer.
+  owns `$XDG_CONFIG_HOME/familynovice/` and needs no extra permissions. It listens on all
+  interfaces by default, so parents reach it from their own account or from other devices.
 - **Known weakness:** every process of the media center user can write the config, including
   registered apps and scripts. Registered apps must therefore not give file access (no file
   managers, terminals, "save as" dialogs with free paths). Document this in the admin interface
@@ -445,7 +456,7 @@ Before you consider a change done, run the formatter, linter and tests for every
   Passwords and the PIN are hashed with argon2 via `Bun.password.hash()`. The result is a
   standard PHC string that the Rust app verifies with the `argon2` crate, so both sides check
   the same stored hash. Use cookie sessions (`HttpOnly`, `SameSite=Strict`) with CSRF
-  protection. LAN access is opt-in.
+  protection. Plain HTTP in the home network (passwords readable on the network; see open decisions).
 
 ### Applying config changes (reload / restart)
 
@@ -515,6 +526,6 @@ Before you consider a change done, run the formatter, linter and tests for every
 
 Record each choice here once it is made:
 
-- whether to offer HTTPS when LAN access to the admin interface is turned on
+- whether to offer HTTPS for the admin interface (reachable from the network by default)
 - when to move to the hardened config setup (see "Admin interface: user, permissions, authentication")
 - support for non-apt distributions in `scripts/setup.sh`

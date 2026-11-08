@@ -7,7 +7,8 @@ pictures) and selected websites, with a PIN, time limits and a lock screen.
 It has two parts:
 
 - **Media center** (Rust, `src/`): the fullscreen interface on the TV.
-- **Admin panel** (Bun + React, `admin/`): a web page for parents, at http://127.0.0.1:8787/.
+- **Admin panel** (Bun + React, `admin/`): a web page for parents, at http://127.0.0.1:8787/
+  on the computer or `http://<computer's IP>:8787/` from a phone or laptop in the home network.
   It writes the settings and applies them to the running media center.
 
 familynovice only **reads** media. It never changes, moves or deletes files outside its own
@@ -37,7 +38,9 @@ when they close. If it crashes, it restarts.
   the login screen). Automatic login can be turned on in the system settings (Users / Login
   Window).
 - **Admin panel:** runs as a user service of that account, also without a login, at
-  http://127.0.0.1:8787/. Open it from any account on the same computer.
+  http://127.0.0.1:8787/ or `http://<IP>:8787/` from other devices (the address is in
+  `journalctl --user -u familynovice-admin` of that account). Set the admin password on the
+  computer itself first.
 - **Normal desktop again:** choose it in the session menu of the login screen (only for this
   login), or uninstall:
 
@@ -109,7 +112,7 @@ tiles are then shown as "Not installed".
 Start both parts (two terminals):
 
 ```sh
-# Admin panel → http://127.0.0.1:8787/
+# Admin panel → http://127.0.0.1:8787/ (prints its network addresses too)
 cd admin && bun run start           # or: bun run dev (reloads on code changes)
 
 # Media center
@@ -117,12 +120,45 @@ cd admin && bun run start           # or: bun run dev (reloads on code changes)
 ./target/release/familynovice --windowed    # in a window (development)
 ```
 
+### Admin panel: port, network access, pm2
+
+By default the admin panel listens on **port 8787 on all network interfaces**, so it can be
+opened from other devices in the home network. Change that with arguments, environment
+variables or a file (highest priority first):
+
+```sh
+bun run start -- --port 8080 --host 127.0.0.1   # 127.0.0.1 = only this computer
+FAMILYNOVICE_ADMIN_PORT=8080 FAMILYNOVICE_ADMIN_HOST=127.0.0.1 bun run start
+```
+
+`~/.config/familynovice/admin-server.json`:
+
+```json
+{ "port": 8080, "host": "0.0.0.0", "allowed_hosts": ["tv.fritz.box"] }
+```
+
+The panel answers to IP addresses, `localhost` and the computer's name (`<name>`,
+`<name>.local`); other names (e.g. a router's DNS name) must be listed in `allowed_hosts`.
+The **first admin password can only be set on the computer itself**; afterwards you can log
+in from any device. The connection is plain HTTP, so only use it in a network you trust. A
+firewall (e.g. `ufw`) may need `sudo ufw allow 8787/tcp`.
+
+With **pm2** instead of `bun run start` (as the media center's user):
+
+```sh
+pm2 start ecosystem.config.js      # repository root; port/host: see args in the file
+pm2 logs familynovice-admin
+pm2 save && pm2 startup            # start again after a reboot
+```
+
+(`scripts/install.sh` uses a systemd user service instead; use only one of them.)
+
 Use the same build profile for both binaries: the media center finds `familynovice-web` next
 to itself (`target/release/` or `target/debug/`), otherwise in `PATH`.
 
 ### First steps in the admin panel
 
-1. Open http://127.0.0.1:8787/ and choose an admin password.
+1. Open http://127.0.0.1:8787/ on the computer and choose an admin password.
 2. **Home screen & media:** title, disc settings, folders (with a folder picker) and websites.
 3. **Password & PIN:** set a PIN (4–8 digits). It unlocks the media center when time is up and
    enables the lock button on the home screen.

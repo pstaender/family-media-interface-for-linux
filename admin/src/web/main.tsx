@@ -61,11 +61,13 @@ const languageName = (code: string) => LANGUAGES.find(([c]) => c === code)?.[1] 
 
 function App() {
   const [page, setPage] = useState<Page>("loading");
+  const [setupAllowed, setSetupAllowed] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const s = await api<{ setUp: boolean; loggedIn: boolean }>("GET", "/api/state");
+      const s = await api<{ setUp: boolean; loggedIn: boolean; setupAllowed: boolean }>("GET", "/api/state");
+      setSetupAllowed(s.setupAllowed);
       setPage(!s.setUp ? "setup" : s.loggedIn ? "settings" : "login");
     } catch (e) {
       setError((e as Error).message);
@@ -78,7 +80,21 @@ function App() {
 
   if (error) return <Narrow title="familynovice"><div className="banner error">{error}</div></Narrow>;
   if (page === "loading") return null;
-  if (page === "setup") return <SetupPage onDone={refresh} />;
+  if (page === "setup") {
+    if (!setupAllowed) {
+      return (
+        <Narrow title="Welcome to familynovice">
+          <p className="hint">
+            The admin password hasn't been set yet. For safety, it can only be set on the media
+            center computer itself: open <code className="path">http://127.0.0.1:{location.port || 80}/</code> there.
+            Afterwards you can log in from this device.
+          </p>
+          <button onClick={refresh}>Check again</button>
+        </Narrow>
+      );
+    }
+    return <SetupPage onDone={refresh} />;
+  }
   if (page === "login") return <LoginPage onDone={refresh} />;
   return <SettingsPage onLogout={refresh} />;
 }

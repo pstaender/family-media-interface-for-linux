@@ -1,7 +1,9 @@
 // The admin web server: serves the React app and a small JSON API.
 //
 // Security (see CLAUDE.md):
-// - listens on 127.0.0.1 only; the Host header must be 127.0.0.1/localhost (DNS rebinding),
+// - listens on all interfaces by default (see settings.ts); the Host header must be an IP
+//   address, localhost or this computer's name (DNS rebinding),
+// - the admin password can only be set up from this computer (not from the network),
 // - session cookie: HttpOnly, SameSite=Strict,
 // - changing requests need the header `X-Familynovice: 1` and a matching Origin (CSRF),
 // - all input is validated before anything is written.
@@ -19,14 +21,20 @@ import {
 import { isNormalizedAbsolutePath, validateConfig, defaultConfig, type Config } from "./config";
 import { NOT_RUNNING, sendCommand } from "./control";
 import { readJson, writeJsonAtomic } from "./files";
+import { DEFAULT_HOST, isAllowedHost, isLoopbackAddress } from "./settings";
 
 export interface AdminOptions {
   configDir: string;
   /** Directory of the media center's control socket ($XDG_RUNTIME_DIR). */
   runtimeDir: string;
   port: number;
+  /** Address to listen on (default: all interfaces). */
   hostname?: string;
+  /** Extra Host names besides IP addresses, localhost and this computer's name. */
+  allowedHosts?: string[];
   development?: boolean;
+  /** Tests only: pretend requests come from this client address. */
+  clientAddress?: string;
 }
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -80,6 +88,8 @@ export function createAdminServer(options: AdminOptions) {
   const configPath = join(options.configDir, "config.json");
   const socketPath = join(options.runtimeDir, "familynovice.sock");
   const auth = new Auth(join(options.configDir, "admin.json"));
+  const fromThisComputer = (req: Request): boolean =>
+    isLoopbackAddress(options.clientAddress ?? server.requestIP(req)?.address);
 
   /** The stored config (defaults if missing; defaults plus an error text if invalid). */
   const loadConfig = async (): Promise<{ config: Config; error?: string }> => {
@@ -106,8 +116,7 @@ export function createAdminServer(options: AdminOptions) {
   const api = (handler: Handler, { login = true, mutating = false } = {}): Handler => {
     return (req) => {
       const host = req.headers.get("host") ?? "";
-      const allowedHosts = [`127.0.0.1:${server.port}`, `localhost:${server.port}`];
-      if (!allowedHosts.includes(host)) return json({ error: "Forbidden host." }, 403);
+      if (!isAllowedHost(host, server.port!, options.allowedHosts)) return json({ error: "Forbidden host." }, 403);
       if (mutating) {
         const origin = req.headers.get("origin");
         if (req.headers.get("x-familynovice") !== "1" || (origin !== null && origin !== `http://${host}`)) {
@@ -120,7 +129,7 @@ export function createAdminServer(options: AdminOptions) {
   };
 
   const server = Bun.serve({
-    hostname: options.hostname ?? "127.0.0.1",
+    hostname: options.hostname ?? DEFAULT_HOST,
     port: options.port,
     development: options.development ?? false,
     routes: {
@@ -129,7 +138,12 @@ export function createAdminServer(options: AdminOptions) {
       "/api/state": {
         GET: api(
           async (req) =>
-            json({ setUp: await auth.isSetUp(), loggedIn: auth.isValid(sessionToken(req)) }),
+            json({
+              setUp: await auth.isSetUp(),
+              loggedIn: auth.isValid(sessionToken(req)),
+              // The first password can only be chosen on this computer.
+              setupAllowed: fromThisComputer(req),
+            }),
           { login: false },
         ),
       },
@@ -137,6 +151,9 @@ export function createAdminServer(options: AdminOptions) {
       "/api/setup": {
         POST: api(
           async (req) => {
+            if (!fromThisComputer(req)) {
+              return json({ error: "Set the admin password on the media center computer itself first." }, 403);
+            }
             const body = await readBody(req);
             const result = await auth.setup(body?.password as string);
             if (!result.ok) return json({ error: result.error }, 400);

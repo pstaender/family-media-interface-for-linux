@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, statSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server as NetServer } from "node:net";
 import { join } from "node:path";
 import { createAdminServer } from "../src/app";
@@ -28,7 +28,7 @@ beforeAll(async () => {
     });
   });
   await new Promise<void>((resolve) => fakeMediaCenter.listen(join(runtimeDir, "familynovice.sock"), resolve));
-  server = createAdminServer({ configDir, runtimeDir, port: 0 });
+  server = createAdminServer({ configDir, runtimeDir, port: 0, hostname: "127.0.0.1" });
   base = `http://127.0.0.1:${server.port}`;
 });
 
@@ -60,8 +60,24 @@ test("serves the admin page", async () => {
 });
 
 test("first start: not set up, nothing accessible", async () => {
-  expect((await call("GET", "/api/state")).data).toEqual({ setUp: false, loggedIn: false });
+  expect((await call("GET", "/api/state")).data).toEqual({ setUp: false, loggedIn: false, setupAllowed: true });
   expect((await call("GET", "/api/config")).status).toBe(401);
+});
+
+test("the first password can't be set from another device", async () => {
+  const dir = mkdtempSync("/tmp/fn-admin-remote-");
+  const remote = createAdminServer({ configDir: dir, runtimeDir, port: 0, hostname: "127.0.0.1", clientAddress: "192.168.1.30" });
+  const url = `http://127.0.0.1:${remote.port}`;
+  try {
+    const state = await (await fetch(`${url}/api/state`)).json();
+    expect(state).toEqual({ setUp: false, loggedIn: false, setupAllowed: false });
+    const res = await fetch(`${url}/api/setup`, { method: "POST", headers: mutating, body: JSON.stringify({ password: "correct horse" }) });
+    expect(res.status).toBe(403);
+    expect(existsSync(join(dir, "admin.json"))).toBe(false);
+  } finally {
+    remote.stop(true);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("setup needs the CSRF header and a long enough password", async () => {
@@ -90,9 +106,11 @@ test("folder picker needs a login", async () => {
   cookie = saved;
 });
 
-test("rejects foreign Host headers (DNS rebinding)", async () => {
-  const r = await call("GET", "/api/state", undefined, { Host: "evil.example:80" });
-  expect(r.status).toBe(403);
+test("rejects foreign Host headers (DNS rebinding), accepts IP addresses", async () => {
+  expect((await call("GET", "/api/state", undefined, { Host: "evil.example:80" })).status).toBe(403);
+  expect((await call("GET", "/api/state", undefined, { Host: `evil.example:${server.port}` })).status).toBe(403);
+  expect((await call("GET", "/api/state", undefined, { Host: "192.168.1.20:1" })).status).toBe(403);
+  expect((await call("GET", "/api/state", undefined, { Host: `192.168.1.20:${server.port}` })).status).toBe(200);
 });
 
 test("rejects requests from another origin (CSRF)", async () => {

@@ -6,8 +6,8 @@
 #   - builds familynovice and installs it to /opt/familynovice (owned by root, read-only),
 #   - adds a login session "familynovice" (cage runs only the media center: no desktop, panels,
 #     app menu, Alt+Tab or notifications) and makes it this account's default session,
-#   - runs the admin panel as a systemd user service at http://127.0.0.1:8787/, also while
-#     nobody is logged in (lingering).
+#   - runs the admin panel as a systemd user service on port 8787 (reachable from the home
+#     network; port/address: admin-server.json, see README), also while nobody is logged in.
 #
 # Recommended: a separate account without admin rights for the media center, e.g.
 #   sudo adduser tv && scripts/install.sh --user tv     (run from your own admin account)
@@ -99,7 +99,8 @@ cat <<EOF
 This turns the account '$TARGET_USER' into a media center account:
 
   * After the next login, '$TARGET_USER' sees only the media center (no desktop, no other apps).
-  * Admin panel (for parents): http://127.0.0.1:8787/ (from any account on this computer).
+  * Admin panel (for parents): http://127.0.0.1:8787/ on this computer, or from other
+    devices in the home network at http://<this computer's IP>:8787/.
   * Installs to $PREFIX, $SESSION_FILE and $UNIT_DIR/$SERVICE_NAME.
   * No personal files are changed. Undo with scripts/uninstall.sh.
 EOF
@@ -261,7 +262,7 @@ done
 as_target mkdir -p "$UNIT_DIR"
 as_target tee "$UNIT_DIR/$SERVICE_NAME" >/dev/null <<EOF
 [Unit]
-Description=familynovice admin panel (http://127.0.0.1:8787/)
+Description=familynovice admin panel
 
 [Service]
 WorkingDirectory=$PREFIX/admin
@@ -301,7 +302,8 @@ $(printf '\033[1;32m')Done.$(printf '\033[0m')
     of the desktop.
     (Automatic login: in the system settings under Users / Login Window.)
   * Admin panel: http://127.0.0.1:8787/  ($(target_systemctl is-active "$SERVICE_NAME" 2>/dev/null || true))
-    Set an admin password and a PIN there first.
+    From other devices: $(hostname -I 2>/dev/null | awk '{printf "http://%s:8787/", $1}')
+    Set the admin password on this computer first, then a PIN.
   * Leave the media center: Ctrl+Q (ends the session, back to the login screen).
   * Back to the normal desktop for this account: pick it in the session menu of the login
     screen, or run scripts/uninstall.sh.

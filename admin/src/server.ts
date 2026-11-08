@@ -1,19 +1,33 @@
 // Entry point: `bun run dev` (development) or `bun run start`.
-// Env: FAMILYNOVICE_ADMIN_PORT (default 8787), FAMILYNOVICE_CONFIG_DIR, XDG_CONFIG_HOME,
-//      XDG_RUNTIME_DIR.
+// Port and listen address: command line, env or admin-server.json (see settings.ts, --help).
+// Env: FAMILYNOVICE_ADMIN_PORT, FAMILYNOVICE_ADMIN_HOST, FAMILYNOVICE_CONFIG_DIR,
+//      XDG_CONFIG_HOME, XDG_RUNTIME_DIR.
 
 import { createAdminServer } from "./app";
 import { defaultConfigDir, defaultRuntimeDir } from "./files";
+import { USAGE, loadServerSettings, reachableUrls } from "./settings";
 
-const port = Number(process.env.FAMILYNOVICE_ADMIN_PORT ?? 8787);
 const configDir = defaultConfigDir();
+const settings = await loadServerSettings(configDir, process.argv.slice(2), process.env);
+if (settings.help) {
+  console.log(USAGE);
+  process.exit(0);
+}
+if (!settings.ok) {
+  console.error(`familynovice admin: ${settings.error}\n\n${USAGE}`);
+  process.exit(2);
+}
 
+const { port, host, allowedHosts } = settings.value;
 const server = createAdminServer({
   configDir,
   runtimeDir: defaultRuntimeDir(),
   port,
+  hostname: host,
+  allowedHosts,
   development: process.env.NODE_ENV !== "production",
 });
 
-console.log(`familynovice admin: http://127.0.0.1:${server.port}/`);
-console.log(`config directory:   ${configDir}`);
+console.log("familynovice admin:");
+for (const url of reachableUrls(host, server.port!)) console.log(`  ${url}`);
+console.log(`config directory: ${configDir}`);
