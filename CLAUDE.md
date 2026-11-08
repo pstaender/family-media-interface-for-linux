@@ -109,6 +109,13 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   - Admin panel → Parental control → Status: locked/unlocked, used today, time left, unlock
     (30 min / 1 h / rest of today), "End unlock" (back to the time limits; locks only if the
     time is used up) and "Lock now" (control socket `unlock` / `end_unlock` / `lock`).
+- **Media keys (implemented):** next / previous / play-pause / stop of remotes and keyboards.
+  Desktops grab these keys and send them to MPRIS players, so the media center is one
+  (`src/mpris.rs`, `org.mpris.MediaPlayer2.familynovice` via `zbus` 5 blocking API;
+  `PlaybackStatus` follows the screen). Without MPRIS, Mint shows "unavailable". In the kiosk
+  session the keys reach the window directly (egui `Key::Media*`). Music: next/previous
+  track, pause, stop; pictures: next/previous; videos (mpv, via its IPC socket): chapters,
+  pause; Stop closes the player. mpv's own NEXT/PREV bindings also jump chapters.
 - **Touch/mouse:** folder browser, picture viewer and music player have a "‹ Back" button
   (no keyboard needed); the lock screen's number pad is clickable.
 - **10-foot UI:** usable from the couch with a remote, gamepad or keyboard (mouse optional).
@@ -211,7 +218,11 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   - **Music:** built-in player screen (`src/audio.rs`). The sound comes from mpv without any
     window (`--no-video --force-window=no`), controlled over its IPC socket
     (`$XDG_RUNTIME_DIR/familynovice-audio.sock`): pause, previous/next, ±30 s; plays from the
-    chosen track to the end of the folder.
+    chosen track to the end of the folder. **Cover art** (`src/cover.rs`, read-only, in a
+    thread): the picture embedded in the file (`lofty`; front cover first), else a cover file
+    in the track's folder (`cover`, `folder`, `front`, `album`, `albumart`, `thumb`, exact
+    name before prefix, e.g. `AlbumArt_{…}_Large.jpg`), else the folder's only picture.
+    Files outside the configured folder (symlinks) are ignored.
   - **Videos:** the same mpv setup as the disc's main movie (`player::mpv_movie`): preferred
     audio/subtitle languages from the disc settings, resume tracking ("Resume from h:mm:ss" /
     "Play from beginning"; key `file-<FNV-1a of the path>`), nothing written next to the media.

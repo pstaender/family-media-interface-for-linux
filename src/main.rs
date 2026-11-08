@@ -1,11 +1,13 @@
 mod audio;
 mod config;
 mod control;
+mod cover;
 mod disc;
 mod library;
 mod limits;
 mod lock;
 mod makemkv;
+mod mpris;
 mod pictures;
 mod pin;
 mod player;

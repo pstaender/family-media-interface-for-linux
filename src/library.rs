@@ -71,6 +71,13 @@ impl Filter {
     }
 }
 
+/// Is this a picture the built-in viewer can show (by extension)?
+pub fn is_image(file_name: &str) -> bool {
+    file_name
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| IMAGES.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
 /// Resolve `sub` (folder names below the root) to a canonical directory inside `root`.
 pub fn resolve(root: &Path, sub: &[String]) -> Result<PathBuf, String> {
     let root = root

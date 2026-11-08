@@ -18,10 +18,11 @@ use crate::library::{self, Entry, EntryKind, Filter};
 use crate::limits::{self, Status};
 use crate::lock::{LockAction, LockInfo, LockView};
 use crate::makemkv::{self, DiscInfo, ScanProgress};
+use crate::mpris::{MediaCommand, Mpris, Status as PlayStatus};
 use crate::pictures::{self, Picture};
 use crate::player::{self, MovieOptions, PlayMode};
 use crate::usage::SharedTracker;
-use crate::{resume, sites, store};
+use crate::{cover, resume, sites, store};
 
 const BG: Color32 = Color32::from_rgb(0x12, 0x14, 0x1c);
 const TILE_BG: Color32 = Color32::from_rgb(0x22, 0x26, 0x34);
@@ -188,6 +189,50 @@ struct MusicView {
     /// The folder's music files; playback started at `start`.
     tracks: Vec<Entry>,
     start: usize,
+    /// The configured folder (cover files must be inside it).
+    root: PathBuf,
+    /// Cover art of the current track (embedded or a cover file in its folder).
+    cover: Option<(cover::Source, egui::TextureHandle)>,
+    /// The track whose cover was asked for last, and where the answer arrives.
+    cover_track: Option<PathBuf>,
+    cover_rx: Option<Receiver<Option<cover::Cover>>>,
+}
+
+impl MusicView {
+    /// Show the cover of `track`: ask a thread for it when the track changes, take the
+    /// answer when it's there. The old cover stays until then (no flicker).
+    fn update_cover(&mut self, ctx: &egui::Context, track: Option<&std::path::Path>) {
+        if let Some(result) = self.cover_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.cover_rx = None;
+            self.cover = match result {
+                None => None,
+                Some(cover::Cover {
+                    source,
+                    picture: Some(p),
+                }) => {
+                    let image =
+                        egui::ColorImage::from_rgba_unmultiplied([p.width, p.height], &p.rgba);
+                    let texture = ctx.load_texture("cover", image, egui::TextureOptions::LINEAR);
+                    Some((source, texture))
+                }
+                // Same folder image as before.
+                Some(cover::Cover { picture: None, .. }) => self.cover.take(),
+            };
+        }
+        let Some(track) = track else { return };
+        if self.cover_track.as_deref() == Some(track) {
+            return;
+        }
+        self.cover_track = Some(track.to_path_buf());
+        let (tx, rx) = mpsc::channel();
+        self.cover_rx = Some(rx); // an older request's answer goes nowhere
+        let (track, root, ctx) = (track.to_path_buf(), self.root.clone(), ctx.clone());
+        let current = self.cover.as_ref().map(|(source, _)| source.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(cover::load(&track, &root, current.as_ref(), 640));
+            ctx.request_repaint();
+        });
+    }
 }
 
 /// Select the entry with this path (when coming back to the browser).
@@ -209,6 +254,8 @@ struct Keys {
     page_up: bool,
     page_down: bool,
     quit: bool,
+    /// Media keys (next, previous, play/pause, stop): from the window or via MPRIS.
+    media: Vec<MediaCommand>,
 }
 
 impl Keys {
@@ -225,7 +272,21 @@ impl Keys {
             page_up: i.key_pressed(Key::PageUp),
             page_down: i.key_pressed(Key::PageDown),
             quit: i.modifiers.ctrl && i.key_pressed(Key::Q),
+            media: [
+                (Key::MediaTrackNext, MediaCommand::Next),
+                (Key::MediaTrackPrevious, MediaCommand::Previous),
+                (Key::MediaPlayPause, MediaCommand::PlayPause),
+                (Key::MediaStop, MediaCommand::Stop),
+            ]
+            .into_iter()
+            .filter(|(key, _)| i.key_pressed(*key))
+            .map(|(_, command)| command)
+            .collect(),
         })
+    }
+
+    fn media(&self, command: MediaCommand) -> bool {
+        self.media.contains(&command)
     }
 
     /// For vertical lists: up/left = previous, down/right = next.
@@ -277,6 +338,9 @@ fn choices(resume: Option<f64>, allow_disc_menu: bool) -> Vec<Choice> {
 
 pub struct App {
     ctx: egui::Context,
+    /// Media keys from the desktop (MPRIS); also tells the desktop whether something plays.
+    mpris: Mpris,
+    media_rx: Receiver<MediaCommand>,
     drives_rx: Receiver<Vec<DriveReport>>,
     drives: Vec<DriveReport>,
     scan_tx: Sender<ScanEvent>,
@@ -325,8 +389,13 @@ impl App {
         let (eject_tx, eject_rx) = mpsc::channel();
         let (picture_tx, picture_rx) = mpsc::channel();
         let (pin_tx, pin_rx) = mpsc::channel();
+        let (media_tx, media_rx) = mpsc::channel();
+        let repaint = ctx.clone();
+        let mpris = Mpris::start(media_tx, move || repaint.request_repaint());
         Self {
             ctx,
+            mpris,
+            media_rx,
             drives_rx,
             drives: Vec::new(),
             scan_tx,
@@ -891,6 +960,14 @@ impl App {
             }),
             EntryKind::Audio => {
                 let paths: Vec<PathBuf> = same_kind.iter().map(|e| e.path.clone()).collect();
+                let root = self
+                    .config()
+                    .0
+                    .folders
+                    .iter()
+                    .find(|f| f.id == browse.folder_id)
+                    .map(|f| PathBuf::from(&f.path))
+                    .unwrap_or_default();
                 let ctx = self.ctx.clone();
                 match AudioPlayer::start(&paths, index, move || ctx.request_repaint()) {
                     Ok(player) => Screen::Music(MusicView {
@@ -898,6 +975,10 @@ impl App {
                         player,
                         tracks: same_kind,
                         start: index,
+                        root,
+                        cover: None,
+                        cover_track: None,
+                        cover_rx: None,
                     }),
                     Err(e) => Screen::Message {
                         text: e,
@@ -1001,7 +1082,14 @@ impl eframe::App for App {
         let painter = ui.painter().clone();
         painter.rect_filled(screen_rect, 0.0, BG);
 
-        let keys = Keys::read(&ctx);
+        let mut keys = Keys::read(&ctx);
+        keys.media.extend(self.media_rx.try_iter());
+        self.mpris.set_status(match &self.screen {
+            Screen::Music(view) if view.player.state().paused => PlayStatus::Paused,
+            Screen::Music(_) => PlayStatus::Playing,
+            Screen::Playing { kind, .. } if *kind != PlayKind::Website => PlayStatus::Playing,
+            _ => PlayStatus::Stopped,
+        });
         // TODO: protect leaving the media center with the PIN.
         if keys.quit {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1327,6 +1415,7 @@ impl App {
                 child,
                 stopping,
                 started,
+                kind,
                 ..
             } => {
                 // Ignore input for a moment after starting: the click / OK press that opened
@@ -1334,7 +1423,15 @@ impl App {
                 let settled = started.elapsed() > Duration::from_millis(1000);
                 let stop_now = settled
                     && stopping.is_none()
-                    && (keys.back || ctx.input(|i| i.pointer.any_click()));
+                    && (keys.back
+                        || keys.media(MediaCommand::Stop)
+                        || ctx.input(|i| i.pointer.any_click()));
+                // Media keys for the video (mpv; nothing happens for VLC or websites).
+                if stopping.is_none() && *kind != PlayKind::Website {
+                    for command in &keys.media {
+                        player::mpv_media_key(&store::mpv_socket_path(), *command);
+                    }
+                }
                 let pid = child.id();
                 let body = if stopping.is_some() {
                     "Stopping…"
@@ -1556,9 +1653,13 @@ impl App {
             .filter(|_| ui.ctx().input(|i| i.pointer.any_click()));
         // On top of the click area above.
         let (back_rect, back_response) = back_button(ui, screen_rect, s);
-        let prev = keys.left || keys.up || click.is_some_and(|p| p.x < screen_rect.center().x);
+        let prev = keys.left
+            || keys.up
+            || keys.media(MediaCommand::Previous)
+            || click.is_some_and(|p| p.x < screen_rect.center().x);
         let next = keys.right
             || keys.down
+            || keys.media(MediaCommand::Next)
             || keys.enter
             || click.is_some_and(|p| p.x >= screen_rect.center().x);
         if keys.back || back_response.clicked() {
@@ -1670,6 +1771,7 @@ impl App {
         let state = view.player.state();
         let current = view.start + state.playlist_pos.unwrap_or(0);
         let current_path = view.tracks.get(current).map(|t| t.path.clone());
+        view.update_cover(ui.ctx(), current_path.as_deref());
         let back_to_browser = |view: MusicView| -> Screen {
             let browse = view.back.clone();
             Screen::Browse(match &current_path {
@@ -1679,7 +1781,7 @@ impl App {
         };
         let (back_rect, back_response) = back_button(ui, screen_rect, s);
         paint_back_button(painter, back_rect, back_response.hovered(), s);
-        if keys.back || back_response.clicked() {
+        if keys.back || keys.media(MediaCommand::Stop) || back_response.clicked() {
             view.player.stop();
             self.screen = back_to_browser(view);
             return;
@@ -1688,13 +1790,18 @@ impl App {
             self.screen = back_to_browser(view);
             return;
         }
-        if keys.enter {
+        let paused = state.paused;
+        if keys.enter
+            || keys.media(MediaCommand::PlayPause)
+            || (keys.media(MediaCommand::Play) && paused)
+            || (keys.media(MediaCommand::Pause) && !paused)
+        {
             view.player.toggle_pause();
         }
-        if keys.left {
+        if keys.left || keys.media(MediaCommand::Previous) {
             view.player.previous();
         }
-        if keys.right {
+        if keys.right || keys.media(MediaCommand::Next) {
             view.player.next();
         }
         if keys.up {
@@ -1705,12 +1812,26 @@ impl App {
         }
 
         let center = screen_rect.center();
-        paint_entry_icon(
-            painter,
-            EntryKind::Audio,
-            center - Vec2::new(0.0, 200.0 * s),
-            90.0 * s,
-        );
+        match &view.cover {
+            Some((_, texture)) => {
+                // Fit into a 300 × 300 square above the title, keeping the aspect ratio.
+                let size = texture.size_vec2();
+                let scale = (300.0 * s / size.x).min(300.0 * s / size.y);
+                let rect = Rect::from_center_size(center - Vec2::new(0.0, 210.0 * s), size * scale);
+                painter.image(
+                    texture.id(),
+                    rect,
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            }
+            None => paint_entry_icon(
+                painter,
+                EntryKind::Audio,
+                center - Vec2::new(0.0, 200.0 * s),
+                90.0 * s,
+            ),
+        }
         let title = view
             .tracks
             .get(current)

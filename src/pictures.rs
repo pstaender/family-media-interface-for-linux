@@ -1,5 +1,6 @@
 //! Loading pictures for the built-in viewer (read-only).
 
+use std::io::{BufRead, Cursor, Seek};
 use std::path::Path;
 
 use image::{DynamicImage, ImageDecoder, ImageReader, imageops::FilterType};
@@ -19,6 +20,22 @@ pub fn load(path: &Path, max_width: u32, max_height: u32) -> Result<Picture, Str
     let reader = ImageReader::open(path)
         .and_then(ImageReader::with_guessed_format)
         .map_err(|e| e.to_string())?;
+    decode(reader, max_width, max_height)
+}
+
+/// Like [`load`], for a picture in memory (e.g. cover art embedded in a music file).
+pub fn load_bytes(bytes: &[u8], max_width: u32, max_height: u32) -> Result<Picture, String> {
+    let reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| e.to_string())?;
+    decode(reader, max_width, max_height)
+}
+
+fn decode<R: BufRead + Seek>(
+    reader: ImageReader<R>,
+    max_width: u32,
+    max_height: u32,
+) -> Result<Picture, String> {
     let mut decoder = reader.into_decoder().map_err(|e| e.to_string())?;
     let orientation = decoder.orientation().map_err(|e| e.to_string())?;
     let mut img = DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?;
@@ -56,6 +73,10 @@ mod tests {
 
         let p = load(&path, 4000, 4000).unwrap();
         assert_eq!((p.width, p.height), (400, 200));
+
+        let p = load_bytes(&std::fs::read(&path).unwrap(), 40, 40).unwrap();
+        assert_eq!((p.width, p.height), (40, 20));
+        assert!(load_bytes(b"not a picture", 10, 10).is_err());
 
         std::fs::write(&path, b"not a picture").unwrap();
         assert!(load(&path, 100, 100).is_err());

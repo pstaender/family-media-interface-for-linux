@@ -14,8 +14,9 @@ It has two parts:
 familynovice only **reads** media. It never changes, moves or deletes files outside its own
 folders (see [Where files are stored](#where-files-are-stored)).
 
-> Status: early stage, tested on Linux Mint 22 (Cinnamon). The kiosk installer
-> (`scripts/install.sh`) is an example for Ubuntu/Mint.
+> **Built and tested on Linux Mint** (22, Cinnamon). Other distributions and desktops should
+> work (it only uses freedesktop.org standards), but haven't been tested. Status: early
+> stage; the kiosk installer (`scripts/install.sh`) is an example for Ubuntu/Mint.
 
 ## Install as a media center account (kiosk)
 
@@ -173,6 +174,7 @@ to itself (`target/release/` or `target/debug/`), otherwise in `PATH`.
 | Arrow keys | move between tiles / entries |
 | Enter, Space | open / select |
 | Esc, Backspace, remote "back" | go back; closes a video |
+| Media keys (remote, keyboard) | music: next / previous / play-pause / stop; pictures: next / previous; video: chapters, play-pause, stop |
 | Hold Esc for 3 s | close a website |
 | Ctrl+Q | quit the media center (development; will be PIN-protected) |
 

@@ -34,6 +34,7 @@ fn mpv_no_writes(cmd: &mut Command, cache_dir: Option<&Path>) {
 /// Esc, Backspace and the back keys of remotes, gamepads and mice close the video. The
 /// position is kept: the resume monitor saves it when mpv closes. mpv's defaults stay active,
 /// except the console (` and :), whose `run` command could start any program (kiosk escape).
+/// The remote's next/previous keys jump between chapters (as via MPRIS, see `mpv_media_key`).
 pub const MPV_INPUT_CONF: &str = "\
 ESC quit
 BS quit
@@ -42,8 +43,32 @@ GAMEPAD_BACK quit
 MBTN_BACK quit
 ` ignore
 : ignore
+NEXT add chapter 1
+PREV add chapter -1
 ";
 pub const MPV_INPUT_CONF_NAME: &str = "mpv-input.conf";
+
+/// Forward a media key to the running video (mpv's IPC socket, see `resume`): play/pause,
+/// next/previous chapter. Does nothing if mpv isn't listening (VLC, already closed).
+pub fn mpv_media_key(socket: &Path, key: crate::mpris::MediaCommand) {
+    use crate::mpris::MediaCommand;
+    use std::io::Write;
+    let command = match key {
+        MediaCommand::PlayPause => serde_json::json!(["cycle", "pause"]),
+        MediaCommand::Play => serde_json::json!(["set", "pause", "no"]),
+        MediaCommand::Pause => serde_json::json!(["set", "pause", "yes"]),
+        MediaCommand::Next => serde_json::json!(["add", "chapter", 1]),
+        MediaCommand::Previous => serde_json::json!(["add", "chapter", -1]),
+        MediaCommand::Stop => return, // handled by the "Playing…" screen
+    };
+    let result = std::os::unix::net::UnixStream::connect(socket).and_then(|mut stream| {
+        stream.set_write_timeout(Some(std::time::Duration::from_millis(500)))?;
+        writeln!(stream, "{}", serde_json::json!({ "command": command }))
+    });
+    if let Err(e) = result {
+        log::debug!("media key for mpv: {e}");
+    }
+}
 
 /// mpv for a movie (disc main movie or video file): fullscreen, languages, resume position,
 /// IPC socket for position tracking, nothing written next to the media.
