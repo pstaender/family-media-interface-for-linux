@@ -197,6 +197,7 @@ type Status = {
   running: boolean;
   /** Media centers of this user besides the one connected to the admin panel. */
   extraInstances?: number;
+  extraPids?: number[];
   configError?: string | null;
   error?: string | null;
   locked?: boolean;
@@ -732,6 +733,12 @@ function ExtraInstancesBanner(props: { status: Status | null; reload: () => void
         </button>
       ) : (
         "Log the media center account out and in again, or restart the computer."
+      )}
+      {(props.status?.extraPids?.length ?? 0) > 0 && (
+        <small className="banner-hint">
+          {props.status?.running ? "If that doesn't help, run" : "Or run"} this in a terminal on the media center
+          computer (from an account with admin rights): <code>sudo kill {props.status!.extraPids!.join(" ")}</code>
+        </small>
       )}
     </div>
   );

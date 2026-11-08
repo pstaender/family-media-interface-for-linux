@@ -185,6 +185,7 @@ test("status comes from the media center", async () => {
   expect((await call("GET", "/api/status")).data).toEqual({
     running: true,
     extraInstances: 0,
+    extraPids: [],
     configError: null,
     locked: false,
     lockReason: null,
@@ -198,7 +199,9 @@ test("status comes from the media center", async () => {
 
 test("warns about media centers that don't get the changes", async () => {
   runningPids = [4242, 5555];
-  expect((await call("GET", "/api/status")).data.extraInstances).toBe(1);
+  const { data } = await call("GET", "/api/status");
+  expect(data.extraInstances).toBe(1);
+  expect(data.extraPids).toEqual([5555]);
   runningPids = [4242];
   expect((await call("GET", "/api/status")).data.extraInstances).toBe(0);
 });

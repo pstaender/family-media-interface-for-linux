@@ -633,10 +633,14 @@ Before you consider a change done, run the formatter, linter and tests for every
   an orphaned loop once started a second media center into the next session, hidden from
   the admin panel. Also, only one media center runs per user (`flock` on
   `$XDG_RUNTIME_DIR/familynovice.lock`, `store::lock_instance`; released on exit/exec); a
-  second one exits with 0. The admin panel warns when more media centers of the user run than
+  second one exits with 0. And a media center started by a `familynovice-kiosk` loop whose
+  parent is init or a `systemd` manager (the loop outlived its session; logout doesn't end
+  user processes on Ubuntu) exits at once (`store::started_by_orphaned_kiosk`), also with
+  loops from older installs. The admin panel warns when more media centers of the user run than
   the one on the control socket (`status` reports its `pid`; `admin/src/processes.ts` reads
   `/proc`: comm exactly `familynovice`, same uid) and offers "End the extra one"
-  (`POST /api/instances/stop-extra`, SIGTERM, only while one is connected). The default session is set via AccountsService
+  (`POST /api/instances/stop-extra`, SIGTERM, only while one is connected), plus the
+  `sudo kill <pids>` command for a terminal. The default session is set via AccountsService
   (`SetSession`/`SetXSession`/`SetSessionType`, read by GDM and LightDM). The admin panel is a
   systemd user service (`familynovice-admin.service`) with lingering. `install-state`
   (KEY=VALUE, read as data, never sourced) keeps the previous session and linger state for

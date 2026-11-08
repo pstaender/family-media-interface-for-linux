@@ -436,10 +436,12 @@ export function createAdminServer(options: AdminOptions) {
         GET: api(async () => {
           const reply = await sendCommand(socketPath, "status", 2000);
           // More than one media center: the one on the TV may not get the changes.
-          const extraInstances = (await strayMediaCenters(reply.ok ? reply.pid : undefined)).length;
+          const extraPids = await strayMediaCenters(reply.ok ? reply.pid : undefined);
+          const extraInstances = extraPids.length;
           if (reply.ok) {
             return json({
               extraInstances,
+              extraPids,
               running: true,
               configError: reply.config_error ?? null,
               locked: reply.locked === true,
@@ -451,7 +453,7 @@ export function createAdminServer(options: AdminOptions) {
               remote: reply.remote ?? null,
             });
           }
-          return json({ running: false, extraInstances, error: reply.error === NOT_RUNNING ? null : reply.error });
+          return json({ running: false, extraInstances, extraPids, error: reply.error === NOT_RUNNING ? null : reply.error });
         }),
       },
 

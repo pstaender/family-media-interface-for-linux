@@ -123,6 +123,36 @@ pub fn instance_lock_path() -> PathBuf {
         .join(format!("{APP}.lock"))
 }
 
+/// Were we started by a `familynovice-kiosk` loop whose session (cage) is gone? Such a loop
+/// survives the logout (its parent is then init or a `systemd` manager) and would start the
+/// media center into the next session a second time. `proc` is `/proc`.
+pub fn started_by_orphaned_kiosk(proc: &Path, pid: u32) -> bool {
+    let parent = |pid: &str| -> Option<(String, String)> {
+        let status = std::fs::read_to_string(proc.join(pid).join("status")).ok()?;
+        let field = |name: &str| {
+            status
+                .lines()
+                .find_map(|l| l.strip_prefix(name)?.strip_prefix(':'))
+                .map(|v| v.trim().to_string())
+        };
+        Some((field("Name")?, field("PPid")?))
+    };
+    let Some((_, loop_pid)) = parent(&pid.to_string()) else {
+        return false;
+    };
+    let Some((loop_name, session_pid)) = parent(&loop_pid) else {
+        return false;
+    };
+    // `Name` is cut to 15 characters: "familynovice-ki".
+    if !loop_name.starts_with("familynovice-ki") {
+        return false;
+    }
+    if session_pid == "1" {
+        return true;
+    }
+    matches!(parent(&session_pid), Some((name, _)) if name == "systemd")
+}
+
 /// Take the single-instance lock. `Ok(None)`: another media center of this user runs.
 /// The lock lasts as long as the returned file stays open (also released by `exec`, as
 /// files are opened close-on-exec, so a restart takes it again).
@@ -206,6 +236,39 @@ pub fn remove(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_an_orphaned_kiosk_loop() {
+        let proc = std::env::temp_dir().join(format!("familynovice-proc-{}", std::process::id()));
+        let add = |pid: u32, name: &str, ppid: u32| {
+            let dir = proc.join(pid.to_string());
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("status"),
+                format!("Name:\t{name}\nUmask:\t0002\nState:\tS\nPPid:\t{ppid}\n"),
+            )
+            .unwrap();
+        };
+        add(1669, "systemd", 1);
+        // Live session: cage → kiosk loop → media center.
+        add(21611, "cage", 21562);
+        add(21712, "familynovice-ki", 21611);
+        add(21714, "familynovice", 21712);
+        // Orphaned loop (its cage is gone): under the user's systemd, or init.
+        add(20196, "familynovice-ki", 1669);
+        add(21785, "familynovice", 20196);
+        add(30000, "familynovice-ki", 1);
+        add(30001, "familynovice", 30000);
+        // Development: started from a shell.
+        add(500, "zsh", 400);
+        add(501, "familynovice", 500);
+        assert!(!started_by_orphaned_kiosk(&proc, 21714));
+        assert!(started_by_orphaned_kiosk(&proc, 21785));
+        assert!(started_by_orphaned_kiosk(&proc, 30001));
+        assert!(!started_by_orphaned_kiosk(&proc, 501));
+        assert!(!started_by_orphaned_kiosk(&proc, 99999));
+        std::fs::remove_dir_all(&proc).unwrap();
+    }
 
     #[test]
     fn only_one_instance_gets_the_lock() {

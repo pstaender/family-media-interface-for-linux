@@ -35,6 +35,11 @@ fn main() -> eframe::Result {
     )
     .init();
 
+    // Started by a kiosk loop that outlived its session: don't show up in the next one.
+    if store::started_by_orphaned_kiosk(std::path::Path::new("/proc"), std::process::id()) {
+        log::error!("started by a familynovice-kiosk loop whose session has ended; exiting");
+        return Ok(());
+    }
     // One media center per user: a second one (e.g. started by a kiosk loop whose session
     // already ended) would cover the screen without getting the admin panel's changes.
     let _instance = match store::lock_instance(&store::instance_lock_path()) {

@@ -870,3 +870,13 @@ table.buttons th {
   color: var(--err-text);
   white-space: normal;
 }
+
+.banner-hint {
+  display: block;
+  margin-top: 6px;
+}
+
+.banner-hint code {
+  user-select: all;
+  overflow-wrap: anywhere;
+}
