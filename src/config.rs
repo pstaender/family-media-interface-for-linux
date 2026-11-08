@@ -52,10 +52,24 @@ pub struct GameSettings {
 }
 
 /// Brick Breaker (`src/bricks.rs`).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct BricksSettings {
     pub enabled: bool,
+    /// Paddles at the start of a game (1–9).
+    pub lives: u32,
+    /// Sound on at the start (can be switched in the game's menu).
+    pub sound: bool,
+}
+
+impl Default for BricksSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            lives: 5,
+            sound: false,
+        }
+    }
 }
 
 /// The built-in Ping Pong game (`src/pong.rs`).
@@ -570,6 +584,9 @@ fn validate(config: &Config) -> Result<(), String> {
     if !(3..=21).contains(&config.games.pong.points_to_win) {
         return Err("games.pong.points_to_win must be 3 to 21".into());
     }
+    if !(1..=9).contains(&config.games.bricks.lives) {
+        return Err("games.bricks.lives must be 1 to 9".into());
+    }
     if config.folders.len() > MAX_FOLDERS {
         return Err(format!("folders: at most {MAX_FOLDERS} folders"));
     }
@@ -822,6 +839,10 @@ mod tests {
         assert_eq!(c.games.pong.points_to_win, 7);
         let config = parse(include_str!("../docs/config.example.json")).unwrap();
         assert!(config.games.pong.enabled && config.games.bricks.enabled);
+        assert_eq!(config.games.bricks.lives, 3);
+        assert!(config.games.bricks.sound);
+        assert_eq!(c.games.bricks.lives, 5);
+        assert!(!c.games.bricks.sound);
         assert_eq!(config.games.pong.computer_level, PongLevel::Easy);
         assert_eq!(config.games.pong.points_to_win, 5);
         // The old place (`programs`) is read, moved to `games` and not written back.
@@ -938,7 +959,10 @@ mod tests {
             r#"{"version":1,"games":[]}"#,
             r#"{"version":1,"games":{"pong":[]}}"#,
             r#"{"version":1,"games":{"bricks":{"enabled":1}}}"#,
-            r#"{"version":1,"games":{"bricks":{"lives":5}}}"#,
+            r#"{"version":1,"games":{"bricks":{"lives":0}}}"#,
+            r#"{"version":1,"games":{"bricks":{"lives":10}}}"#,
+            r#"{"version":1,"games":{"bricks":{"sound":"on"}}}"#,
+            r#"{"version":1,"games":{"bricks":{"speed":2}}}"#,
             r#"{"version":1,"games":{"bricks":[]}}"#,
             r#"{"version":1,"programs":[]}"#,
             r#"{"version":1,"programs":{"pong":{"points_to_win":2}}}"#,

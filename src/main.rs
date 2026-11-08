@@ -21,6 +21,7 @@ mod recent;
 mod remote;
 mod resume;
 mod screensaver;
+mod sound;
 // Parts of it are only used by the browser window (web/, includes this file).
 #[allow(dead_code)]
 mod sites;

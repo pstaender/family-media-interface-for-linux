@@ -27,9 +27,9 @@ test("the screensaver settings", () => {
 
 test("the games settings, also from their old place", () => {
   const v = validateConfig(example);
-  expect(v.ok && v.config.games).toEqual({ pong: { enabled: true, computer_level: "easy", points_to_win: 5 }, bricks: { enabled: true } });
+  expect(v.ok && v.config.games).toEqual({ pong: { enabled: true, computer_level: "easy", points_to_win: 5 }, bricks: { enabled: true, lives: 3, sound: true } });
   const d = validateConfig({ version: 1 });
-  expect(d.ok && d.config.games).toEqual({ pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false } });
+  expect(d.ok && d.config.games).toEqual({ pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false } });
   const old = validateConfig({ version: 1, programs: { pong: { enabled: true, points_to_win: 9 } } });
   expect(old.ok && old.config.games.pong).toEqual({ enabled: true, computer_level: "normal", points_to_win: 9 });
   expect(old.ok && "programs" in old.config).toBe(false);
@@ -179,7 +179,10 @@ const BAD: unknown[] = [
   { version: 1, games: [] },
   { version: 1, games: { pong: [] } },
   { version: 1, games: { bricks: { enabled: 1 } } },
-  { version: 1, games: { bricks: { lives: 5 } } },
+  { version: 1, games: { bricks: { lives: 0 } } },
+  { version: 1, games: { bricks: { lives: 10 } } },
+  { version: 1, games: { bricks: { sound: "on" } } },
+  { version: 1, games: { bricks: { speed: 2 } } },
   { version: 1, games: { bricks: [] } },
   { version: 1, programs: [] },
   { version: 1, programs: { pong: { points_to_win: 2 } } },

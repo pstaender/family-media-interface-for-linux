@@ -102,6 +102,11 @@ pub fn aerial_dir() -> Option<PathBuf> {
     Some(dirs::cache_dir()?.join(APP).join("aerial"))
 }
 
+/// `$XDG_CACHE_HOME/curator/sounds`: the games' sound files (made by `sound.rs`).
+pub fn sounds_dir() -> Option<PathBuf> {
+    Some(dirs::cache_dir()?.join(APP).join("sounds"))
+}
+
 /// Socket for talking to the running mpv (`$XDG_RUNTIME_DIR`, falls back to the temp dir).
 pub fn mpv_socket_path() -> PathBuf {
     dirs::runtime_dir()

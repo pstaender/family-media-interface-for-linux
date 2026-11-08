@@ -117,7 +117,9 @@
       "points_to_win": 5
     },
     "bricks": {
-      "enabled": true
+      "enabled": true,
+      "lives": 3,
+      "sound": true
     }
   }
 }

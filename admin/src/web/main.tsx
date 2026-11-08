@@ -567,6 +567,30 @@ function GamesTab({ config, setConfig }: ConfigProps) {
             </small>
           </span>
         </label>
+        <label className="field inline" style={{ marginTop: 10 }}>
+          <span>Paddles (lives) at the start</span>
+          <input
+            type="number"
+            min={1}
+            max={9}
+            value={bricks.lives}
+            disabled={!bricks.enabled}
+            onChange={(e) => setBricks({ lives: Math.min(9, Math.max(1, Math.round(Number(e.target.value) || 5))) })}
+          />
+          <small className="hint">More are earned with points: one every 1000, up to 9.</small>
+        </label>
+        <label className="toggle">
+          <input
+            type="checkbox"
+            checked={bricks.sound}
+            disabled={!bricks.enabled}
+            onChange={(e) => setBricks({ sound: e.target.checked })}
+          />
+          <span>
+            Sound
+            <small>Short beeps for the ball, bricks and lost paddles. Can also be switched on the TV in the game's menu.</small>
+          </span>
+        </label>
       </section>
     </>
   );

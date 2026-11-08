@@ -2616,7 +2616,10 @@ impl App {
                         }
                         Some(GameTile::Bricks) => {
                             log::info!("starting Brick Breaker");
-                            self.screen = Screen::Bricks(Box::default());
+                            let b = &config.games.bricks;
+                            self.screen = Screen::Bricks(Box::new(crate::bricks::BricksView::new(
+                                b.lives, b.sound,
+                            )));
                         }
                         None => {}
                     }

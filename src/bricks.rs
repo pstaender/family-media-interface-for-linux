@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, Vec2};
 
+use crate::sound::Sound;
 use crate::tr;
 
 pub const W: f32 = 13.0;
@@ -51,8 +52,9 @@ const STAGE_PAUSE: f32 = 2.0;
 const SNAP: f32 = 0.15;
 /// Paddle hits without hitting a brick before the ball gets another angle.
 const LOOP_HITS: u32 = 6;
-const START_LIVES: u32 = 5;
-const MAX_LIVES: u32 = 9;
+/// Paddles at the start (setting `games.bricks.lives`, 1–9).
+pub const START_LIVES: u32 = 5;
+pub const MAX_LIVES: u32 = 9;
 /// Bricks that move down this close above the paddle disappear.
 const LOW_LIMIT: f32 = PADDLE_Y - 2.5;
 /// Moving stages: a step sideways every … seconds.
@@ -289,10 +291,13 @@ pub struct Game {
     paddle_dir: f32,
     since_turn: f32,
     hits_without_brick: u32,
+    /// Sounds since the last frame (played by the screen if sound is on).
+    pub sounds: Vec<Sound>,
 }
 
 impl Game {
-    pub fn new() -> Self {
+    /// A new game with this many paddles (1–9).
+    pub fn new(lives: u32) -> Self {
         let mut game = Self {
             stage_index: 0,
             kind: StageKind::Still,
@@ -309,13 +314,14 @@ impl Game {
             speed: 0,
             phase: Phase::Serve(SERVE_DELAY),
             score: 0,
-            lives: START_LIVES,
+            lives: lives.clamp(1, MAX_LIVES),
             next_extra: 1000,
             timer: 0.0,
             bonus_points: 0,
             paddle_dir: 0.0,
             since_turn: 1.0,
             hits_without_brick: 0,
+            sounds: Vec::new(),
         };
         game.start_stage(0);
         game
@@ -375,6 +381,9 @@ impl Game {
     fn add_points(&mut self, points: u32) {
         self.score += points;
         while self.score >= self.next_extra && self.next_extra <= 10_000 {
+            if self.lives < MAX_LIVES {
+                self.sounds.push(Sound::ExtraLife);
+            }
             self.lives = (self.lives + 1).min(MAX_LIVES);
             self.next_extra += 1000;
         }
@@ -469,13 +478,16 @@ impl Game {
         if x < BALL_R {
             self.ball[0] = BALL_R;
             self.dir[0] = 1.0;
+            self.sounds.push(Sound::Wall);
         } else if x > W - BALL_R {
             self.ball[0] = W - BALL_R;
             self.dir[0] = -1.0;
+            self.sounds.push(Sound::Wall);
         }
         if y < BALL_R {
             self.ball[1] = BALL_R;
             self.dir[1] = 1.0;
+            self.sounds.push(Sound::Wall);
             // From stage 5 on, the ceiling halves the paddle (not in bonus stages).
             if self.kind != StageKind::Bonus && self.number >= 5 {
                 self.small = true;
@@ -508,6 +520,10 @@ impl Game {
                 }
                 self.ball = before;
             }
+            self.sounds.push(match kind {
+                Brick::Light => Sound::Brick,
+                _ => Sound::HardBrick,
+            });
             if kind != Brick::Solid {
                 self.cells.remove(i);
                 self.add_points(kind.points());
@@ -522,6 +538,7 @@ impl Game {
                     if self.kind == StageKind::Bonus {
                         self.add_points(self.bonus_points);
                     }
+                    self.sounds.push(Sound::Cleared);
                     self.phase = Phase::Cleared(STAGE_PAUSE);
                     return false;
                 }
@@ -550,8 +567,10 @@ impl Game {
                 self.lives = self.lives.saturating_sub(1);
                 self.small = false;
                 if self.lives == 0 {
+                    self.sounds.push(Sound::GameOver);
                     self.phase = Phase::Over;
                 } else {
+                    self.sounds.push(Sound::Lost);
                     self.serve();
                 }
             }
@@ -561,6 +580,7 @@ impl Game {
     }
 
     fn bounce_off_paddle(&mut self) {
+        self.sounds.push(Sound::Paddle);
         let half = self.paddle_width() / 2.0;
         let offset = (self.ball[0] - self.paddle) / half;
         // The middle sends the ball up steeply, the ends flat.
@@ -602,7 +622,7 @@ impl Game {
 
 impl Default for Game {
     fn default() -> Self {
-        Self::new()
+        Self::new(START_LIVES)
     }
 }
 
@@ -631,12 +651,25 @@ pub enum BricksState {
 
 pub struct BricksView {
     pub state: BricksState,
+    /// Paddles per game (setting), and sound on / off (setting; switchable in the menus).
+    lives: u32,
+    pub sound: bool,
 }
 
-impl Default for BricksView {
-    fn default() -> Self {
+impl BricksView {
+    pub fn new(lives: u32, sound: bool) -> Self {
         Self {
             state: BricksState::Menu { selected: 0 },
+            lives,
+            sound,
+        }
+    }
+
+    fn sound_item(&self) -> &'static str {
+        if self.sound {
+            tr!("Sound: on")
+        } else {
+            tr!("Sound: off")
         }
     }
 }
@@ -665,7 +698,7 @@ impl BricksView {
         let state = std::mem::replace(&mut self.state, BricksState::Menu { selected: 0 });
         let (next, quit) = match state {
             BricksState::Menu { selected } => {
-                let items = [tr!("Play"), tr!("Back")];
+                let items = [tr!("Play"), self.sound_item(), tr!("Back")];
                 let (selected, chosen) = crate::pong::menu(
                     ui,
                     painter,
@@ -682,13 +715,22 @@ impl BricksView {
                 );
                 crate::pong::paint_hint(painter, screen, s, &hint);
                 match chosen {
-                    Some(0) => (BricksState::Playing(Game::new()), false),
+                    Some(0) => (BricksState::Playing(Game::new(self.lives)), false),
+                    Some(1) => {
+                        self.sound = !self.sound;
+                        (BricksState::Menu { selected }, false)
+                    }
                     Some(_) => (BricksState::Menu { selected }, true),
                     None => (BricksState::Menu { selected }, input.back),
                 }
             }
             BricksState::Playing(mut game) => {
                 game.step(dt, input.x, input.fast);
+                for sound in game.sounds.drain(..) {
+                    if self.sound {
+                        crate::sound::play(sound);
+                    }
+                }
                 paint_game(painter, screen, s, &game);
                 ui.ctx().request_repaint();
                 if game.phase == Phase::Over {
@@ -702,7 +744,7 @@ impl BricksView {
             BricksState::Paused { game, selected } => {
                 paint_game(painter, screen, s, &game);
                 crate::pong::dim(painter, screen);
-                let items = [tr!("Continue"), tr!("End the game")];
+                let items = [tr!("Continue"), self.sound_item(), tr!("End the game")];
                 let (selected, chosen) = crate::pong::menu(
                     ui,
                     painter,
@@ -715,6 +757,10 @@ impl BricksView {
                 );
                 match chosen {
                     Some(0) => (BricksState::Playing(game), false),
+                    Some(1) => {
+                        self.sound = !self.sound;
+                        (BricksState::Paused { game, selected }, false)
+                    }
                     Some(_) => (BricksState::Menu { selected: 0 }, false),
                     None if input.back || input.pause => (BricksState::Playing(game), false),
                     None => (BricksState::Paused { game, selected }, false),
@@ -736,7 +782,7 @@ impl BricksView {
                     &menu_input,
                 );
                 match chosen {
-                    Some(0) => (BricksState::Playing(Game::new()), false),
+                    Some(0) => (BricksState::Playing(Game::new(self.lives)), false),
                     Some(_) => (BricksState::Menu { selected: 0 }, false),
                     None if input.back => (BricksState::Menu { selected: 0 }, false),
                     None => (BricksState::Over { game, selected }, false),
@@ -873,11 +919,18 @@ fn paint_game(painter: &egui::Painter, screen: Rect, s: f32, game: &Game) {
         32.0,
         crate::ui::TEXT,
     );
+    label(
+        right + Vec2::new(0.0, 190.0 * s),
+        Align2::LEFT_TOP,
+        tr!("Paddles: {n}", n = game.lives),
+        24.0,
+        crate::ui::TEXT_DIM,
+    );
     for i in 0..game.lives {
         let p = right
             + Vec2::new(
                 (i % 5) as f32 * 46.0 * s,
-                210.0 * s + (i / 5) as f32 * 26.0 * s,
+                228.0 * s + (i / 5) as f32 * 26.0 * s,
             );
         painter.rect_filled(
             Rect::from_min_size(p, Vec2::new(38.0 * s, 10.0 * s)),
@@ -907,7 +960,7 @@ mod tests {
 
     /// A game in play with the ball at `ball` going in `dir`, and only the given bricks.
     fn playing(stage_index: u32, cells: Vec<Cell>, ball: [f32; 2], dir: [f32; 2]) -> Game {
-        let mut g = Game::new();
+        let mut g = Game::new(START_LIVES);
         g.start_stage(stage_index);
         g.cells = cells;
         g.phase = Phase::Play;
@@ -948,7 +1001,7 @@ mod tests {
 
     #[test]
     fn the_ball_only_flies_at_15_30_or_45_degrees() {
-        let mut g = Game::new();
+        let mut g = Game::new(START_LIVES);
         let mut x = 1.0;
         for i in 0..20_000 {
             if i % 300 == 0 {
@@ -1047,8 +1100,25 @@ mod tests {
     }
 
     #[test]
+    fn starting_paddles_and_sounds() {
+        assert_eq!(Game::new(3).lives, 3);
+        assert_eq!(Game::new(0).lives, 1);
+        assert_eq!(Game::new(20).lives, MAX_LIVES);
+        let mut g = playing(
+            0,
+            vec![cell(5, 0, Brick::Light), cell(0, 9, Brick::Light)],
+            [4.6, 3.0],
+            [1.0, -1.0],
+        );
+        for _ in 0..60 {
+            g.step(1.0 / 60.0, 0.0, false);
+        }
+        assert!(g.sounds.contains(&Sound::Brick));
+    }
+
+    #[test]
     fn extra_paddles_every_1000_points_up_to_9() {
-        let mut g = Game::new();
+        let mut g = Game::new(START_LIVES);
         g.add_points(999);
         assert_eq!(g.lives, 5);
         g.add_points(1);

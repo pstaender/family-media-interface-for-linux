@@ -388,6 +388,9 @@ const DE: &[(&str, &str)] = &[
     ("Time: {secs}", "Zeit: {secs}"),
     ("Points", "Punkte"),
     ("Best", "Bestwert"),
+    ("Sound: on", "Ton: an"),
+    ("Sound: off", "Ton: aus"),
+    ("Paddles: {n}", "Schläger: {n}"),
     ("Exit", "Beenden"),
     ("Shut down the computer", "Computer ausschalten"),
     (

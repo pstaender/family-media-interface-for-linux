@@ -103,7 +103,7 @@ export type PongLevel = (typeof PONG_LEVELS)[number];
 /** The "Games" row (src/config.rs `GameSettings`): built-in games. */
 export interface GameSettings {
   pong: { enabled: boolean; computer_level: PongLevel; points_to_win: number };
-  bricks: { enabled: boolean };
+  bricks: { enabled: boolean; lives: number; sound: boolean };
 }
 
 function validateGames(input: unknown, where: string): GameSettings | string {
@@ -135,11 +135,17 @@ function validateGames(input: unknown, where: string): GameSettings | string {
   if (input.bricks !== undefined) {
     const b = input.bricks;
     if (!isObject(b)) return `${where}.bricks: must be an object`;
-    const extraBricks = unknownKey(b, ["enabled"], `${where}.bricks`);
+    const extraBricks = unknownKey(b, ["enabled", "lives", "sound"], `${where}.bricks`);
     if (extraBricks) return extraBricks;
-    if (b.enabled !== undefined) {
-      if (typeof b.enabled !== "boolean") return `${where}.bricks.enabled: must be true or false`;
-      games.bricks.enabled = b.enabled;
+    for (const key of ["enabled", "sound"] as const) {
+      if (b[key] === undefined) continue;
+      if (typeof b[key] !== "boolean") return `${where}.bricks.${key}: must be true or false`;
+      games.bricks[key] = b[key];
+    }
+    if (b.lives !== undefined) {
+      const n = b.lives;
+      if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > 9) return `${where}.bricks.lives must be 1 to 9`;
+      games.bricks.lives = n;
     }
   }
   return games;
@@ -170,7 +176,7 @@ export function defaultConfig(): Config {
     folders: [],
     websites: [],
     screensaver: { mode: "title", idle_minutes: 10, aerial_quality: "1080p_h264", aerial_videos: [] },
-    games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false } },
+    games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false } },
   };
 }
 
