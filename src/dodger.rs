@@ -261,7 +261,9 @@ pub fn star(layer: usize, i: u32, scroll: f32) -> (f32, f32) {
 
 /// Half the width of a pixel-art ball of radius `r` in row `dy`.
 pub fn row_half(r: i32, dy: i32) -> i32 {
-    (((r * r - dy * dy).max(0) as f32).sqrt() + 0.5) as i32
+    // A little over the radius: the top and bottom rows are a few pixels wide, not a nub.
+    let outer = r as f32 + 0.4;
+    (outer * outer - (dy * dy) as f32).max(0.0).sqrt() as i32
 }
 
 // --------------------------------------------------------------------------------- screen
@@ -512,6 +514,71 @@ impl DodgerView {
     }
 }
 
+/// How one pixel of a lit ball looks.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BallPixel {
+    pub tone: Tone,
+    /// Where on the ball's own surface: -1 … 1 from pole to pole; turns as the ball rolls.
+    pub latitude: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    /// The round white reflection.
+    Reflection,
+    Bright,
+    Middle,
+    Dark,
+}
+
+/// The light comes from the top right, in front of the ball (x right, y down, z to the viewer).
+const LIGHT: [f32; 3] = [0.48, -0.60, 0.64];
+/// The reflection: its center and radius, in ball radii.
+const REFLECTION: [f32; 3] = [0.38, -0.44, 0.24];
+
+/// Pixel (`dx`, `dy`) of a ball of radius `r` that has rolled by `roll` radians (`None`:
+/// outside the ball). A sphere lit in a few flat tones, as in pixel art.
+pub fn ball_pixel(r: i32, dx: i32, dy: i32, roll: f32) -> Option<BallPixel> {
+    if dy.abs() > r || dx.abs() > row_half(r, dy) {
+        return None;
+    }
+    let size = r as f32 + 0.5;
+    let (nx, ny) = (dx as f32 / size, dy as f32 / size);
+    let nz = (1.0 - nx * nx - ny * ny).max(0.0).sqrt();
+    let reflected = (nx - REFLECTION[0]).powi(2) + (ny - REFLECTION[1]).powi(2);
+    let light = nx * LIGHT[0] + ny * LIGHT[1] + nz * LIGHT[2];
+    let tone = if reflected < REFLECTION[2] * REFLECTION[2] {
+        Tone::Reflection
+    } else if light > 0.72 {
+        Tone::Bright
+    } else if light > 0.18 {
+        Tone::Middle
+    } else {
+        Tone::Dark
+    };
+    Some(BallPixel {
+        tone,
+        // The surface turns around the x axis: its front moves downwards as `roll` grows.
+        latitude: ny * roll.cos() - nz * roll.sin(),
+    })
+}
+
+/// A color in a tone, for surfaces with only one color per stripe.
+fn toned(color: Color32, tone: Tone) -> Color32 {
+    let scale = |c: u8, f: f32| (f32::from(c) * f) as u8;
+    let f = match tone {
+        Tone::Reflection => return Color32::WHITE,
+        Tone::Bright => 1.0,
+        Tone::Middle => 0.78,
+        Tone::Dark => 0.48,
+    };
+    Color32::from_rgb(
+        scale(color.r(), f),
+        scale(color.g(), f),
+        scale(color.b(), f),
+    )
+}
+
 /// Draws in the game's big pixels, exactly on the screen's pixel grid (no seams).
 struct Canvas<'a> {
     painter: &'a egui::Painter,
@@ -539,19 +606,31 @@ impl Canvas<'_> {
             .rect_filled(Rect::from_min_max(min, max), 0.0, color);
     }
 
-    /// A round ball of pixel rows; `color` picks each row's color. The center moves in
-    /// screen pixels (smooth), the rows stay whole big pixels.
-    fn ball(&self, cx: f32, cy: f32, r: i32, color: impl Fn(i32) -> Color32) {
+    /// A lit ball of big pixels, rolled by `roll`; `color` picks each pixel's color. The
+    /// center moves in screen pixels (smooth), the pixels stay whole.
+    fn ball(&self, cx: f32, cy: f32, r: i32, roll: f32, color: impl Fn(BallPixel) -> Color32) {
         let center = Pos2::new(
             self.snap(self.origin.x + cx * self.unit),
             self.snap(self.origin.y + cy * self.unit),
         );
         for dy in -r..=r {
             let half = row_half(r, dy);
-            let min = center + Vec2::new(-(half as f32 + 0.5), dy as f32 - 0.5) * self.unit;
-            let size = Vec2::new((2 * half + 1) as f32, 1.0) * self.unit;
-            self.painter
-                .rect_filled(Rect::from_min_size(min, size), 0.0, color(dy));
+            // Pixels of the same color in a row become one rectangle.
+            let mut start = -half;
+            let mut current = ball_pixel(r, -half, dy, roll).map(&color);
+            for dx in -half + 1..=half + 1 {
+                let next = ball_pixel(r, dx, dy, roll).map(&color);
+                if next != current {
+                    if let Some(c) = current {
+                        let min =
+                            center + Vec2::new(start as f32 - 0.5, dy as f32 - 0.5) * self.unit;
+                        let size = Vec2::new((dx - start) as f32, 1.0) * self.unit;
+                        self.painter
+                            .rect_filled(Rect::from_min_size(min, size), 0.0, c);
+                    }
+                    (start, current) = (dx, next);
+                }
+            }
         }
     }
 
@@ -688,15 +767,16 @@ fn paint_game(painter: &egui::Painter, screen: Rect, ppp: f32, game: &Game) {
     }
 
     for ball in &game.balls {
-        let [bright, middle, dark] = BALLS[ball.color];
-        let r = BALL_R as i32;
-        canvas.ball(ball.x, ball.y, r, |dy| {
-            if dy < -r / 3 {
-                bright
-            } else if dy < r / 2 {
-                middle
-            } else {
-                dark
+        // Rolling as it falls, with a band in another color around it.
+        let body = BALLS[ball.color];
+        let band = BALLS[(ball.color + 3) % BALLS.len()];
+        canvas.ball(ball.x, ball.y, BALL_R as i32, ball.y / BALL_R, |p| {
+            let colors = if p.latitude.abs() < 0.3 { band } else { body };
+            match p.tone {
+                Tone::Reflection => Color32::WHITE,
+                Tone::Bright => colors[0],
+                Tone::Middle => colors[1],
+                Tone::Dark => colors[2],
             }
         });
     }
@@ -704,10 +784,17 @@ fn paint_game(painter: &egui::Painter, screen: Rect, ppp: f32, game: &Game) {
     let hit = matches!(game.phase, Phase::Crash(t) if (t * 10.0) as i32 % 2 == 0);
     let visible = !matches!(game.phase, Phase::Over);
     if visible && !hit {
-        let roll = (game.scroll * 12.0) as i32;
-        canvas.ball(game.player, PLAYER_Y, PLAYER_R as i32, |dy| {
-            STRIPES[((dy + 20 + roll) / 3).rem_euclid(STRIPES.len() as i32) as usize]
-        });
+        canvas.ball(
+            game.player,
+            PLAYER_Y,
+            PLAYER_R as i32,
+            game.scroll * 6.0,
+            |p| {
+                let along = p.latitude.clamp(-1.0, 1.0).asin() / std::f32::consts::PI + 0.5;
+                let stripe = ((along * STRIPES.len() as f32) as usize).min(STRIPES.len() - 1);
+                toned(STRIPES[stripe], p.tone)
+            },
+        );
     }
 
     paint_numbers(&Canvas { painter, ..canvas }, game);
@@ -890,9 +977,58 @@ mod tests {
     }
 
     #[test]
+    fn balls_are_lit_from_the_top_right() {
+        let r = BALL_R as i32;
+        let tone = |dx, dy| ball_pixel(r, dx, dy, 0.0).unwrap().tone;
+        // A round white reflection, up and to the right of the middle.
+        let at = |v: f32| (v * (r as f32 + 0.5)).round() as i32;
+        assert_eq!(tone(at(REFLECTION[0]), at(REFLECTION[1])), Tone::Reflection);
+        assert_ne!(
+            tone(-at(REFLECTION[0]), at(REFLECTION[1])),
+            Tone::Reflection
+        );
+        assert_eq!(tone(-5, 6), Tone::Dark, "the side away from the light");
+        assert_eq!(tone(0, 0), Tone::Middle);
+        let mut white = 0;
+        for dy in -r..=r {
+            for dx in -r..=r {
+                white += i32::from(
+                    ball_pixel(r, dx, dy, 0.0).is_some_and(|p| p.tone == Tone::Reflection),
+                );
+            }
+        }
+        assert!((4..=20).contains(&white), "{white} white pixels");
+        assert_eq!(ball_pixel(r, r, r, 0.0), None, "outside");
+        assert!(ball_pixel(r, 0, -r, 0.0).is_some());
+    }
+
+    #[test]
+    fn the_surface_rolls_downwards_and_the_light_stays() {
+        let r = BALL_R as i32;
+        // The band (latitude 0) is at the middle at first, lower after a little roll.
+        let row_of_band = |roll: f32| {
+            (-r..=r)
+                .min_by(|a, b| {
+                    let lat = |y| ball_pixel(r, 0, y, roll).unwrap().latitude.abs();
+                    lat(*a).total_cmp(&lat(*b))
+                })
+                .unwrap()
+        };
+        assert_eq!(row_of_band(0.0), 0);
+        assert!(row_of_band(0.5) > 0);
+        assert!(row_of_band(1.0) > row_of_band(0.5));
+        // The light doesn't turn with the ball.
+        assert_eq!(
+            ball_pixel(r, 3, -4, 0.0).unwrap().tone,
+            ball_pixel(r, 3, -4, 2.0).unwrap().tone
+        );
+    }
+
+    #[test]
     fn pixel_balls_are_round() {
         assert_eq!(row_half(10, 0), 10);
-        assert_eq!(row_half(10, 10), 0, "the top row is one pixel wide");
+        assert_eq!(row_half(10, 10), 2, "no one-pixel nub at the top");
+        assert_eq!(row_half(9, 9), 2);
         assert_eq!(row_half(10, -6), row_half(10, 6));
         assert_eq!(row_half(3, 9), 0);
     }

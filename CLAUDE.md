@@ -235,8 +235,10 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   in another place and color than the one before; every 3rd aimed at the player); +1 level
   every 10 balls passed (1–99, fall speed 90 + 18 per level up to 9, then + 3 per level); one hit ends it. Beside the
   field, without labels: balls passed on the left, `m:ss.t` top right, the level big at the bottom right. High score list by
-  balls passed with 3-letter names (`Scores::name_entry_of`); sound off by default
-  (`games.dodger.sound`, switchable in the game's menus); music likewise
+  balls passed with 3-letter names (`Scores::name_entry_of`); balls are lit spheres of big
+  pixels (`ball_pixel`: light from the top right, round white reflection, a band that rolls
+  as they fall); sound off by default (`games.dodger.sound`, switchable in the game's
+  menus; only level up and game over); music likewise, independent of the sound
   (`games.dodger.music`, `src/music.rs`: our own tunes in `assets/music/*.mid`, built into
   the program; a small MIDI reader and chip-style synth make WAV files once in
   `$XDG_CACHE_HOME/curator/music/`, because Linux has no MIDI player without a synthesizer
