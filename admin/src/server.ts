@@ -36,10 +36,13 @@ console.log("familynovice admin:");
 for (const url of reachableUrls(host, server.port!)) console.log(`  ${url}`);
 console.log(`config directory: ${configDir}`);
 
-// Logos still missing (e.g. after an update), in the background.
+// Logos still missing (e.g. after an update) and screensaver videos not downloaded yet, in
+// the background.
 readJson(join(configDir, "config.json"))
   .then((stored) => {
     const v = stored === undefined ? null : validateConfig(stored);
-    if (v?.ok) return refreshLogos(defaultLogoDir(), v.config.websites);
+    if (!v?.ok) return;
+    server.aerial.sync(v.config.screensaver);
+    return refreshLogos(defaultLogoDir(), v.config.websites);
   })
   .catch((e) => console.warn(`logos: ${(e as Error).message}`));

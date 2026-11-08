@@ -28,6 +28,7 @@ use crate::tr;
 use crate::usage::SharedTracker;
 use crate::volume::{self, Volume, VolumeCommand};
 use crate::{cover, resume, sites, store};
+use crate::{inhibit, screensaver};
 
 /// How long the remote's home button must be held to go to the home screen.
 const HOME_HOLD: Duration = Duration::from_secs(3);
@@ -414,6 +415,14 @@ fn volume_text(shown: volume::Shown) -> String {
     }
 }
 
+/// The running screensaver (see `screensaver`).
+enum Saver {
+    /// The moving title, painted by us.
+    Title { started: Instant },
+    /// mpv with the aerial videos, in front of our window.
+    Aerial { child: Child, started: Instant },
+}
+
 /// What the Blu-ray tile shows.
 struct BlurayTile {
     available: bool,
@@ -467,6 +476,8 @@ pub struct App {
     drives_rx: Receiver<Vec<DriveReport>>,
     drives: Vec<DriveReport>,
     scan_tx: Sender<ScanEvent>,
+    /// Cancel flags of running disc scans (by disc key).
+    scan_cancel: HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>,
     scan_rx: Receiver<ScanEvent>,
     scans: HashMap<String, ScanState>,
     eject_tx: Sender<Result<(), String>>,
@@ -512,6 +523,12 @@ pub struct App {
     volume_seen: Option<Instant>,
     /// A desktop handles the standard volume keys (not in the kiosk session).
     desktop_volume: bool,
+    /// The screensaver, while it runs, and the last input (any key, click, pointer move,
+    /// remote button) it waits for.
+    saver: Option<Saver>,
+    last_activity: Instant,
+    /// Keeps the computer from blanking the screen while we have our own screensaver.
+    inhibitor: inhibit::Inhibitor,
 }
 
 impl App {
@@ -556,6 +573,7 @@ impl App {
             drives_rx,
             drives: Vec::new(),
             scan_tx,
+            scan_cancel: HashMap::new(),
             scan_rx,
             scans: HashMap::new(),
             eject_tx,
@@ -587,6 +605,9 @@ impl App {
             volume,
             volume_seen: None,
             desktop_volume,
+            saver: None,
+            last_activity: Instant::now(),
+            inhibitor: inhibit::Inhibitor::spawn(),
         }
     }
 
@@ -822,6 +843,123 @@ impl App {
         ctx.request_repaint_after(Duration::from_millis(100));
     }
 
+    /// Start, run and end the screensaver. True while it runs (or this frame's input ended
+    /// it): then nothing else handles input or paints.
+    fn screensaver(
+        &mut self,
+        painter: &egui::Painter,
+        screen_rect: Rect,
+        s: f32,
+        activity: bool,
+    ) -> bool {
+        let (config, _) = self.config();
+        let settings = &config.screensaver;
+        self.inhibitor
+            .set(settings.mode != crate::config::ScreensaverMode::Off);
+        // mpv ended by itself: a key it got, or it failed (then the title for this round).
+        if let Some(Saver::Aerial { child, started }) = &mut self.saver
+            && let Ok(Some(status)) = child.try_wait()
+        {
+            let failed = !status.success() && started.elapsed() < Duration::from_secs(5);
+            if failed {
+                log::warn!("screensaver: mpv failed ({status}); showing the title instead");
+                self.saver = Some(Saver::Title {
+                    started: Instant::now(),
+                });
+            } else {
+                self.saver = None;
+                self.last_activity = Instant::now();
+                return true;
+            }
+        }
+        // Never over a player, website or the remote setup; only if turned on.
+        let blocked = settings.mode == crate::config::ScreensaverMode::Off
+            || matches!(self.screen, Screen::Playing { .. } | Screen::Calibrate(_));
+        if activity || blocked {
+            self.last_activity = Instant::now();
+            if self.saver.is_some() {
+                self.stop_screensaver();
+                return true; // the waking input does nothing else
+            }
+            return false;
+        }
+        if self.saver.is_none() {
+            let idle = self.last_activity.elapsed();
+            if !screensaver::due(settings, idle) {
+                let wait =
+                    Duration::from_secs(u64::from(settings.idle_minutes) * 60).saturating_sub(idle);
+                self.ctx
+                    .request_repaint_after(wait + Duration::from_millis(50));
+                return false;
+            }
+            self.saver = Some(self.start_screensaver(settings));
+        }
+        match &self.saver {
+            Some(Saver::Title { started }) => {
+                let t = started.elapsed().as_secs_f64();
+                let [r, g, b] = screensaver::background(t);
+                painter.rect_filled(screen_rect, 0.0, Color32::from_rgb(r, g, b));
+                let title = if config.home.title.is_empty() {
+                    "familynovice".to_string()
+                } else {
+                    config.home.title.clone()
+                };
+                let galley = painter.layout_no_wrap(
+                    title,
+                    FontId::proportional(84.0 * s),
+                    TEXT.gamma_multiply(0.55),
+                );
+                let size = galley.size();
+                let [x, y] = screensaver::title_position(
+                    t as f32,
+                    [screen_rect.width(), screen_rect.height()],
+                    [size.x, size.y],
+                );
+                painter.galley(screen_rect.min + Vec2::new(x, y), galley, TEXT);
+                self.ctx.request_repaint_after(Duration::from_millis(33));
+            }
+            Some(Saver::Aerial { .. }) => {
+                // mpv is in front; our window stays dark behind it.
+                painter.rect_filled(screen_rect, 0.0, Color32::BLACK);
+                self.ctx.request_repaint_after(Duration::from_millis(500));
+            }
+            None => {}
+        }
+        true
+    }
+
+    fn start_screensaver(&self, settings: &crate::config::ScreensaverSettings) -> Saver {
+        let started = Instant::now();
+        if settings.mode == crate::config::ScreensaverMode::Aerial {
+            let files = store::aerial_dir()
+                .map(|dir| screensaver::aerial_files(&dir, settings))
+                .unwrap_or_default();
+            if files.is_empty() {
+                log::info!("screensaver: no aerial video downloaded yet; showing the title");
+            } else if let Some(mut cmd) =
+                player::screensaver_command(&files, store::prepare_player_cache().as_deref())
+            {
+                match cmd.spawn() {
+                    Ok(child) => {
+                        log::info!("screensaver: {} aerial videos", files.len());
+                        return Saver::Aerial { child, started };
+                    }
+                    Err(e) => log::warn!("screensaver: could not start mpv: {e}"),
+                }
+            }
+        }
+        log::info!("screensaver: title");
+        Saver::Title { started }
+    }
+
+    fn stop_screensaver(&mut self) {
+        if let Some(Saver::Aerial { mut child, .. }) = self.saver.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        log::info!("screensaver: ended");
+    }
+
     /// The remote's volume buttons change the system volume (`volume`): from the window
     /// while it's in front, from the device while one of our players or websites is (they
     /// don't change the system volume themselves). Not during the calibration.
@@ -978,6 +1116,43 @@ impl App {
     fn poll_background(&mut self) {
         while let Ok(drives) = self.drives_rx.try_recv() {
             self.drives = drives;
+            // The disc was taken out (or the tray opened) while it plays: the player would
+            // hang on read errors and cover the screen, so stop it.
+            let disc_in = self
+                .drives
+                .iter()
+                .any(|r| matches!(&r.state, DriveState::Loaded(d) if d.kind == MediaKind::BluRay));
+            // Scans of discs that aren't in the drive any more: end them (makemkvcon would
+            // hang and keep the drive busy) and forget them, so the disc is read again
+            // when it comes back. Finished scans stay (they are cached anyway).
+            let loaded: Vec<String> = self
+                .drives
+                .iter()
+                .filter_map(|r| match &r.state {
+                    DriveState::Loaded(d) => Some(d.key(&r.device)),
+                    _ => None,
+                })
+                .collect();
+            self.scans.retain(|key, state| {
+                let keep = matches!(state, ScanState::Done(_)) || loaded.contains(key);
+                if !keep && let Some(cancel) = self.scan_cancel.remove(key) {
+                    log::info!("disc {key} was taken out: stopping its scan");
+                    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                keep
+            });
+            if !disc_in
+                && let Screen::Playing {
+                    child,
+                    kind: PlayKind::Disc,
+                    stopping: stopping @ None,
+                    ..
+                } = &mut self.screen
+            {
+                log::info!("the disc is gone: stopping the player");
+                stop_player(child.id());
+                *stopping = Some(Instant::now());
+            }
         }
         while let Ok(event) = self.scan_rx.try_recv() {
             match event {
@@ -993,12 +1168,19 @@ impl App {
                         *progress = Some(new);
                     }
                 }
+                // Results of scans that were forgotten (disc taken out) are dropped.
                 ScanEvent::Done(key, Ok(info)) => {
-                    self.scans.insert(key, ScanState::Done(info));
+                    self.scan_cancel.remove(&key);
+                    if let Some(state) = self.scans.get_mut(&key) {
+                        *state = ScanState::Done(info);
+                    }
                 }
                 ScanEvent::Done(key, Err(e)) => {
-                    log::warn!("disc scan failed: {e}");
-                    self.scans.insert(key, ScanState::Failed);
+                    log::warn!("disc scan of {key} failed: {e}");
+                    self.scan_cancel.remove(&key);
+                    if let Some(state) = self.scans.get_mut(&key) {
+                        *state = ScanState::Failed;
+                    }
                 }
             }
         }
@@ -1084,13 +1266,17 @@ impl App {
                         continue;
                     }
                     self.scans.insert(key.clone(), ScanState::running());
+                    player::stop_leftover_makemkv_servers();
+                    log::info!("reading disc {key} with makemkvcon");
+                    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    self.scan_cancel.insert(key.clone(), cancel.clone());
                     let (tx, device, ctx) = (
                         self.scan_tx.clone(),
                         report.device.clone(),
                         self.ctx.clone(),
                     );
                     std::thread::spawn(move || {
-                        let result = makemkv::scan(&device, |p| {
+                        let result = makemkv::scan(&device, &cancel, |p| {
                             let _ = tx.send(ScanEvent::Progress(key.clone(), p));
                             ctx.request_repaint();
                         });
@@ -1167,6 +1353,16 @@ impl App {
             }
         }
         if let Some(screen) = next {
+            // A disc player is gone: its makemkvcon helper may still hold the drive.
+            if matches!(
+                self.screen,
+                Screen::Playing {
+                    kind: PlayKind::Disc,
+                    ..
+                }
+            ) {
+                player::stop_leftover_makemkv_servers();
+            }
             self.screen = screen;
         }
         self.track_usage_and_limits();
@@ -1197,6 +1393,7 @@ impl App {
         let dt = self.last_tick.elapsed().as_secs_f64().min(5.0);
         self.last_tick = Instant::now();
         let active = self.lock.is_none()
+            && (self.saver.is_none() || matches!(self.screen, Screen::Music(_)))
             && (!matches!(self.screen, Screen::Home)
                 || self.last_input.elapsed() < Duration::from_secs(60));
 
@@ -1236,6 +1433,33 @@ impl App {
         }
         // Keep counting and checking even when nothing else repaints.
         self.ctx.request_repaint_after(Duration::from_secs(1));
+    }
+
+    /// Restart (asked by the admin panel): stop everything that plays, save the usage, then
+    /// replace this process with the installed program (`exec`, so a kiosk session keeps
+    /// running; the screen is dark for a moment). Returns only if that failed.
+    fn restart(&mut self) {
+        log::info!("restarting (asked by the admin panel)");
+        self.stop_screensaver();
+        match std::mem::replace(&mut self.screen, Screen::Home) {
+            Screen::Playing { mut child, .. } => {
+                stop_player(child.id());
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while Instant::now() < deadline && matches!(child.try_wait(), Ok(None)) {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            Screen::Music(mut view) => view.player.stop(),
+            _ => {}
+        }
+        self.tracker
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .save_now();
+        let error = exec_self();
+        log::error!("restart failed: {error}");
     }
 
     /// Time is up: stop players, music and websites, close viewers.
@@ -1382,7 +1606,8 @@ impl App {
     /// is always visible in front of it (window managers may open it behind our fullscreen
     /// window). Afterwards: normal level and keyboard focus back to us.
     fn keep_player_in_front(&mut self) {
-        let playing = matches!(self.screen, Screen::Playing { .. });
+        let playing = matches!(self.screen, Screen::Playing { .. })
+            || matches!(self.saver, Some(Saver::Aerial { .. }));
         if playing == self.window_below_player {
             return;
         }
@@ -1706,12 +1931,11 @@ impl eframe::App for App {
                 }
             }
         }
-        if self
-            .inputs
-            .requests
-            .try_iter()
-            .any(|r| r == UiRequest::CalibrateRemote)
-        {
+        let requests: Vec<UiRequest> = self.inputs.requests.try_iter().collect();
+        if requests.contains(&UiRequest::Restart) {
+            self.restart();
+        }
+        if requests.contains(&UiRequest::CalibrateRemote) {
             self.calibrate_requested = true;
             self.go_home();
         }
@@ -1743,6 +1967,25 @@ impl eframe::App for App {
                     keys.apply(action);
                 }
             }
+        }
+        // Any input (also a remote button only the device reports) ends the screensaver and
+        // does nothing else.
+        let activity = !desktop_media.is_empty()
+            || remote_events.iter().any(|e| e.value == 1)
+            || ctx.input(|i| {
+                i.events.iter().any(|e| {
+                    matches!(
+                        e,
+                        egui::Event::Key { pressed: true, .. }
+                            | egui::Event::PointerButton { pressed: true, .. }
+                            | egui::Event::PointerMoved(_)
+                            | egui::Event::MouseWheel { .. }
+                            | egui::Event::Touch { .. }
+                    )
+                })
+            });
+        if self.screensaver(&painter, screen_rect, s, activity) {
+            return;
         }
         self.volume_keys(&ctx, &keys, &remote_events);
         self.paint_volume(ui, screen_rect, s);
@@ -2072,6 +2315,7 @@ impl App {
                             if let Some(device) = tile.device.clone() {
                                 let (tx, ctx) = (self.eject_tx.clone(), ctx.clone());
                                 std::thread::spawn(move || {
+                                    player::stop_leftover_makemkv_servers();
                                     let _ = tx.send(disc::eject(&device));
                                     ctx.request_repaint();
                                 });
@@ -2901,6 +3145,24 @@ fn paint_back_button(painter: &egui::Painter, rect: Rect, hovered: bool, s: f32)
 
 /// Ask a player to quit (SIGTERM): mpv/VLC exit cleanly, so mpv still reports its last
 /// position to the resume monitor. `poll_background` kills it if it doesn't exit in time.
+/// Replace this process with the program at our path, same arguments. After an update the
+/// running file is gone (`… (deleted)`), so the new one at the same path starts.
+fn exec_self() -> std::io::Error {
+    use std::os::unix::process::CommandExt;
+    let exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(e) => return e,
+    };
+    let exe = exe
+        .to_str()
+        .and_then(|s| s.strip_suffix(" (deleted)"))
+        .map(PathBuf::from)
+        .unwrap_or(exe);
+    std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .exec()
+}
+
 fn stop_player(pid: u32) {
     log::info!("stopping player (pid {pid})");
     if let Ok(pid) = libc::pid_t::try_from(pid) {

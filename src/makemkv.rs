@@ -198,9 +198,24 @@ fn apply_progress_line(line: &str, current: &mut Option<ScanProgress>) -> bool {
 /// Run `makemkvcon` on a drive. This takes a while (about 1–2 minutes for a Blu-ray with
 /// BD+), so call it from a background thread. `on_progress` is called whenever the
 /// progress changes.
-pub fn scan(device: &Path, mut on_progress: impl FnMut(ScanProgress)) -> Result<DiscInfo, String> {
-    use std::io::{BufRead, BufReader};
+/// A scan that prints nothing for this long hangs (MakeMKV is quiet for a minute or two
+/// while decrypting, never this long).
+const SCAN_STALL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// No scan takes longer than this.
+const SCAN_MAX: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+
+/// Read the disc's titles with `makemkvcon info`. Ends makemkvcon (and returns an error)
+/// when `cancel` is set (the disc was taken out), after `SCAN_STALL` without output, or
+/// after `SCAN_MAX`.
+pub fn scan(
+    device: &Path,
+    cancel: &std::sync::atomic::AtomicBool,
+    mut on_progress: impl FnMut(ScanProgress),
+) -> Result<DiscInfo, String> {
     use std::process::Stdio;
+    use std::sync::atomic::Ordering;
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
 
     let mut child = Command::new("makemkvcon")
         .args(["-r", "--cache=1", "--progress=-same", "info"])
@@ -221,9 +236,67 @@ pub fn scan(device: &Path, mut on_progress: impl FnMut(ScanProgress)) -> Result<
         .stdout
         .take()
         .expect("stdout is piped, so it is always present");
+    // Watchdog: kills makemkvcon, which ends the output below. `state` = (finished, last
+    // output); the lock makes sure the pid is never killed after it was reaped.
+    let started = Instant::now();
+    let state = Arc::new(Mutex::new((false, Instant::now())));
+    let pid = child.id();
+    let killed: Arc<Mutex<Option<String>>> = Arc::default();
+    std::thread::scope(|scope| {
+        let (state_w, killed_w) = (state.clone(), killed.clone());
+        scope.spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                let guard = state_w.lock().unwrap_or_else(|p| p.into_inner());
+                if guard.0 {
+                    return;
+                }
+                let reason = if cancel.load(Ordering::Relaxed) {
+                    Some("the disc was taken out")
+                } else if guard.1.elapsed() > SCAN_STALL {
+                    Some("makemkvcon stopped responding")
+                } else if started.elapsed() > SCAN_MAX {
+                    Some("makemkvcon took too long")
+                } else {
+                    None
+                };
+                if let Some(reason) = reason {
+                    log::warn!("disc scan: {reason}, ending makemkvcon (pid {pid})");
+                    if let Ok(pid) = libc::pid_t::try_from(pid) {
+                        // SAFETY: kill(2) on our child, which isn't reaped yet (we hold
+                        // the lock that `finished` is set under before waiting).
+                        unsafe {
+                            libc::kill(pid, libc::SIGKILL);
+                        }
+                    }
+                    *killed_w.lock().unwrap_or_else(|p| p.into_inner()) = Some(reason.into());
+                    return;
+                }
+            }
+        });
+        let result = read_scan_output(stdout, &state, &mut on_progress);
+        state.lock().unwrap_or_else(|p| p.into_inner()).0 = true;
+        let status = child.wait();
+        if let Some(reason) = killed.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            // Only logged (the tile shows that the disc can't be read).
+            return Err(format!("reading the disc was stopped: {reason}"));
+        }
+        let text = result?;
+        let status = status.map_err(|e| format!("makemkvcon did not finish: {e}"))?;
+        finish_scan(&text, status)
+    })
+}
+
+fn read_scan_output(
+    stdout: std::process::ChildStdout,
+    state: &std::sync::Mutex<(bool, std::time::Instant)>,
+    on_progress: &mut impl FnMut(ScanProgress),
+) -> Result<String, String> {
+    use std::io::{BufRead, BufReader};
     let mut text = String::new();
     let mut progress = None;
     for line in BufReader::new(stdout).lines() {
+        state.lock().unwrap_or_else(|p| p.into_inner()).1 = std::time::Instant::now();
         let line = line.map_err(|e| format!("Reading makemkvcon output failed: {e}"))?;
         if apply_progress_line(&line, &mut progress)
             && let Some(p) = progress
@@ -233,10 +306,11 @@ pub fn scan(device: &Path, mut on_progress: impl FnMut(ScanProgress)) -> Result<
         text.push_str(&line);
         text.push('\n');
     }
-    let status = child
-        .wait()
-        .map_err(|e| format!("makemkvcon did not finish: {e}"))?;
-    let info = parse_robot_output(&text);
+    Ok(text)
+}
+
+fn finish_scan(text: &str, status: std::process::ExitStatus) -> Result<DiscInfo, String> {
+    let info = parse_robot_output(text);
     if info.titles.is_empty() {
         let detail = info
             .messages

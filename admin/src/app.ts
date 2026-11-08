@@ -22,6 +22,8 @@ import { isNormalizedAbsolutePath, validateConfig, defaultConfig, type Config } 
 import { NOT_RUNNING, sendCommand } from "./control";
 import { readJson, writeJsonAtomic } from "./files";
 import { defaultLogoDir, readLogo, refreshLogos, updateLogo } from "./logos";
+import { Aerial, sourceFor } from "./aerial";
+import { AERIAL_QUALITIES, type AerialQuality } from "./config";
 import { DEFAULT_HOST, isAllowedHost, isLoopbackAddress } from "./settings";
 
 export interface AdminOptions {
@@ -38,6 +40,8 @@ export interface AdminOptions {
   clientAddress?: string;
   /** Website logos ($XDG_CACHE_HOME/familynovice/logos). */
   logoDir?: string;
+  /** Screensaver videos ($XDG_CACHE_HOME/familynovice/aerial). */
+  aerialDir?: string;
 }
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -87,11 +91,18 @@ async function readBody(req: Request): Promise<Record<string, unknown> | null> {
   }
 }
 
+/** Is `url` the first-choice source of this quality (not a fallback)? */
+function sourceMatches(sources: Record<string, string>, quality: AerialQuality, url: string): boolean {
+  const key = { "1080p_h264": "H2641080p", "1080p_hevc": "H2651080p", "4k_hevc": "H2654k" }[quality];
+  return sources[key] === url || (quality === "4k_hevc" && sources.H2654k240 === url);
+}
+
 export function createAdminServer(options: AdminOptions) {
   const configPath = join(options.configDir, "config.json");
   const socketPath = join(options.runtimeDir, "familynovice.sock");
   const auth = new Auth(join(options.configDir, "admin.json"));
   const logoDir = options.logoDir ?? defaultLogoDir();
+  const aerial = new Aerial(options.aerialDir);
   const fromThisComputer = (req: Request): boolean =>
     isLoopbackAddress(options.clientAddress ?? server.requestIP(req)?.address);
 
@@ -235,6 +246,8 @@ export function createAdminServer(options: AdminOptions) {
             const result = await saveAndApply(v.config);
             // In the background: the media center picks up new logo files by itself.
             void refreshLogos(logoDir, v.config.websites);
+            // Downloads / deletes the screensaver videos in the background.
+            aerial.sync(v.config.screensaver);
             return json(result);
           },
           { mutating: true },
@@ -340,6 +353,49 @@ export function createAdminServer(options: AdminOptions) {
         ),
       },
 
+      "/api/aerial": {
+        // The aerial videos to choose from, with sizes for a quality, the chosen ones'
+        // download state and the free space.
+        GET: api(async (req) => {
+          const q = new URL(req.url).searchParams.get("quality");
+          const quality: AerialQuality = (AERIAL_QUALITIES as readonly unknown[]).includes(q) ? (q as AerialQuality) : "1080p_h264";
+          const refresh = new URL(req.url).searchParams.get("refresh") === "1";
+          const { videos, fetchedAt, error } = await aerial.videos(refresh);
+          const urls = new Map(videos.map((v) => [v.id, sourceFor(v, quality)]));
+          const sizes = await aerial.sizesFor([...urls.values()].filter((u): u is string => u !== null));
+          return json({
+            videos: videos.map((v) => {
+              const url = urls.get(v.id);
+              return {
+                id: v.id,
+                name: v.name,
+                location: v.location,
+                type: v.type,
+                timeOfDay: v.timeOfDay,
+                size: url ? (sizes.get(url) ?? null) : null,
+                // This quality isn't available: the 4K file is used.
+                fallback: url != null && !sourceMatches(v.sources, quality, url),
+              };
+            }),
+            fetchedAt,
+            error,
+            downloads: await aerial.downloads(),
+            freeBytes: await aerial.freeBytes(),
+          });
+        }),
+      },
+
+      "/api/restart": {
+        // Stops what plays and starts the media center again (also picks up an update).
+        POST: api(
+          async () => {
+            const reply = await sendCommand(socketPath, "restart");
+            return reply.ok ? json({ ok: true }) : json({ error: reply.error }, 502);
+          },
+          { mutating: true },
+        ),
+      },
+
       "/api/remote/calibrate": {
         POST: api(
           async () => {
@@ -392,5 +448,5 @@ export function createAdminServer(options: AdminOptions) {
     },
   });
 
-  return server;
+  return Object.assign(server, { aerial });
 }

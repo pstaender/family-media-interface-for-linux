@@ -190,6 +190,196 @@ pub fn audio_command(
     Some(cmd)
 }
 
+/// Key bindings of the screensaver's mpv (`screensaver_command`, which turns mpv's own
+/// bindings off): every key, button and click ends it. Buttons only the remote's input device
+/// reports (e.g. OK = KEY_SELECT) end it through the media center.
+pub const MPV_SAVER_INPUT_CONF: &str = "\
+ANY_UNICODE quit
+ESC quit
+ENTER quit
+KP_ENTER quit
+KP0 quit
+KP1 quit
+KP2 quit
+KP3 quit
+KP4 quit
+KP5 quit
+KP6 quit
+KP7 quit
+KP8 quit
+KP9 quit
+KP_UP quit
+KP_DOWN quit
+KP_LEFT quit
+KP_RIGHT quit
+SPACE quit
+BS quit
+TAB quit
+UP quit
+DOWN quit
+LEFT quit
+RIGHT quit
+PGUP quit
+PGDWN quit
+HOME quit
+END quit
+INS quit
+DEL quit
+MENU quit
+BACK quit
+FORWARD quit
+HOMEPAGE quit
+SEARCH quit
+PLAY quit
+PAUSE quit
+PLAYPAUSE quit
+PLAYONLY quit
+PAUSEONLY quit
+STOP quit
+NEXT quit
+PREV quit
+REWIND quit
+VOLUME_UP quit
+VOLUME_DOWN quit
+MUTE quit
+CHANNEL_UP quit
+CHANNEL_DOWN quit
+F1 quit
+F2 quit
+F3 quit
+F4 quit
+F5 quit
+F6 quit
+F7 quit
+F8 quit
+F9 quit
+F10 quit
+F11 quit
+F12 quit
+MBTN_LEFT quit
+MBTN_RIGHT quit
+MBTN_MID quit
+MBTN_BACK quit
+MBTN_FORWARD quit
+WHEEL_UP quit
+WHEEL_DOWN quit
+GAMEPAD_ACTION_DOWN quit
+GAMEPAD_ACTION_RIGHT quit
+GAMEPAD_ACTION_LEFT quit
+GAMEPAD_ACTION_UP quit
+GAMEPAD_MENU quit
+GAMEPAD_BACK quit
+GAMEPAD_START quit
+GAMEPAD_DPAD_UP quit
+GAMEPAD_DPAD_DOWN quit
+GAMEPAD_DPAD_LEFT quit
+GAMEPAD_DPAD_RIGHT quit
+CLOSE_WIN quit
+";
+pub const MPV_SAVER_INPUT_CONF_NAME: &str = "mpv-screensaver-input.conf";
+
+/// The aerial screensaver: the downloaded videos without sound, in random order, looping, no
+/// on-screen display, nothing written anywhere (see `screensaver`).
+pub fn screensaver_command(files: &[PathBuf], cache_dir: Option<&Path>) -> Option<Command> {
+    if files.is_empty() {
+        return None;
+    }
+    let mut cmd = Command::new("mpv");
+    cmd.args([
+        "--fullscreen",
+        "--no-terminal",
+        "--vo=gpu-next,gpu,sdl,x11",
+        "--hwdec=auto-safe",
+        "--no-audio",
+        "--shuffle",
+        "--loop-playlist=inf",
+        "--osd-level=0",
+        "--osc=no",
+        "--cursor-autohide=always",
+        "--no-input-default-bindings",
+        "--no-resume-playback",
+        "--title=familynovice screensaver",
+    ]);
+    mpv_no_writes(&mut cmd, cache_dir);
+    if let Some(dir) = cache_dir {
+        cmd.arg(format!(
+            "--input-conf={}",
+            dir.join(MPV_SAVER_INPUT_CONF_NAME).display()
+        ));
+    }
+    cmd.arg("--").args(files);
+    cmd.stdin(Stdio::null()).stdout(Stdio::null());
+    Some(cmd)
+}
+
+/// End `makemkvcon guiserver` processes that outlived the player that started them.
+///
+/// libmmbd starts `makemkvcon guiserver` for each player; it puts itself into its own
+/// process group and keeps running after the player exits (orphaned: its parent becomes
+/// init or the user's service manager). Each one keeps the drive open, so later disc scans
+/// hang and ejecting fails. Only our own user's orphaned guiservers are ended; a guiserver
+/// whose player still runs has that player as its parent and is left alone.
+pub fn stop_leftover_makemkv_servers() {
+    // SAFETY: getuid() can't fail and has no side effects.
+    let uid = unsafe { libc::getuid() };
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|n| n.parse::<libc::pid_t>().ok())
+        else {
+            continue;
+        };
+        let dir = entry.path();
+        let (Ok(status), Ok(cmdline)) = (
+            std::fs::read_to_string(dir.join("status")),
+            std::fs::read(dir.join("cmdline")),
+        ) else {
+            continue;
+        };
+        let parent_comm = status_field(&status, "PPid")
+            .and_then(|p| std::fs::read_to_string(format!("/proc/{p}/comm")).ok());
+        if is_leftover_makemkv_server(&status, &cmdline, uid, parent_comm.as_deref()) {
+            log::info!("ending leftover makemkvcon guiserver (pid {pid})");
+            // SAFETY: plain kill(2) on a process of our own user.
+            unsafe {
+                libc::kill(pid, libc::SIGTERM);
+            }
+        }
+    }
+}
+
+fn status_field<'a>(status: &'a str, name: &str) -> Option<&'a str> {
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix(name)?.strip_prefix(':'))
+        .map(str::trim)
+}
+
+/// `/proc/<pid>/status` + `cmdline` of a process: our user's `makemkvcon guiserver` whose
+/// parent is gone (now pid 1 or a `systemd` service manager).
+fn is_leftover_makemkv_server(
+    status: &str,
+    cmdline: &[u8],
+    uid: u32,
+    parent_comm: Option<&str>,
+) -> bool {
+    let ours = status_field(status, "Uid")
+        .and_then(|u| u.split_whitespace().next())
+        .and_then(|u| u.parse::<u32>().ok())
+        == Some(uid);
+    let mut args = cmdline.split(|b| *b == 0);
+    let program = args.next().unwrap_or_default();
+    let is_server = program.rsplit(|b| *b == b'/').next() == Some(b"makemkvcon".as_slice())
+        && args.next() == Some(b"guiserver".as_slice());
+    let orphaned = status_field(status, "PPid") == Some("1")
+        || parent_comm.is_some_and(|c| c.trim() == "systemd");
+    ours && is_server && orphaned
+}
+
 /// ISO 639-2 has two codes for some languages (terminology / bibliographic), and discs use
 /// both. The admin interface stores the terminology code; players get both variants.
 const ALTERNATIVE_CODES: [(&str, &str); 19] = [
@@ -295,7 +485,11 @@ pub fn command(
                 "--key-vol-up=Ctrl+Up",
                 "--key-vol-down=Ctrl+Down",
                 "--key-vol-mute=m",
-            ]);
+            ])
+            // Decode the audio instead of passing Dolby/DTS through to the TV or receiver:
+            // on HDMI that failed ("digital pass-through stream connection failure"), and
+            // the system volume only works on decoded sound.
+            .arg("--no-spdif");
             if let Some(dir) = movie.cache_dir {
                 cmd.arg(format!(
                     "--snapshot-path={}",
@@ -517,6 +711,90 @@ mod tests {
         let dashdash = a.iter().position(|x| x == "--").unwrap();
         assert_eq!(&a[dashdash + 1..], ["/m/2.mp3", "/m/3.mp3"]);
         assert!(audio_command(&files, 3, Path::new("/run/a.sock"), None).is_none());
+    }
+
+    #[test]
+    fn finds_leftover_makemkv_servers_only() {
+        let status = |uid: u32, ppid: u32| {
+            format!("Name:\tmakemkvcon\nPPid:\t{ppid}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
+        };
+        let server = b"/usr/local/bin/makemkvcon\0guiserver\0A0001+std\0".as_slice();
+        assert!(is_leftover_makemkv_server(
+            &status(1003, 1),
+            server,
+            1003,
+            Some("systemd\n")
+        ));
+        // Reparented to the user's service manager.
+        assert!(is_leftover_makemkv_server(
+            &status(1003, 1669),
+            server,
+            1003,
+            Some("systemd\n")
+        ));
+        // Its player still runs.
+        assert!(!is_leftover_makemkv_server(
+            &status(1003, 13984),
+            server,
+            1003,
+            Some("vlc\n")
+        ));
+        // Another user's.
+        assert!(!is_leftover_makemkv_server(
+            &status(1000, 1),
+            server,
+            1003,
+            None
+        ));
+        // Not a guiserver (e.g. our own disc scan).
+        let scan = b"makemkvcon\0-r\0info\0dev:/dev/sr0\0".as_slice();
+        assert!(!is_leftover_makemkv_server(
+            &status(1003, 1),
+            scan,
+            1003,
+            None
+        ));
+        assert!(!is_leftover_makemkv_server(
+            &status(1003, 1),
+            b"/tmp/makemkvcon-evil\0guiserver\0",
+            1003,
+            None
+        ));
+    }
+
+    #[test]
+    fn screensaver_mpv() {
+        assert!(screensaver_command(&[], None).is_none());
+        let files = [PathBuf::from("/c/aerial/A.1080p_h264.mov")];
+        let a = args(&screensaver_command(&files, Some(Path::new("/c"))).unwrap());
+        for arg in [
+            "--no-audio",
+            "--shuffle",
+            "--loop-playlist=inf",
+            "--no-input-default-bindings",
+            "--input-conf=/c/mpv-screensaver-input.conf",
+            "--screenshot-dir=/c/screenshots",
+        ] {
+            assert!(a.contains(&arg.to_string()), "{arg}");
+        }
+        assert_eq!(&a[a.len() - 2..], ["--", "/c/aerial/A.1080p_h264.mov"]);
+        // Every common key, button and click ends it; nothing else is bound.
+        for key in [
+            "ANY_UNICODE",
+            "ENTER",
+            "ESC",
+            "UP",
+            "MBTN_LEFT",
+            "MBTN_RIGHT",
+            "HOMEPAGE",
+        ] {
+            assert!(
+                MPV_SAVER_INPUT_CONF
+                    .lines()
+                    .any(|l| l == format!("{key} quit"))
+            );
+        }
+        assert!(MPV_SAVER_INPUT_CONF.lines().all(|l| l.ends_with(" quit")));
     }
 
     #[test]

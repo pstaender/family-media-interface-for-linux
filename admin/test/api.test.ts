@@ -28,7 +28,8 @@ beforeAll(async () => {
     });
   });
   await new Promise<void>((resolve) => fakeMediaCenter.listen(join(runtimeDir, "familynovice.sock"), resolve));
-  server = createAdminServer({ configDir, runtimeDir, port: 0, hostname: "127.0.0.1" });
+  // Own logo/aerial folders: the tests must never touch the real cache.
+  server = createAdminServer({ configDir, runtimeDir, port: 0, hostname: "127.0.0.1", logoDir: join(configDir, "logos"), aerialDir: join(configDir, "aerial") });
   base = `http://127.0.0.1:${server.port}`;
 });
 
@@ -66,7 +67,7 @@ test("first start: not set up, nothing accessible", async () => {
 
 test("the first password can't be set from another device", async () => {
   const dir = mkdtempSync("/tmp/fn-admin-remote-");
-  const remote = createAdminServer({ configDir: dir, runtimeDir, port: 0, hostname: "127.0.0.1", clientAddress: "192.168.1.30" });
+  const remote = createAdminServer({ configDir: dir, runtimeDir, port: 0, hostname: "127.0.0.1", clientAddress: "192.168.1.30", aerialDir: join(dir, "aerial") });
   const url = `http://127.0.0.1:${remote.port}`;
   try {
     const state = await (await fetch(`${url}/api/state`)).json();
@@ -139,7 +140,15 @@ test("reads default config, rejects invalid, saves and applies valid config", as
     discs: { enabled: true, allow_disc_menu: false, audio_languages: ["deu"], subtitle_languages: [] },
     folders: [],
     websites: [],
+    screensaver: { mode: "title", idle_minutes: 10, aerial_quality: "1080p_h264", aerial_videos: [] },
   });
+});
+
+test("restart is passed to the media center", async () => {
+  received.length = 0;
+  const r = await call("POST", "/api/restart");
+  expect(r.data).toEqual({ ok: true });
+  expect(received).toEqual(["restart"]);
 });
 
 test("folder picker lists only visible directories, read-only", async () => {

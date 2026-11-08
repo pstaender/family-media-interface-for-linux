@@ -26,7 +26,13 @@ own (admin) account; without `--user` it converts the current account:
 ```sh
 sudo adduser tv                 # recommended: a separate account without admin rights
 scripts/install.sh --user tv    # options: --no-makemkv, --skip-packages, --yes
+scripts/install.sh --user tv --update   # later: only rebuild and replace familynovice
 ```
+
+`--update` skips packages, MakeMKV, the Rust/Bun installs, the questions and the session
+settings; it rebuilds the media center, website window and admin panel, replaces them in
+`/opt/familynovice` and restarts the admin panel. The running media center keeps the old
+version until it restarts.
 
 It installs everything (packages, MakeMKV, Rust, Bun; builds familynovice into
 `/opt/familynovice`). It also adds a login session **"familynovice"** and makes it the
@@ -165,6 +171,11 @@ to itself (`target/release/` or `target/debug/`), otherwise in `PATH`.
    German), disc settings, folders (with a folder picker) and websites.
    For websites, the panel looks up the site's logo after saving and shows it on the tile
    (option "Show the website's logo on the tile"; without it, a globe).
+   **Screensaver:** off, a moving title (default, after 10 minutes), or aerial videos (Apple
+   TV style): pick up to 10 from the list (AerialWindows/Aerial project); they are downloaded
+   from Apple's server after saving (100–900 MB each, depending on the quality). While a
+   screensaver is set up, the computer doesn't switch the screen off.
+   **Home screen → Restart media center** starts it again (e.g. after `install.sh --update`).
 3. **Password & PIN:** set a PIN (4–8 digits). It unlocks the media center when time is up and
    enables the lock button on the home screen.
 4. **Parental control → Time limits:** time budgets or time windows for today, specific
@@ -273,7 +284,7 @@ Blocked pages are logged as `familynovice-web: blocked …`.
 | `~/.config/familynovice/admin.json` | admin password hash |
 | `~/.local/share/familynovice/` | resume positions, usage time (`usage.json`), remote buttons (`remote.json`), recently played files per folder (`recent.json`) |
 | `/etc/udev/rules.d/70-familynovice-remote.rules` | read access to the remote (`scripts/remote-access.sh`) |
-| `~/.cache/familynovice/` | disc info, website cookies and logos, player screenshots, MakeMKV build |
+| `~/.cache/familynovice/` | disc info, website cookies and logos, screensaver videos (`aerial/`), player screenshots, MakeMKV build |
 | `/run/user/<uid>/familynovice*.sock` | control sockets |
 | `/opt/familynovice/` | installed programs (`scripts/install.sh`), `install-state` for the uninstaller |
 | `/usr/share/wayland-sessions/familynovice.desktop` | the kiosk login session |

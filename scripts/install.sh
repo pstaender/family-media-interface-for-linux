@@ -16,12 +16,15 @@
 # the session and returns to the login screen. Other accounts are not changed; the regular
 # desktop stays selectable at the login screen (session menu), e.g. to run scripts/uninstall.sh.
 #
-# Usage:  scripts/install.sh [--user NAME] [--yes] [--no-makemkv] [--skip-packages]
+# Usage:  scripts/install.sh [--user NAME] [--yes] [--no-makemkv] [--skip-packages] [--update]
 #   --user NAME      the media center account (default: the current user); building and
 #                    sudo happen as the current user
 #   --yes            don't ask for confirmation
 #   --no-makemkv     no Blu-ray support (don't build MakeMKV)
 #   --skip-packages  don't run scripts/setup.sh (packages and MakeMKV are already installed)
+#   --update         only rebuild and replace the installed media center, website window and
+#                    admin panel (no packages, MakeMKV, Rust/Bun installs, questions or
+#                    session changes); needs an existing installation, cargo and bun
 #
 # Undo with scripts/uninstall.sh.
 
@@ -45,6 +48,7 @@ ASSUME_YES=0
 WITH_MAKEMKV=1
 SETUP_ARGS=()
 SKIP_PACKAGES=0
+UPDATE=0
 TARGET_USER="$USER"
 while [[ $# -gt 0 ]]; do
     arg="$1"
@@ -54,6 +58,7 @@ while [[ $# -gt 0 ]]; do
         --yes) ASSUME_YES=1 ;;
         --no-makemkv) WITH_MAKEMKV=0; SETUP_ARGS+=(--no-makemkv) ;;
         --skip-packages) SKIP_PACKAGES=1 ;;
+        --update) UPDATE=1; SKIP_PACKAGES=1; ASSUME_YES=1 ;;
         -h | --help) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "unknown option: $arg (try --help)" ;;
     esac
@@ -92,9 +97,17 @@ if [[ -f $STATE_FILE ]] && ! grep -qx "INSTALL_USER=$TARGET_USER" "$STATE_FILE";
     die "familynovice is already installed for another user ($(grep '^INSTALL_USER=' "$STATE_FILE" | cut -d= -f2)). Run scripts/uninstall.sh first."
 fi
 
+if [[ $UPDATE -eq 1 ]]; then
+    [[ -f $STATE_FILE ]] || die "--update: familynovice isn't installed yet (run scripts/install.sh without --update)"
+    for tool in cargo bun; do
+        command -v "$tool" >/dev/null || [[ -x $HOME/.$tool/bin/$tool ]] ||
+            die "--update: $tool is missing (run scripts/install.sh without --update)"
+    done
+fi
+
 DISPLAY_MANAGER="$(basename "$(readlink -f /etc/systemd/system/display-manager.service 2>/dev/null || true)" .service)"
 
-cat <<EOF
+[[ $UPDATE -eq 1 ]] || cat <<EOF
 
 This turns the account '$TARGET_USER' into a media center account:
 
@@ -104,7 +117,7 @@ This turns the account '$TARGET_USER' into a media center account:
   * Installs to $PREFIX, $SESSION_FILE and $UNIT_DIR/$SERVICE_NAME.
   * No personal files are changed. Undo with scripts/uninstall.sh.
 EOF
-if grep -qxE 'sudo|admin|wheel' <<<"$(id -nG "$TARGET_USER" | tr ' ' '\n')"; then
+if [[ $UPDATE -eq 0 ]] && grep -qxE 'sudo|admin|wheel' <<<"$(id -nG "$TARGET_USER" | tr ' ' '\n')"; then
     cat <<EOF
 
   ! '$TARGET_USER' is an administrator (sudo). For children, use a separate account without
@@ -114,7 +127,7 @@ EOF
 fi
 case "$DISPLAY_MANAGER" in
     gdm | gdm3 | lightdm) ;;
-    *) warn "display manager '${DISPLAY_MANAGER:-unknown}': choose the session 'familynovice' once at the login screen; it should be remembered." ;;
+    *) [[ $UPDATE -eq 1 ]] || warn "display manager '${DISPLAY_MANAGER:-unknown}': choose the session 'familynovice' once at the login screen; it should be remembered." ;;
 esac
 if [[ $ASSUME_YES -eq 0 ]]; then
     echo
@@ -129,8 +142,10 @@ sudo -v # ask for the password once, up front
 if [[ $SKIP_PACKAGES -eq 0 ]]; then
     "$REPO/scripts/setup.sh" "${SETUP_ARGS[@]}"
 fi
-info "Installing the kiosk compositor (${KIOSK_PACKAGES[*]})"
-sudo apt-get install -y "${KIOSK_PACKAGES[@]}"
+if [[ $UPDATE -eq 0 ]]; then
+    info "Installing the kiosk compositor (${KIOSK_PACKAGES[*]})"
+    sudo apt-get install -y "${KIOSK_PACKAGES[@]}"
+fi
 
 if ! command -v cargo >/dev/null && [[ -x $HOME/.cargo/bin/cargo ]]; then
     export PATH="$HOME/.cargo/bin:$PATH"
@@ -244,14 +259,17 @@ Type=Application
 DesktopNames=familynovice
 EOF
 
-info "Making '$SESSION_NAME' the default session of '$TARGET_USER'"
-# AccountsService is read by GDM (Session) and LightDM (XSession).
-accounts_set() {
-    sudo busctl call org.freedesktop.Accounts "$USER_PATH" org.freedesktop.Accounts.User "$1" s "$2"
-}
-accounts_set SetSession "$SESSION_NAME"
-accounts_set SetXSession "$SESSION_NAME"
-accounts_set SetSessionType wayland || true
+# An update keeps the account's session choice (maybe changed on purpose since).
+if [[ $UPDATE -eq 0 ]]; then
+    info "Making '$SESSION_NAME' the default session of '$TARGET_USER'"
+    # AccountsService is read by GDM (Session) and LightDM (XSession).
+    accounts_set() {
+        sudo busctl call org.freedesktop.Accounts "$USER_PATH" org.freedesktop.Accounts.User "$1" s "$2"
+    }
+    accounts_set SetSession "$SESSION_NAME"
+    accounts_set SetXSession "$SESSION_NAME"
+    accounts_set SetSessionType wayland || true
+fi
 
 info "Starting the admin panel as a user service of '$TARGET_USER'"
 # Keep the account's services (admin panel) running without a login, so parents can set
@@ -286,7 +304,7 @@ target_systemctl restart "$SERVICE_NAME" ||
 # ---------------------------------------------------------------------------- MakeMKV key
 
 # MakeMKV reads its key from the home of the account that plays the disc.
-if [[ $WITH_MAKEMKV -eq 1 && -t 0 ]] && ! as_target grep -qs '^app_Key' "$TARGET_HOME/.MakeMKV/settings.conf"; then
+if [[ $UPDATE -eq 0 && $WITH_MAKEMKV -eq 1 && -t 0 ]] && ! as_target grep -qs '^app_Key' "$TARGET_HOME/.MakeMKV/settings.conf"; then
     echo
     read -r -p "MakeMKV key for Blu-rays of '$TARGET_USER' (paste it, or press Enter to skip): " key
     if [[ -n $key ]]; then
@@ -296,6 +314,17 @@ if [[ $WITH_MAKEMKV -eq 1 && -t 0 ]] && ! as_target grep -qs '^app_Key' "$TARGET
 fi
 
 sleep 1
+if [[ $UPDATE -eq 1 ]]; then
+    cat <<EOF
+
+$(printf '\033[1;32m')Updated.$(printf '\033[0m')
+
+  * Admin panel: restarted ($(target_systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)).
+  * A running media center keeps the old version until it restarts: admin panel → Restart
+    media center, or log '$TARGET_USER' out and in again.
+EOF
+    exit 0
+fi
 cat <<EOF
 
 $(printf '\033[1;32m')Done.$(printf '\033[0m')

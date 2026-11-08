@@ -32,6 +32,95 @@ pub struct Config {
     pub websites: Vec<WebsiteSettings>,
     #[serde(default)]
     pub parental: ParentalSettings,
+    #[serde(default)]
+    pub screensaver: ScreensaverSettings,
+}
+
+/// The screensaver (`src/screensaver.rs`), started after `idle_minutes` without input on the
+/// media center's own screens.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ScreensaverSettings {
+    pub mode: ScreensaverMode,
+    pub idle_minutes: u32,
+    /// Which file of the aerial videos is downloaded and played.
+    pub aerial_quality: AerialQuality,
+    /// Ids of the chosen aerial videos (AerialWindows/Aerial's `videos.json`), downloaded by
+    /// the admin interface into `$XDG_CACHE_HOME/familynovice/aerial/<id>.<quality>.mov`.
+    pub aerial_videos: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreensaverMode {
+    Off,
+    /// The title moving slowly over a very dark, slowly changing background.
+    Title,
+    /// Aerial videos (Apple TV style), played by mpv in random order.
+    Aerial,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AerialQuality {
+    #[serde(rename = "1080p_h264")]
+    Hd264,
+    #[serde(rename = "1080p_hevc")]
+    HdHevc,
+    #[serde(rename = "4k_hevc")]
+    UhdHevc,
+}
+
+impl AerialQuality {
+    pub const ALL: [AerialQuality; 3] = [Self::Hd264, Self::HdHevc, Self::UhdHevc];
+
+    /// As in the config and the downloaded file names.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Hd264 => "1080p_h264",
+            Self::HdHevc => "1080p_hevc",
+            Self::UhdHevc => "4k_hevc",
+        }
+    }
+}
+
+pub const MAX_AERIAL_VIDEOS: usize = 10;
+pub const MAX_IDLE_MINUTES: u32 = 240;
+
+impl Default for ScreensaverSettings {
+    fn default() -> Self {
+        Self {
+            mode: ScreensaverMode::Title,
+            idle_minutes: 10,
+            aerial_quality: AerialQuality::Hd264,
+            aerial_videos: Vec::new(),
+        }
+    }
+}
+
+/// Aerial video ids (UUIDs in the catalog): letters, digits and `-`, so they are safe in
+/// file names.
+pub fn is_aerial_id(id: &str) -> bool {
+    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+fn validate_screensaver(s: &ScreensaverSettings) -> Result<(), String> {
+    if !(1..=MAX_IDLE_MINUTES).contains(&s.idle_minutes) {
+        return Err(format!("idle_minutes must be 1 to {MAX_IDLE_MINUTES}"));
+    }
+    if s.aerial_videos.len() > MAX_AERIAL_VIDEOS {
+        return Err(format!("aerial_videos: at most {MAX_AERIAL_VIDEOS} videos"));
+    }
+    for (i, id) in s.aerial_videos.iter().enumerate() {
+        if !is_aerial_id(id) {
+            return Err(format!(
+                "aerial_videos: \"{id}\" must be letters, digits and -"
+            ));
+        }
+        if s.aerial_videos[..i].contains(id) {
+            return Err(format!("aerial_videos: \"{id}\" is listed twice"));
+        }
+    }
+    Ok(())
 }
 
 /// PIN and time limits (evaluated in `src/limits.rs`).
@@ -266,6 +355,7 @@ impl Default for Config {
             folders: Vec::new(),
             websites: Vec::new(),
             parental: ParentalSettings::default(),
+            screensaver: ScreensaverSettings::default(),
         }
     }
 }
@@ -284,6 +374,7 @@ impl Config {
             folders: Vec::new(),
             websites: Vec::new(),
             parental: ParentalSettings::default(),
+            screensaver: ScreensaverSettings::default(),
         }
     }
 }
@@ -365,6 +456,7 @@ fn validate(config: &Config) -> Result<(), String> {
             }
         }
     }
+    validate_screensaver(&config.screensaver).map_err(|e| format!("screensaver.{e}"))?;
     if config.folders.len() > MAX_FOLDERS {
         return Err(format!("folders: at most {MAX_FOLDERS} folders"));
     }
@@ -596,6 +688,20 @@ mod tests {
     }
 
     #[test]
+    fn screensaver() {
+        let c = parse(r#"{"version":1}"#).unwrap();
+        assert_eq!(c.screensaver.mode, ScreensaverMode::Title);
+        assert_eq!(c.screensaver.idle_minutes, 10);
+        let config = parse(include_str!("../docs/config.example.json")).unwrap();
+        assert_eq!(config.screensaver.mode, ScreensaverMode::Aerial);
+        assert_eq!(config.screensaver.aerial_quality, AerialQuality::HdHevc);
+        assert_eq!(config.screensaver.aerial_videos.len(), 2);
+        let written = serde_json::to_string(&config.screensaver).unwrap();
+        assert!(written.contains(r#""aerial_quality":"1080p_hevc""#));
+        assert!(written.contains(r#""mode":"aerial""#));
+    }
+
+    #[test]
     fn paths() {
         for ok in ["/", "/a", "/srv/media movies/x.y", "/a/.hidden"] {
             assert!(is_normalized_absolute_path(ok), "{ok}");
@@ -672,6 +778,19 @@ mod tests {
             r#"{"version":1,"parental":{"limits":[{"type":"window","until":"24:00","scope":{"kind":"every_day"}}]}}"#,
             r#"{"version":1,"parental":{"limits":[{"type":"nap","scope":{"kind":"every_day"}}]}}"#,
             r#"{"version":1,"parental":{"limits":[{"type":"budget","minutes":60,"scope":{"kind":"every_day","x":1}}]}}"#,
+            r#"{"version":1,"screensaver":{"mode":"matrix"}}"#,
+            r#"{"version":1,"screensaver":{"mode":"Title"}}"#,
+            r#"{"version":1,"screensaver":{"idle_minutes":0}}"#,
+            r#"{"version":1,"screensaver":{"idle_minutes":241}}"#,
+            r#"{"version":1,"screensaver":{"idle_minutes":1.5}}"#,
+            r#"{"version":1,"screensaver":{"aerial_quality":"8k"}}"#,
+            r#"{"version":1,"screensaver":{"aerial_videos":["../x"]}}"#,
+            r#"{"version":1,"screensaver":{"aerial_videos":["a.b"]}}"#,
+            r#"{"version":1,"screensaver":{"aerial_videos":[""]}}"#,
+            r#"{"version":1,"screensaver":{"aerial_videos":["a","a"]}}"#,
+            r#"{"version":1,"screensaver":{"aerial_videos":["1","2","3","4","5","6","7","8","9","10","11"]}}"#,
+            r#"{"version":1,"screensaver":{"aerial_videos":[1]}}"#,
+            r#"{"version":1,"screensaver":{"urls":[]}}"#,
             "not json",
         ] {
             assert!(parse(bad).is_err(), "should reject {bad}");

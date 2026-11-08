@@ -4,6 +4,7 @@ mod control;
 mod cover;
 mod disc;
 mod i18n;
+mod inhibit;
 mod library;
 mod limits;
 mod lock;
@@ -15,6 +16,7 @@ mod player;
 mod recent;
 mod remote;
 mod resume;
+mod screensaver;
 // Parts of it are only used by the browser window (web/, includes this file).
 #[allow(dead_code)]
 mod sites;

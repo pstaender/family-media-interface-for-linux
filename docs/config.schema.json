@@ -112,6 +112,43 @@
           "description": "If several rules of the same kind match a day, the most specific wins: today > weekdays > this_week > every_day. A this_week budget counts the whole week."
         }
       }
+    },
+    "screensaver": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Screensaver of the media center's own screens (not over a running player or website). While one is set up, the media center also keeps the computer from blanking the screen. Missing fields take their defaults.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["off", "title", "aerial"],
+          "default": "title",
+          "description": "title: the title moves slowly over a very dark background whose color changes a little every minute. aerial: the chosen aerial videos in random order (falls back to title while none is downloaded)."
+        },
+        "idle_minutes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 240,
+          "default": 10,
+          "description": "Minutes without input before the screensaver starts."
+        },
+        "aerial_quality": {
+          "type": "string",
+          "enum": ["1080p_h264", "1080p_hevc", "4k_hevc"],
+          "default": "1080p_h264",
+          "description": "Which file of each aerial video is downloaded. Videos that only exist in 4K use their 4K file."
+        },
+        "aerial_videos": {
+          "type": "array",
+          "maxItems": 10,
+          "uniqueItems": true,
+          "default": [],
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9-]{1,64}$"
+          },
+          "description": "Ids of the chosen aerial videos (from AerialWindows/Aerial's videos.json). The admin interface downloads them to $XDG_CACHE_HOME/familynovice/aerial/<id>.<quality>.mov."
+        }
+      }
     }
   },
   "$defs": {

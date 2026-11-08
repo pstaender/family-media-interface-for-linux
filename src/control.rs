@@ -10,7 +10,8 @@
 //! - `{"command":"end_unlock"}`: ends an unlock early; the time limits apply again
 //! - `{"command":"lock"}`: locks the media center until it is unlocked
 //! - `{"command":"calibrate_remote"}`: shows the remote calibration on the TV
-//! - `{"command":"restart"}` → not supported yet (`ok: false`)
+//! - `{"command":"restart"}`: stops what plays and starts the media center again (the newest
+//!   installed version, e.g. after `scripts/install.sh --update`)
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -32,6 +33,7 @@ pub type SharedConfig = Arc<Mutex<ConfigState>>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiRequest {
     CalibrateRemote,
+    Restart,
 }
 
 /// Everything the control socket works on.
@@ -114,7 +116,10 @@ pub fn handle(line: &str, control: &Control) -> Value {
             Ok(()) => json!({"ok": true}),
             Err(_) => json!({"ok": false, "error": "the media center's screen isn't running"}),
         },
-        Some("restart") => json!({"ok": false, "error": "restart is not supported yet"}),
+        Some("restart") => match control.ui_requests.send(UiRequest::Restart) {
+            Ok(()) => json!({"ok": true}),
+            Err(_) => json!({"ok": false, "error": "the media center's screen isn't running"}),
+        },
         Some(other) => json!({"ok": false, "error": format!("unknown command: {other}")}),
         None => json!({"ok": false, "error": "expected {\"command\": \"…\"}"}),
     }

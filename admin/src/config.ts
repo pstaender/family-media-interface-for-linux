@@ -76,6 +76,27 @@ export interface ParentalSettings {
   limits: LimitRule[];
 }
 
+export const SCREENSAVER_MODES = ["off", "title", "aerial"] as const;
+export type ScreensaverMode = (typeof SCREENSAVER_MODES)[number];
+export const AERIAL_QUALITIES = ["1080p_h264", "1080p_hevc", "4k_hevc"] as const;
+export type AerialQuality = (typeof AERIAL_QUALITIES)[number];
+export const MAX_AERIAL_VIDEOS = 10;
+const MAX_IDLE_MINUTES = 240;
+
+/** The media center's screensaver (src/config.rs `ScreensaverSettings`). */
+export interface ScreensaverSettings {
+  mode: ScreensaverMode;
+  idle_minutes: number;
+  aerial_quality: AerialQuality;
+  /** Ids from AerialWindows/Aerial's videos.json; downloaded by aerial.ts. */
+  aerial_videos: string[];
+}
+
+/** Aerial video ids: safe in file names (same as `is_aerial_id` in src/config.rs). */
+export function isAerialId(id: unknown): id is string {
+  return typeof id === "string" && /^[A-Za-z0-9-]{1,64}$/.test(id);
+}
+
 export interface Config {
   version: number;
   home: HomeSettings;
@@ -83,6 +104,7 @@ export interface Config {
   discs: DiscSettings;
   folders: FolderSettings[];
   websites: WebsiteSettings[];
+  screensaver: ScreensaverSettings;
 }
 
 export function defaultConfig(): Config {
@@ -98,7 +120,45 @@ export function defaultConfig(): Config {
     },
     folders: [],
     websites: [],
+    screensaver: { mode: "title", idle_minutes: 10, aerial_quality: "1080p_h264", aerial_videos: [] },
   };
+}
+
+function validateScreensaver(input: unknown): ScreensaverSettings | string {
+  if (!isObject(input)) return "screensaver: must be an object";
+  const extra = unknownKey(input, ["mode", "idle_minutes", "aerial_quality", "aerial_videos"], "screensaver");
+  if (extra) return extra;
+  const s = defaultConfig().screensaver;
+  if (input.mode !== undefined) {
+    if (!(SCREENSAVER_MODES as readonly unknown[]).includes(input.mode)) {
+      return `screensaver.mode must be one of ${SCREENSAVER_MODES.join(", ")}`;
+    }
+    s.mode = input.mode as ScreensaverMode;
+  }
+  if (input.idle_minutes !== undefined) {
+    const m = input.idle_minutes;
+    if (typeof m !== "number" || !Number.isInteger(m) || m < 1 || m > MAX_IDLE_MINUTES) {
+      return `screensaver.idle_minutes must be 1 to ${MAX_IDLE_MINUTES}`;
+    }
+    s.idle_minutes = m;
+  }
+  if (input.aerial_quality !== undefined) {
+    if (!(AERIAL_QUALITIES as readonly unknown[]).includes(input.aerial_quality)) {
+      return `screensaver.aerial_quality must be one of ${AERIAL_QUALITIES.join(", ")}`;
+    }
+    s.aerial_quality = input.aerial_quality as AerialQuality;
+  }
+  if (input.aerial_videos !== undefined) {
+    const list = input.aerial_videos;
+    if (!Array.isArray(list)) return "screensaver.aerial_videos: must be a list";
+    if (list.length > MAX_AERIAL_VIDEOS) return `screensaver.aerial_videos: at most ${MAX_AERIAL_VIDEOS} videos`;
+    for (const [i, id] of list.entries()) {
+      if (!isAerialId(id)) return `screensaver.aerial_videos: "${String(id)}" must be letters, digits and -`;
+      if (list.slice(0, i).includes(id)) return `screensaver.aerial_videos: "${id}" is listed twice`;
+    }
+    s.aerial_videos = list as string[];
+  }
+  return s;
 }
 
 /**
@@ -355,7 +415,7 @@ function languages(value: unknown, field: string): string[] | string {
 /** Validate untrusted input and fill in defaults. */
 export function validateConfig(input: unknown): Validation {
   if (!isObject(input)) return { ok: false, error: "config must be an object" };
-  const top = unknownKey(input, ["version", "home", "parental", "discs", "folders", "websites"], "config");
+  const top = unknownKey(input, ["version", "home", "parental", "discs", "folders", "websites", "screensaver"], "config");
   if (top) return { ok: false, error: top };
   if (input.version !== CONFIG_VERSION) {
     return {
@@ -421,6 +481,11 @@ export function validateConfig(input: unknown): Validation {
     const parental = validateParental(input.parental);
     if (typeof parental === "string") return { ok: false, error: parental };
     config.parental = parental;
+  }
+  if (input.screensaver !== undefined) {
+    const s = validateScreensaver(input.screensaver);
+    if (typeof s === "string") return { ok: false, error: s };
+    config.screensaver = s;
   }
   if (input.websites !== undefined) {
     if (!Array.isArray(input.websites)) return { ok: false, error: "websites: must be a list" };

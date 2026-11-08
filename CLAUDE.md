@@ -155,6 +155,24 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   the standard keys (113–115) itself, so we skip them unless `FAMILYNOVICE_KIOSK=1` (set by
   `familynovice-session`) or `XDG_CURRENT_DESKTOP` is empty. Feedback: bar at the bottom for
   2 s, and `show-text` in mpv. "No volume control found" if neither tool works.
+- **Screensaver (implemented, `src/screensaver.rs`, `screensaver` in config.json):** after
+  `idle_minutes` (default 10) without input on our own screens (never over a player, website
+  or the calibration): **title** (moves slowly, bouncing; background black to dark gray,
+  new color every minute, blended over 8 s) or **aerial** (mpv `player::screensaver_command`:
+  no audio, shuffled, looped, `MPV_SAVER_INPUT_CONF` = every key quits; falls back to title
+  without downloaded files). Any input ends it and does nothing else. Usage time doesn't count
+  while it runs (except music). While a screensaver is set up, `src/inhibit.rs` keeps the
+  computer from blanking (`org.freedesktop.ScreenSaver.Inhibit`, else
+  `org.gnome.SessionManager.Inhibit` idle), so the TV keeps its signal. Aerial videos: list
+  from AerialWindows/Aerial `videos.json` (only `https://sylvan.apple.com/…mov` used),
+  downloaded by the admin (`admin/src/aerial.ts`, Apple Root CA pinned: `apple-root-ca.pem`)
+  to `$XDG_CACHE_HOME/familynovice/aerial/<id>.<quality>.mov`: one at a time, `.part` then
+  rename, size = Content-Length, QuickTime magic bytes, free space + 1 GB checked, 60 s stall
+  abort; started on save (`PUT /api/config` → `Aerial.sync`) and at admin start; only files
+  named like ours are deleted (not chosen any more; other quality once the new one is there;
+  all when the mode isn't aerial). List cached a week (`catalog.json`, checked again when
+  read), sizes via HEAD (`sizes.json`). Admin: Home screen & media → Screensaver
+  (`GET /api/aerial?quality=…[&refresh=1]`).
 - **Languages (implemented, `src/i18n.rs`):** English and German. `home.language`: `auto`
   (default: `LC_ALL` / `LC_MESSAGES` / `LANG`, then the `LANGUAGE` list as in gettext;
   English if none is known), `en`, `de`; set in the admin panel (Home screen tab), applied
@@ -223,13 +241,22 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   Esc (`--key-quit=Esc`). On the media center's "Playing…" screen, Esc/Back (or a click; ignored
   during the first second, so the click/OK that started it doesn't stop it again) sends
   SIGTERM to the player and SIGKILL after 2 s, for players that are hung or not visible. The
-  resume position survives both (saved on quit, and every 5 s while playing).
+  resume position survives both (saved on quit, and every 5 s while playing). When the disc
+  leaves the drive (tray opened) during disc playback, the player is stopped the same way (VLC
+  hung on read errors with a black fullscreen window otherwise).
+- **Leftover `makemkvcon guiserver`:** libmmbd starts one per player; it makes its own process
+  group and outlives the player, keeping the drive open (scans hang, eject fails).
+  `player::stop_leftover_makemkv_servers` ends our user's orphaned guiservers (parent pid 1
+  or a `systemd` manager) after a disc player exits and before a scan or eject.
+- **Scan watchdog (`makemkv::scan`):** makemkvcon is killed after 5 min without output, after
+  20 min in total, or when the disc is taken out (cancel flag; the scan is forgotten, so the
+  disc is read again when it comes back).
 - **Player in front:** while mpv/VLC runs, the media center sets its own window to
   `WindowLevel::AlwaysOnBottom` (window managers may open the player behind our fullscreen
   window); when the player exits: `Normal` + `Focus` (`ui::App::keep_player_in_front`).
 - **mpv video output:** `--vo=gpu-next,gpu,sdl,x11`. Xv/VDPAU are skipped: without a usable GPU
   (e.g. over RDP, display `:10`) mpv hung on Xv with a tiny invisible window. VLC gets
-  `--no-qt-privacy-ask` (no first-run dialog) and deinterlacing always on
+  `--no-spdif` (decode the audio; HDMI passthrough failed), `--no-qt-privacy-ask` (no first-run dialog) and deinterlacing always on
   (`--deinterlace=1 --deinterlace-mode=yadif`; disc menus and extras are often interlaced).
 - **Eject (`disc::eject`):** 1. `CDROM_LOCKDOOR` + `CDROMEJECT` ioctls. 2. If refused, unmount
   with `udisksctl` (desktop automount) and retry. 3. If still refused, run util-linux `eject`,
@@ -424,6 +451,8 @@ src/
   pictures.rs     picture decoding for the built-in viewer
   audio.rs        built-in music player (windowless mpv controlled over IPC)
   volume.rs       system volume for the remote's volume buttons (wpctl / pactl)
+  screensaver.rs  screensaver timing, title motion/colors, aerial files
+  inhibit.rs      keeps the computer from blanking the screen (D-Bus inhibit)
   makemkv.rs      makemkvcon robot-output parser, main title selection
   player.rs       builds the player commands (mpv / VLC with libmmbd)
   resume.rs       resume positions via mpv IPC
@@ -445,6 +474,7 @@ admin/            Bun + React admin web interface
   src/config.ts   config types + validation (mirror of src/config.rs)
   src/settings.ts port / listen address / allowed Host names (args, env, admin-server.json)
   src/control.ts  control socket client
+  src/aerial.ts   screensaver videos: list, sizes, downloads (apple-root-ca.pem pinned)
   src/files.ts    XDG paths, atomic JSON writes
   src/web/        React app (index.html, main.tsx, styles.css)
   test/           bun tests (config validation, API incl. security checks)
@@ -524,8 +554,9 @@ Before you consider a change done, run the formatter, linter and tests for every
 - Non-destructive: never write outside familynovice's own folders (see "Non-destructive:
   read-only media access"). Review every new file operation against this.
 - No telemetry and no unneeded network calls. Usage data and config stay on the machine.
-  (The only fetches besides the websites themselves: the website logos, by the admin
-  interface, from the configured websites when saving.)
+  (The only fetches besides the websites themselves, all by the admin interface: the website
+  logos from the configured websites when saving, and for the aerial screensaver the video
+  list from GitHub (AerialWindows/Aerial) and the chosen videos from Apple's server.)
 - Follow the XDG Base Directory spec for config, data and cache locations.
 - Stay desktop-environment agnostic (see Deployment target).
 - Add dependencies sparingly and prefer well-maintained crates and packages. Explain why a new
@@ -561,8 +592,10 @@ Before you consider a change done, run the formatter, linter and tests for every
 - **Reload is the normal case:** load the new config, validate it, swap it in live. If it's
   invalid, keep the old config and return the error.
 - **File watching** (`notify` crate, debounced) is a fallback, for example for hand-edited JSON.
-- **Restart:** the app re-executes itself (`exec` of its own binary) and keeps the window up
-  until the new instance is ready. No dependency on systemd's graphical-session support, which
+- **Restart (implemented):** admin panel → Home screen → "Restart media center"
+  (`POST /api/restart` → control socket `restart`): players/music/screensaver are stopped,
+  usage saved, then the app `exec`s its own path (after `install.sh --update` the old file is
+  `… (deleted)`, so the new one starts); the screen is dark for a moment. No dependency on systemd's graphical-session support, which
   isn't equally reliable on every desktop. Only needed for changes that can't be applied live
   (e.g. switching the playback backend).
 - **Crash recovery:** a small supervisor mode (`familynovice --supervise`, started at login)

@@ -821,3 +821,52 @@ table.buttons th {
   width: 160px;
   font-weight: 500;
 }
+
+/* ---------------------------------------------------------------- screensaver */
+
+.aerial-group h3 {
+  font-size: 15px;
+  margin: 18px 0 4px;
+}
+
+.aerial-video {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.aerial-video input {
+  margin-top: 3px;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.aerial-name small {
+  display: block;
+  color: var(--muted);
+}
+
+.aerial-size {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.aerial-size small {
+  display: block;
+  margin: 0;
+}
+
+.aerial-done {
+  color: var(--accent);
+}
+
+.aerial-error {
+  color: var(--err-text);
+  white-space: normal;
+}

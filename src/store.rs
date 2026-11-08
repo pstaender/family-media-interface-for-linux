@@ -65,6 +65,10 @@ pub fn prepare_player_cache() -> Option<PathBuf> {
             crate::player::MPV_HOME_SCRIPT_NAME,
             crate::player::mpv_home_script(),
         ),
+        (
+            crate::player::MPV_SAVER_INPUT_CONF_NAME,
+            crate::player::MPV_SAVER_INPUT_CONF.to_string(),
+        ),
     ] {
         let path = dir.join(name);
         if std::fs::read_to_string(&path).ok().as_deref() != Some(content.as_str())
@@ -90,6 +94,12 @@ pub fn logo_path(website_id: &str) -> Option<PathBuf> {
             .join("logos")
             .join(format!("{website_id}.img")),
     )
+}
+
+/// `$XDG_CACHE_HOME/familynovice/aerial`: the screensaver's aerial videos, downloaded by the
+/// admin interface (`admin/src/aerial.ts`); the media center only reads them.
+pub fn aerial_dir() -> Option<PathBuf> {
+    Some(dirs::cache_dir()?.join(APP).join("aerial"))
 }
 
 /// Socket for talking to the running mpv (`$XDG_RUNTIME_DIR`, falls back to the temp dir).

@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  MAX_AERIAL_VIDEOS,
   WEEKDAYS,
   websiteDomain,
+  type AerialQuality,
   type Config,
+  type ScreensaverMode,
   type FolderSettings,
   type Language,
   type LimitRule,
@@ -230,6 +233,7 @@ const PAGES: { id: string; label: string; icon: string; tabs: TabDef[] }[] = [
       { id: "discs", label: "Discs", icon: "disc", saves: true },
       { id: "folders", label: "Folders", icon: "folder", saves: true },
       { id: "websites", label: "Websites", icon: "world", saves: true },
+      { id: "screensaver", label: "Screensaver", icon: "moon-stars", saves: true },
       { id: "remote", label: "Remote", icon: "device-remote" },
     ],
   },
@@ -333,7 +337,12 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
   let content: React.ReactNode;
   switch (`${page.id}/${tab.id}`) {
     case "media/home":
-      content = <HomeTab config={config} setConfig={setConfig} />;
+      content = (
+        <>
+          <HomeTab config={config} setConfig={setConfig} />
+          <RestartCard status={status} reload={loadStatus} setNotice={setNotice} />
+        </>
+      );
       break;
     case "media/discs":
       content = <DiscsTab config={config} setConfig={setConfig} />;
@@ -343,6 +352,9 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
       break;
     case "media/websites":
       content = <WebsitesSection websites={config.websites} onChange={(websites) => setConfig({ ...config, websites })} />;
+      break;
+    case "media/screensaver":
+      content = <ScreensaverTab config={config} setConfig={setConfig} />;
       break;
     case "media/remote":
       content = <RemoteTab status={status} reload={loadStatus} setNotice={setNotice} />;
@@ -486,6 +498,235 @@ function HomeTab({ config, setConfig }: ConfigProps) {
         </select>
         <small className="hint">Language of the media center on the TV (and of the website window).</small>
       </label>
+    </section>
+  );
+}
+
+type AerialDownload =
+  | { status: "done"; bytes: number }
+  | { status: "waiting" }
+  | { status: "downloading"; received: number; total: number | null }
+  | { status: "error"; error: string };
+type AerialInfo = {
+  videos: { id: string; name: string; location: string; type: string; timeOfDay: string; size: number | null; fallback: boolean }[];
+  fetchedAt: number | null;
+  error: string | null;
+  downloads: Record<string, AerialDownload>;
+  freeBytes: number | null;
+};
+
+const formatBytes = (bytes: number) =>
+  bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
+
+const VIDEO_GROUPS: [string, string][] = [
+  ["landscape", "Landscapes"],
+  ["cityscape", "Cities"],
+  ["underwater", "Underwater"],
+  ["space", "Space"],
+  ["other", "Other"],
+];
+
+const SCREENSAVER_MODES: { id: ScreensaverMode; label: string; hint: string }[] = [
+  { id: "off", label: "Off", hint: "No screensaver. The computer may switch the screen off as usual." },
+  {
+    id: "title",
+    label: "Moving title",
+    hint: "The title moves slowly across a very dark screen whose color changes a little every minute. Needs nothing extra.",
+  },
+  {
+    id: "aerial",
+    label: "Aerial videos",
+    hint: "Flights over landscapes, cities, the sea and Earth from space, like on an Apple TV, in random order without sound. Up to 10 videos are downloaded once and stored on this computer.",
+  },
+];
+
+function ScreensaverTab({ config, setConfig }: ConfigProps) {
+  const s = config.screensaver;
+  const set = (patch: Partial<Config["screensaver"]>) => setConfig({ ...config, screensaver: { ...s, ...patch } });
+  const [info, setInfo] = useState<AerialInfo | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(
+    async (refresh = false) => {
+      try {
+        setInfo(await api<AerialInfo>("GET", `/api/aerial?quality=${s.aerial_quality}${refresh ? "&refresh=1" : ""}`));
+        setError(null);
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [s.aerial_quality],
+  );
+  useEffect(() => {
+    if (s.mode !== "aerial") return;
+    load();
+    // Sizes arrive in the background, downloads progress.
+    const timer = setInterval(() => load(), 4000);
+    return () => clearInterval(timer);
+  }, [s.mode, load]);
+
+  const chosen = new Set(s.aerial_videos);
+  const toggle = (id: string, on: boolean) =>
+    set({ aerial_videos: on ? [...s.aerial_videos, id] : s.aerial_videos.filter((v) => v !== id) });
+  const total = (info?.videos ?? []).filter((v) => chosen.has(v.id)).reduce((sum, v) => sum + (v.size ?? 0), 0);
+
+  const state = (id: string) => {
+    const d = info?.downloads[id];
+    if (!d) return <small className="hint">downloads after saving</small>;
+    switch (d.status) {
+      case "done":
+        return <small className="aerial-done">downloaded</small>;
+      case "waiting":
+        return <small className="hint">waiting</small>;
+      case "downloading":
+        return <small className="hint">{d.total ? `${Math.floor((d.received / d.total) * 100)} %` : formatBytes(d.received)}</small>;
+      case "error":
+        return <small className="aerial-error">failed: {d.error}</small>;
+    }
+  };
+
+  return (
+    <>
+      <section className="card">
+        <p className="hint">
+          Shown on the TV after a while without any button press, so no picture stays on the screen for long. Any
+          button ends it (and does nothing else). Never shown over a movie or a website; with music it's shown and the
+          music keeps playing. While a
+          screensaver is set up, the computer doesn't switch the screen off, so the TV keeps its picture.
+        </p>
+        {SCREENSAVER_MODES.map((m) => (
+          <label className="toggle" key={m.id}>
+            <input type="radio" name="screensaver-mode" checked={s.mode === m.id} onChange={() => set({ mode: m.id })} />
+            <span>
+              {m.label}
+              <small>{m.hint}</small>
+            </span>
+          </label>
+        ))}
+        <label className="field inline" style={{ marginTop: 10 }}>
+          <span>Start after</span>
+          <input
+            type="number"
+            min={1}
+            max={240}
+            value={s.idle_minutes}
+            disabled={s.mode === "off"}
+            onChange={(e) => set({ idle_minutes: Math.min(240, Math.max(1, Math.round(Number(e.target.value) || 1))) })}
+          />
+          <small className="hint">minutes without input</small>
+        </label>
+      </section>
+
+      {s.mode === "aerial" && (
+        <section className="card">
+          <h2>Aerial videos</h2>
+          <label className="field" style={{ marginTop: 10 }}>
+            <span>Quality</span>
+            <select value={s.aerial_quality} onChange={(e) => set({ aerial_quality: e.target.value as AerialQuality })}>
+              <option value="1080p_h264">Full HD, H.264 (works everywhere, 300–600 MB per video)</option>
+              <option value="1080p_hevc">Full HD, HEVC (smaller, 100–400 MB; needs a computer from about 2016 on)</option>
+              <option value="4k_hevc">4K, HEVC (for 4K TVs, 500–900 MB; needs a recent computer)</option>
+            </select>
+            <small className="hint">Changing it downloads the chosen videos again; the old files are deleted afterwards.</small>
+          </label>
+          <p className="hint" style={{ marginBottom: 8 }}>
+            <strong>
+              {s.aerial_videos.length} of {MAX_AERIAL_VIDEOS} chosen
+            </strong>
+            {total > 0 && ` · about ${formatBytes(total)}`}
+            {info?.freeBytes != null && ` · ${formatBytes(info.freeBytes)} free on this computer`}
+            {". "}Downloads start after "Save and apply", one after the other. Until the first one is done, the moving
+            title is shown.
+          </p>
+          {error && <div className="banner error">{error}</div>}
+          {info?.error && <div className="banner warn">{info.error}</div>}
+          {!info && !error && <p className="hint">Loading the list of videos…</p>}
+          {info &&
+            VIDEO_GROUPS.map(([type, label]) => {
+              const videos = info.videos.filter((v) => v.type === type);
+              if (videos.length === 0) return null;
+              return (
+                <div key={type} className="aerial-group">
+                  <h3>{label}</h3>
+                  {videos.map((v) => (
+                    <label className="aerial-video" key={v.id}>
+                      <input
+                        type="checkbox"
+                        checked={chosen.has(v.id)}
+                        disabled={!chosen.has(v.id) && s.aerial_videos.length >= MAX_AERIAL_VIDEOS}
+                        onChange={(e) => toggle(v.id, e.target.checked)}
+                      />
+                      <span className="aerial-name">
+                        {v.name}
+                        <small>
+                          {[v.location, v.timeOfDay].filter(Boolean).join(" · ")}
+                          {v.fallback && " · only in 4K"}
+                        </small>
+                      </span>
+                      <span className="aerial-size">
+                        {v.size ? formatBytes(v.size) : "…"}
+                        {chosen.has(v.id) && state(v.id)}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              );
+            })}
+          {/* Chosen videos that are no longer in the list. */}
+          {info &&
+            s.aerial_videos
+              .filter((id) => !info.videos.some((v) => v.id === id))
+              .map((id) => (
+                <label className="aerial-video" key={id}>
+                  <input type="checkbox" checked onChange={() => toggle(id, false)} />
+                  <span className="aerial-name">
+                    Unknown video<small>{id} · no longer in the list</small>
+                  </span>
+                </label>
+              ))}
+          {info && (
+            <p className="hint" style={{ marginTop: 14 }}>
+              Videos © Apple, downloaded from Apple's server. List of videos from the{" "}
+              <a href="https://github.com/AerialWindows/Aerial" target="_blank" rel="noreferrer">
+                AerialWindows/Aerial
+              </a>{" "}
+              project{info.fetchedAt ? `, updated ${new Date(info.fetchedAt).toLocaleDateString()}` : ""}.{" "}
+              <button className="link" onClick={() => load(true)}>
+                Update the list
+              </button>
+            </p>
+          )}
+        </section>
+      )}
+    </>
+  );
+}
+
+function RestartCard(props: { status: Status | null; reload: () => void; setNotice: (n: Notice) => void }) {
+  const [busy, setBusy] = useState(false);
+  const restart = async () => {
+    if (!confirm("Restart the media center? Whatever plays right now stops.")) return;
+    setBusy(true);
+    try {
+      await api("POST", "/api/restart");
+      props.setNotice({ kind: "ok", text: "The media center restarts now (the TV is dark for a moment)." });
+      setTimeout(props.reload, 4000);
+    } catch (e) {
+      props.setNotice({ kind: "error", text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="card">
+      <h2>Media center</h2>
+      <p className="hint">
+        Starts the media center again, e.g. after an update (<code>scripts/install.sh --update</code>) or when it doesn't react.
+        Whatever plays right now stops.
+      </p>
+      <button onClick={restart} disabled={busy || !props.status?.running}>
+        <Icon name="power" size={18} /> {busy ? "Restarting…" : "Restart media center"}
+      </button>
+      {props.status && !props.status.running && <small className="hint">The media center is not running.</small>}
     </section>
   );
 }

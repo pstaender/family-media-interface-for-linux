@@ -13,6 +13,18 @@ test("the example folders are valid", () => {
   expect(v.ok && v.config.folders.map((f) => f.id)).toEqual(["movies", "photos", "stories"]);
 });
 
+test("the screensaver settings", () => {
+  const v = validateConfig(example);
+  expect(v.ok && v.config.screensaver).toEqual({
+    mode: "aerial",
+    idle_minutes: 10,
+    aerial_quality: "1080p_hevc",
+    aerial_videos: ["B876B645-3955-420E-99DF-60139E451CF3", "6C3D54AE-0871-498A-81D0-56ED24E5FE9F"],
+  });
+  const d = validateConfig({ version: 1 });
+  expect(d.ok && d.config.screensaver).toEqual({ mode: "title", idle_minutes: 10, aerial_quality: "1080p_h264", aerial_videos: [] });
+});
+
 test("the removed extensions option is ignored", () => {
   const v = validateConfig({ version: 1, folders: [{ id: "a", name: "A", path: "/x", video: true, extensions: ["pdf"] }] });
   expect(v.ok && v.config.folders[0]).toEqual({ id: "a", name: "A", path: "/x", video: true, audio: false, images: false });
@@ -133,6 +145,19 @@ const BAD: unknown[] = [
   { version: 1, parental: { limits: [{ type: "window", until: "24:00", scope: { kind: "every_day" } }] } },
   { version: 1, parental: { limits: [{ type: "nap", scope: { kind: "every_day" } }] } },
   { version: 1, parental: { limits: [{ type: "budget", minutes: 60, scope: { kind: "every_day", x: 1 } }] } },
+  { version: 1, screensaver: { mode: "matrix" } },
+  { version: 1, screensaver: { mode: "Title" } },
+  { version: 1, screensaver: { idle_minutes: 0 } },
+  { version: 1, screensaver: { idle_minutes: 241 } },
+  { version: 1, screensaver: { idle_minutes: 1.5 } },
+  { version: 1, screensaver: { aerial_quality: "8k" } },
+  { version: 1, screensaver: { aerial_videos: ["../x"] } },
+  { version: 1, screensaver: { aerial_videos: ["a.b"] } },
+  { version: 1, screensaver: { aerial_videos: [""] } },
+  { version: 1, screensaver: { aerial_videos: ["a", "a"] } },
+  { version: 1, screensaver: { aerial_videos: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"] } },
+  { version: 1, screensaver: { aerial_videos: [1] } },
+  { version: 1, screensaver: { urls: [] } },
   "not an object",
   null,
   [],
