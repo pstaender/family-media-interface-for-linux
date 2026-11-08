@@ -40,8 +40,9 @@ struct Pad {
     y: f32,
     hat_x: f32,
     hat_y: f32,
-    /// Buttons pressed since the last frame.
+    /// Buttons pressed since the last frame, and those held down now.
     pressed: Vec<u16>,
+    held: Vec<u16>,
     /// The menu direction last frame (for edges).
     direction: (i8, i8),
 }
@@ -93,6 +94,11 @@ impl Pads {
                 let pad = self.pads.entry(event.pad).or_default();
                 if pressed {
                     pad.pressed.push(code);
+                    if !pad.held.contains(&code) {
+                        pad.held.push(code);
+                    }
+                } else {
+                    pad.held.retain(|c| *c != code);
                 }
             }
             PadInput::Axis(axis, value) => {
@@ -109,6 +115,22 @@ impl Pads {
 
     pub fn count(&self) -> usize {
         self.pads.len()
+    }
+
+    /// Left / right of all pads together (-1 … 1).
+    pub fn horizontal(&self) -> f32 {
+        self.pads
+            .values()
+            .map(|p| p.position().0)
+            .sum::<f32>()
+            .clamp(-1.0, 1.0)
+    }
+
+    /// A button (not start / select / back) is held on any pad.
+    pub fn button_held(&self) -> bool {
+        self.pads
+            .values()
+            .any(|p| p.held.iter().any(|c| !is_pause(*c) && !is_back(*c)))
     }
 
     /// Up / down of each pad (-1 … 1), in a stable order (player 1 first).
@@ -198,6 +220,7 @@ mod tests {
         };
         let a = press(&mut pads, 0x130); // BTN_SOUTH
         assert!(a.enter && !a.back && !a.pause);
+        assert!(pads.button_held(), "still held");
         let snes = press(&mut pads, 0x121); // a simple pad's face button
         assert!(snes.enter);
         let b = press(&mut pads, BTN_EAST);
@@ -206,15 +229,21 @@ mod tests {
         assert!(start.pause && !start.enter && !start.back);
         let select = press(&mut pads, BTN_SELECT);
         assert!(select.pause && select.back);
-        // Releases do nothing.
-        pads.apply(event(
-            3,
-            PadInput::Button {
-                code: 0x130,
-                pressed: false,
-            },
-        ));
+        // Releases do nothing (but end holding).
+        for code in [0x130, 0x121] {
+            pads.apply(event(
+                3,
+                PadInput::Button {
+                    code,
+                    pressed: false,
+                },
+            ));
+        }
         assert_eq!(pads.frame(), PadNav::default());
+        assert!(
+            !pads.button_held(),
+            "start / select / back don't count as held"
+        );
     }
 
     #[test]

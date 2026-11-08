@@ -124,8 +124,10 @@ enum Screen {
         text: String,
         back: Option<Browse>,
     },
-    /// The built-in Ping Pong game ("Programs" row).
+    /// The built-in Ping Pong game ("Games" row).
     Pong(Box<PongView>),
+    /// Brick Breaker ("Games" row).
+    Bricks(Box<crate::bricks::BricksView>),
     /// "Exit the media center?" (exit button / Ctrl+Q).
     ConfirmExit {
         selected: usize,
@@ -152,7 +154,7 @@ enum RowKind {
     Discs = 0,
     Folders = 1,
     Websites = 2,
-    Programs = 3,
+    Games = 3,
 }
 
 fn message(text: impl Into<String>) -> Screen {
@@ -916,7 +918,9 @@ impl App {
         // Never over a player, website or the remote setup; only if turned on.
         let blocked = settings.mode == crate::config::ScreensaverMode::Off
             || matches!(self.screen, Screen::Playing { .. } | Screen::Calibrate(_))
-            || matches!(&self.screen, Screen::Pong(v) if matches!(v.state, PongState::Playing(_)));
+            || matches!(&self.screen, Screen::Pong(v) if matches!(v.state, PongState::Playing(_)))
+            || matches!(&self.screen, Screen::Bricks(v)
+                if matches!(v.state, crate::bricks::BricksState::Playing(_)));
         if activity || blocked {
             self.last_activity = Instant::now();
             if self.saver.is_some() {
@@ -1066,6 +1070,54 @@ impl App {
             clicks: !just_opened,
         };
         if let PongAction::Quit = view.show(ui, painter, screen_rect, s, dt, &input) {
+            self.screen = Screen::Home;
+        }
+    }
+
+    /// Brick Breaker: paddle from gamepads (stick / d-pad, any button held = faster), the
+    /// keyboard (arrows or A/D, Space = faster) and the remote (arrows, OK held = faster).
+    fn bricks_screen(
+        &mut self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        screen_rect: Rect,
+        s: f32,
+        keys: &Keys,
+        nav: PadNav,
+    ) {
+        let dt = self.pong_tick.elapsed().as_secs_f32();
+        self.pong_tick = Instant::now();
+        let (keys_x, keys_fast) = ui.ctx().input(|i| {
+            let held = |k: Key| f32::from(u8::from(i.key_down(k)));
+            (
+                held(Key::ArrowRight) + held(Key::D) - held(Key::ArrowLeft) - held(Key::A),
+                i.key_down(Key::Space) || i.key_down(Key::Enter) || i.modifiers.shift,
+            )
+        });
+        let remote: f32 = self
+            .remote_down
+            .iter()
+            .filter_map(|c| self.remote_map.device_action(*c))
+            .map(|a| match a {
+                Action::Left => -1.0,
+                Action::Right => 1.0,
+                _ => 0.0,
+            })
+            .sum();
+        let input = crate::bricks::BricksInput {
+            x: self.pads.horizontal() + keys_x + remote,
+            fast: keys_fast || self.pads.button_held() || self.ok_held(ui.ctx()),
+            up: keys.up || nav.up,
+            down: keys.down || nav.down,
+            enter: keys.enter || nav.enter || nav.pause,
+            back: keys.back || nav.back,
+            pause: nav.pause,
+            clicks: !self.just_opened(),
+        };
+        let Screen::Bricks(view) = &mut self.screen else {
+            return;
+        };
+        if view.show(ui, painter, screen_rect, s, dt, &input) {
             self.screen = Screen::Home;
         }
     }
@@ -2137,7 +2189,7 @@ impl eframe::App for App {
             self.pads.apply(e);
         }
         let nav = self.pads.frame();
-        if ctx.input(|i| i.focused) && !matches!(self.screen, Screen::Pong(_)) {
+        if ctx.input(|i| i.focused) && !matches!(self.screen, Screen::Pong(_) | Screen::Bricks(_)) {
             keys.up |= nav.up;
             keys.down |= nav.down;
             keys.left |= nav.left;
@@ -2245,6 +2297,7 @@ impl eframe::App for App {
                 self.video_choose_screen(ui, &painter, screen_rect, s, &keys)
             }
             Screen::Pong(_) => self.pong_screen(ui, &painter, screen_rect, s, &keys, nav),
+            Screen::Bricks(_) => self.bricks_screen(ui, &painter, screen_rect, s, &keys, nav),
             _ => self.home_screen(ui, &painter, screen_rect, s, &keys),
         }
         self.paint_time_warning(&painter, screen_rect, s);
@@ -2276,15 +2329,16 @@ impl App {
         if !websites.is_empty() {
             rows.push(RowKind::Websites);
         }
-        let pong = &config.programs.pong;
-        if pong.enabled {
-            rows.push(RowKind::Programs);
+        let pong = &config.games.pong;
+        let games = game_tiles(&config.games);
+        if !games.is_empty() {
+            rows.push(RowKind::Games);
         }
         let row_len = |kind: RowKind| match kind {
             RowKind::Discs => 1,
             RowKind::Folders => folders.len(),
             RowKind::Websites => websites.len(),
-            RowKind::Programs => 1,
+            RowKind::Games => games.len(),
         };
 
         // The buttons at the top right ("up" from the top row): exit, and lock (only with a
@@ -2376,7 +2430,7 @@ impl App {
                 RowKind::Discs => tr!("Discs"),
                 RowKind::Folders => tr!("Folders"),
                 RowKind::Websites => tr!("Websites"),
-                RowKind::Programs => tr!("Programs"),
+                RowKind::Games => tr!("Games"),
             };
             painter.text(
                 screen_rect.min + Vec2::new(margin, y),
@@ -2451,7 +2505,10 @@ impl App {
                         };
                         paint_website_tile(painter, rect, s, &tile, focus);
                     }
-                    RowKind::Programs => paint_pong_tile(painter, rect, s, focus),
+                    RowKind::Games => match games[i] {
+                        GameTile::Pong => paint_pong_tile(painter, rect, s, focus),
+                        GameTile::Bricks => paint_bricks_tile(painter, rect, s, focus),
+                    },
                 }
                 if home && response.clicked() {
                     self.focus = (r, i);
@@ -2543,17 +2600,26 @@ impl App {
                         self.open_website(site);
                     }
                 }
-                Some(RowKind::Programs) => {
-                    let seed = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(1, |d| d.as_nanos() as u64);
-                    log::info!("starting Ping Pong");
+                Some(RowKind::Games) => {
                     self.pong_tick = Instant::now();
-                    self.screen = Screen::Pong(Box::new(PongView::new(
-                        pong.computer_level,
-                        pong.points_to_win,
-                        seed,
-                    )));
+                    match games.get(col) {
+                        Some(GameTile::Pong) => {
+                            let seed = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(1, |d| d.as_nanos() as u64);
+                            log::info!("starting Ping Pong");
+                            self.screen = Screen::Pong(Box::new(PongView::new(
+                                pong.computer_level,
+                                pong.points_to_win,
+                                seed,
+                            )));
+                        }
+                        Some(GameTile::Bricks) => {
+                            log::info!("starting Brick Breaker");
+                            self.screen = Screen::Bricks(Box::default());
+                        }
+                        None => {}
+                    }
                 }
                 _ => {}
             }
@@ -2573,6 +2639,7 @@ impl App {
             | Screen::Picture(_)
             | Screen::Music(_)
             | Screen::Pong(_)
+            | Screen::Bricks(_)
             | Screen::VideoChoose { .. } => {}
             Screen::ConfirmExit { selected } => {
                 let mut selected = *selected;
@@ -3648,6 +3715,89 @@ fn paint_folder_tile(
     let center = Pos2::new(rect.center().x, rect.min.y + rect.height() * 0.36);
     paint_folder_icon(painter, center, rect.width() * 0.58, alpha);
     paint_tile_texts(painter, rect, s, title, subtitle, alpha);
+}
+
+/// The tiles of the "Games" row, in order.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GameTile {
+    Pong,
+    Bricks,
+}
+
+fn game_tiles(games: &crate::config::GameSettings) -> Vec<GameTile> {
+    let mut tiles = Vec::new();
+    if games.pong.enabled {
+        tiles.push(GameTile::Pong);
+    }
+    if games.bricks.enabled {
+        tiles.push(GameTile::Bricks);
+    }
+    tiles
+}
+
+/// The Brick Breaker tile: rows of bricks, a paddle and the ball.
+fn paint_bricks_tile(painter: &egui::Painter, rect: Rect, s: f32, focus: f32) {
+    let rect = rect.expand(focus * 12.0 * s);
+    let radius = CornerRadius::same((18.0 * s) as u8);
+    painter.rect_filled(rect, radius, TILE_BG);
+    if focus > 0.0 {
+        painter.rect_stroke(
+            rect,
+            radius,
+            Stroke::new(4.0 * s, ACCENT.gamma_multiply(focus)),
+            StrokeKind::Outside,
+        );
+    }
+    let w = rect.width() * 0.62;
+    let field = Rect::from_center_size(
+        Pos2::new(rect.center().x, rect.min.y + rect.height() * 0.36),
+        Vec2::new(w, w * 9.0 / 16.0),
+    );
+    painter.rect_filled(
+        field,
+        CornerRadius::same((8.0 * s) as u8),
+        Color32::from_rgb(0x12, 0x18, 0x28),
+    );
+    let colors = [
+        Color32::from_rgb(0x1d, 0x4f, 0xb8),
+        Color32::from_rgb(0x3d, 0x8b, 0xff),
+        Color32::from_rgb(0x9a, 0xd8, 0xff),
+    ];
+    let bw = field.width() / 7.0;
+    for (row, color) in colors.iter().enumerate() {
+        for col in 0..7 {
+            if row == 2 && col % 3 == 1 {
+                continue;
+            }
+            let min = field.min + Vec2::new(col as f32 * bw, (row as f32 + 0.6) * bw * 0.45);
+            painter.rect_filled(
+                Rect::from_min_size(min, Vec2::new(bw, bw * 0.45)).shrink(1.5 * s),
+                CornerRadius::same(2),
+                *color,
+            );
+        }
+    }
+    painter.rect_filled(
+        Rect::from_center_size(
+            Pos2::new(field.center().x - bw * 0.6, field.max.y - bw * 0.35),
+            Vec2::new(bw * 1.6, bw * 0.22),
+        ),
+        CornerRadius::same(3),
+        TEXT,
+    );
+    painter.circle_filled(
+        Pos2::new(field.center().x + bw * 0.4, field.center().y + bw * 0.5),
+        bw * 0.16,
+        Color32::from_rgb(0xff, 0xe0, 0x6a),
+    );
+    paint_tile_texts(
+        painter,
+        rect,
+        s,
+        tr!("Brick Breaker"),
+        tr!("Clear the walls of bricks"),
+        1.0,
+    );
 }
 
 /// The Ping Pong tile: a small field with paddles and ball.

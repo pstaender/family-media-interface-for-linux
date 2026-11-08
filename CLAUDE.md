@@ -175,15 +175,29 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   all when the mode isn't aerial). List cached a week (`catalog.json`, checked again when
   read), sizes via HEAD (`sizes.json`). Admin: Home screen & media → Screensaver
   (`GET /api/aerial?quality=…[&refresh=1]`).
-- **Programs row / Ping Pong (implemented, `programs.pong` in config.json, admin: Home screen
-  & media → Programs):** "Programs" (not "Apps": that name is kept for Android apps later)
-  will also hold registered programs; for now a built-in game. `src/pong.rs`: field 16 × 9,
+- **Games row (implemented, `games` in config.json, admin: Home screen & media → Games):**
+  built-in games. "Programs" (registered programs) will be a separate tab and row later; the
+  games' old place `programs.pong` is still read (if `games` is missing) and written as
+  `games` (`Config::legacy_programs`, `validateConfig`).
+- **Ping Pong (`games.pong`):** `src/pong.rs`: field 16 × 9,
   pure `Game::step` (wall/paddle bounces, steeper off the paddle's edge, +6 % per hit up to
   15 u/s, sub-steps against tunneling, serve to whoever lost the point), computer opponent
   (`computer_level` easy/normal/hard: speed, aiming error, reaction line; tested that hard >
   normal > easy), `points_to_win` 3–21. 1 player: every input moves the left paddle; 2
   players: 1st gamepad + W/S left, 2nd gamepad + arrows/remote right. Pause: Esc/back/
   start/select. No screensaver while a game runs; usage time counts.
+- **Brick Breaker (`games.bricks`, `src/bricks.rs`):** our own game with the mechanics of
+  the classic hand-held brick games (Alleyway): field 13 × 15; paddle left/right, faster
+  while a button is held; ball served at 45° towards the paddle; only 15°/30°/45° (paddle
+  middle steep, ends flat; bricks keep the angle; paddle corner lets it fall; "snap" =
+  direction change < 0.15 s before the hit speeds it up); bricks 1/2/3 points, medium/dark
+  raise the speed level; unbreakable bricks from stage 13; from stage 5 the ceiling halves
+  the paddle (until cleared / ball lost); 8 own patterns × (still, sideways in whole-brick
+  steps, down one row per paddle hit — too low bricks vanish without points) + a bonus
+  stage after every three (ball passes through, no life lost, timer 60 s − 5 s each, ≥ 30 s,
+  clearing gives 500 + 250 each, ≤ 1500); 32 stages then over again; 5 paddles, +1 per
+  1000 points up to 10 000 (max 9); 6 paddle hits without a brick change the angle; high
+  score in memory. No names, characters, levels or look of the original.
 - **Gamepads (implemented, `src/gamepad.rs`, read in `remote.rs`):** devices with joystick/
   gamepad buttons (`EVIOCGBIT`, 0x120–0x13f) also report `PadEvent`s: buttons and the
   axes X/Y/HAT0X/HAT0Y normalized with `EVIOCGABS` (SNES-style 0…255 d-pads, Xbox/PS sticks
@@ -473,6 +487,7 @@ src/
   volume.rs       system volume for the remote's volume buttons (wpctl / pactl)
   screensaver.rs  screensaver timing, title motion/colors, aerial files
   pong.rs         the Ping Pong game (rules, computer player, menus, drawing)
+  bricks.rs       Brick Breaker (rules, stages, drawing)
   power.rs        power button: press / hold 3 s (log out) / hold 8 s (shut down); logind
   gamepad.rs      gamepad state and menu navigation (events from remote.rs)
   inhibit.rs      keeps the computer from blanking the screen (D-Bus inhibit)

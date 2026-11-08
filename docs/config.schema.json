@@ -150,10 +150,10 @@
         }
       }
     },
-    "programs": {
+    "games": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The \"Programs\" row of the home screen: built-in games (later also registered programs). Missing fields take their defaults.",
+      "description": "The \"Games\" row of the home screen: built-in games. Missing fields take their defaults.",
       "properties": {
         "pong": {
           "type": "object",
@@ -163,7 +163,7 @@
             "enabled": {
               "type": "boolean",
               "default": false,
-              "description": "Show the game in the \"Programs\" row."
+              "description": "Show the game in the \"Games\" row."
             },
             "computer_level": {
               "type": "string",
@@ -178,8 +178,25 @@
               "default": 7
             }
           }
+        },
+        "bricks": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Brick Breaker: a paddle, a ball and walls of bricks; 32 stages including bonus stages.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Show the game in the \"Games\" row."
+            }
+          }
         }
       }
+    },
+    "programs": {
+      "$ref": "#/properties/games",
+      "deprecated": true,
+      "description": "Old place of `games` (before the Games tab). Still read if `games` is missing, then written as `games`."
     }
   },
   "$defs": {

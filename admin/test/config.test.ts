@@ -25,11 +25,16 @@ test("the screensaver settings", () => {
   expect(d.ok && d.config.screensaver).toEqual({ mode: "title", idle_minutes: 10, aerial_quality: "1080p_h264", aerial_videos: [] });
 });
 
-test("the programs settings", () => {
+test("the games settings, also from their old place", () => {
   const v = validateConfig(example);
-  expect(v.ok && v.config.programs).toEqual({ pong: { enabled: true, computer_level: "easy", points_to_win: 5 } });
+  expect(v.ok && v.config.games).toEqual({ pong: { enabled: true, computer_level: "easy", points_to_win: 5 }, bricks: { enabled: true } });
   const d = validateConfig({ version: 1 });
-  expect(d.ok && d.config.programs).toEqual({ pong: { enabled: false, computer_level: "normal", points_to_win: 7 } });
+  expect(d.ok && d.config.games).toEqual({ pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false } });
+  const old = validateConfig({ version: 1, programs: { pong: { enabled: true, points_to_win: 9 } } });
+  expect(old.ok && old.config.games.pong).toEqual({ enabled: true, computer_level: "normal", points_to_win: 9 });
+  expect(old.ok && "programs" in old.config).toBe(false);
+  const both = validateConfig({ version: 1, programs: { pong: { enabled: true } }, games: { pong: { enabled: false } } });
+  expect(both.ok && both.config.games.pong.enabled).toBe(false);
 });
 
 test("the removed extensions option is ignored", () => {
@@ -165,14 +170,20 @@ const BAD: unknown[] = [
   { version: 1, screensaver: { aerial_videos: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"] } },
   { version: 1, screensaver: { aerial_videos: [1] } },
   { version: 1, screensaver: { urls: [] } },
-  { version: 1, programs: { pong: { enabled: "yes" } } },
-  { version: 1, programs: { pong: { computer_level: "expert" } } },
-  { version: 1, programs: { pong: { points_to_win: 2 } } },
-  { version: 1, programs: { pong: { points_to_win: 22 } } },
-  { version: 1, programs: { pong: { sound: true } } },
-  { version: 1, programs: { chess: {} } },
+  { version: 1, games: { pong: { enabled: "yes" } } },
+  { version: 1, games: { pong: { computer_level: "expert" } } },
+  { version: 1, games: { pong: { points_to_win: 2 } } },
+  { version: 1, games: { pong: { points_to_win: 22 } } },
+  { version: 1, games: { pong: { sound: true } } },
+  { version: 1, games: { chess: {} } },
+  { version: 1, games: [] },
+  { version: 1, games: { pong: [] } },
+  { version: 1, games: { bricks: { enabled: 1 } } },
+  { version: 1, games: { bricks: { lives: 5 } } },
+  { version: 1, games: { bricks: [] } },
   { version: 1, programs: [] },
-  { version: 1, programs: { pong: [] } },
+  { version: 1, programs: { pong: { points_to_win: 2 } } },
+  { version: 1, programs: { chess: {} } },
   { version: 1, home: [] },
   { version: 1, discs: [true] },
   { version: 1, parental: [] },

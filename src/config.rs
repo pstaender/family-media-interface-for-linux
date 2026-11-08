@@ -35,14 +35,27 @@ pub struct Config {
     #[serde(default)]
     pub screensaver: ScreensaverSettings,
     #[serde(default)]
-    pub programs: ProgramSettings,
+    pub games: GameSettings,
+    /// Where the games were before they got their own "Games" tab (`programs.pong`): still
+    /// read and moved to `games` (`parse`), never written. "Programs" (registered programs)
+    /// will be a different thing.
+    #[serde(default, rename = "programs", skip_serializing)]
+    pub legacy_programs: Option<GameSettings>,
 }
 
-/// The "Programs" row: built-in games now, registered programs later.
+/// The "Games" row: built-in games.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
-pub struct ProgramSettings {
+pub struct GameSettings {
     pub pong: PongSettings,
+    pub bricks: BricksSettings,
+}
+
+/// Brick Breaker (`src/bricks.rs`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct BricksSettings {
+    pub enabled: bool,
 }
 
 /// The built-in Ping Pong game (`src/pong.rs`).
@@ -393,7 +406,8 @@ impl Default for Config {
             websites: Vec::new(),
             parental: ParentalSettings::default(),
             screensaver: ScreensaverSettings::default(),
-            programs: ProgramSettings::default(),
+            games: GameSettings::default(),
+            legacy_programs: None,
         }
     }
 }
@@ -413,7 +427,8 @@ impl Config {
             websites: Vec::new(),
             parental: ParentalSettings::default(),
             screensaver: ScreensaverSettings::default(),
-            programs: ProgramSettings::default(),
+            games: GameSettings::default(),
+            legacy_programs: None,
         }
     }
 }
@@ -442,8 +457,15 @@ pub fn parse(text: &str) -> Result<Config, String> {
     let value: serde_json::Value =
         serde_json::from_str(text).map_err(|e| format!("invalid config: {e}"))?;
     settings_are_objects(&value)?;
-    let config: Config =
+    let has_games = value.get("games").is_some();
+    let mut config: Config =
         serde_json::from_value(value).map_err(|e| format!("invalid config: {e}"))?;
+    // The old place of the games (`programs`) counts unless `games` is there too.
+    if let Some(old) = config.legacy_programs.take()
+        && !has_games
+    {
+        config.games = old;
+    }
     validate(&config)?;
     Ok(config)
 }
@@ -459,10 +481,24 @@ fn settings_are_objects(value: &serde_json::Value) -> Result<(), String> {
         }
     }
     object(Some(value), "the config")?;
-    for key in ["home", "discs", "parental", "screensaver", "programs"] {
+    for key in [
+        "home",
+        "discs",
+        "parental",
+        "screensaver",
+        "games",
+        "programs",
+    ] {
         object(value.get(key), key)?;
     }
-    object(value.pointer("/programs/pong"), "programs.pong")?;
+    for path in [
+        "games/pong",
+        "games/bricks",
+        "programs/pong",
+        "programs/bricks",
+    ] {
+        object(value.pointer(&format!("/{path}")), &path.replace('/', "."))?;
+    }
     for list in ["folders", "websites"] {
         if let Some(Value::Array(items)) = value.get(list) {
             for (i, item) in items.iter().enumerate() {
@@ -531,8 +567,8 @@ fn validate(config: &Config) -> Result<(), String> {
         }
     }
     validate_screensaver(&config.screensaver).map_err(|e| format!("screensaver.{e}"))?;
-    if !(3..=21).contains(&config.programs.pong.points_to_win) {
-        return Err("programs.pong.points_to_win must be 3 to 21".into());
+    if !(3..=21).contains(&config.games.pong.points_to_win) {
+        return Err("games.pong.points_to_win must be 3 to 21".into());
     }
     if config.folders.len() > MAX_FOLDERS {
         return Err(format!("folders: at most {MAX_FOLDERS} folders"));
@@ -779,15 +815,28 @@ mod tests {
     }
 
     #[test]
-    fn programs() {
+    fn games() {
         let c = parse(r#"{"version":1}"#).unwrap();
-        assert!(!c.programs.pong.enabled);
-        assert_eq!(c.programs.pong.computer_level, PongLevel::Normal);
-        assert_eq!(c.programs.pong.points_to_win, 7);
+        assert!(!c.games.pong.enabled && !c.games.bricks.enabled);
+        assert_eq!(c.games.pong.computer_level, PongLevel::Normal);
+        assert_eq!(c.games.pong.points_to_win, 7);
         let config = parse(include_str!("../docs/config.example.json")).unwrap();
-        assert!(config.programs.pong.enabled);
-        assert_eq!(config.programs.pong.computer_level, PongLevel::Easy);
-        assert_eq!(config.programs.pong.points_to_win, 5);
+        assert!(config.games.pong.enabled && config.games.bricks.enabled);
+        assert_eq!(config.games.pong.computer_level, PongLevel::Easy);
+        assert_eq!(config.games.pong.points_to_win, 5);
+        // The old place (`programs`) is read, moved to `games` and not written back.
+        let old = parse(r#"{"version":1,"programs":{"pong":{"enabled":true,"points_to_win":9}}}"#)
+            .unwrap();
+        assert!(old.games.pong.enabled);
+        assert_eq!(old.games.pong.points_to_win, 9);
+        let written = serde_json::to_string(&old).unwrap();
+        assert!(!written.contains("programs") && written.contains(r#""games""#));
+        // Both: `games` wins.
+        let both = parse(
+            r#"{"version":1,"programs":{"pong":{"enabled":true}},"games":{"pong":{"enabled":false}}}"#,
+        )
+        .unwrap();
+        assert!(!both.games.pong.enabled);
     }
 
     #[test]
@@ -880,14 +929,20 @@ mod tests {
             r#"{"version":1,"screensaver":{"aerial_videos":["1","2","3","4","5","6","7","8","9","10","11"]}}"#,
             r#"{"version":1,"screensaver":{"aerial_videos":[1]}}"#,
             r#"{"version":1,"screensaver":{"urls":[]}}"#,
-            r#"{"version":1,"programs":{"pong":{"enabled":"yes"}}}"#,
-            r#"{"version":1,"programs":{"pong":{"computer_level":"expert"}}}"#,
-            r#"{"version":1,"programs":{"pong":{"points_to_win":2}}}"#,
-            r#"{"version":1,"programs":{"pong":{"points_to_win":22}}}"#,
-            r#"{"version":1,"programs":{"pong":{"sound":true}}}"#,
-            r#"{"version":1,"programs":{"chess":{}}}"#,
+            r#"{"version":1,"games":{"pong":{"enabled":"yes"}}}"#,
+            r#"{"version":1,"games":{"pong":{"computer_level":"expert"}}}"#,
+            r#"{"version":1,"games":{"pong":{"points_to_win":2}}}"#,
+            r#"{"version":1,"games":{"pong":{"points_to_win":22}}}"#,
+            r#"{"version":1,"games":{"pong":{"sound":true}}}"#,
+            r#"{"version":1,"games":{"chess":{}}}"#,
+            r#"{"version":1,"games":[]}"#,
+            r#"{"version":1,"games":{"pong":[]}}"#,
+            r#"{"version":1,"games":{"bricks":{"enabled":1}}}"#,
+            r#"{"version":1,"games":{"bricks":{"lives":5}}}"#,
+            r#"{"version":1,"games":{"bricks":[]}}"#,
             r#"{"version":1,"programs":[]}"#,
-            r#"{"version":1,"programs":{"pong":[]}}"#,
+            r#"{"version":1,"programs":{"pong":{"points_to_win":2}}}"#,
+            r#"{"version":1,"programs":{"chess":{}}}"#,
             r#"{"version":1,"home":[]}"#,
             r#"{"version":1,"discs":[true]}"#,
             r#"{"version":1,"parental":[]}"#,

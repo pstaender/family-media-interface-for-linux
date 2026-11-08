@@ -100,38 +100,49 @@ export function isAerialId(id: unknown): id is string {
 export const PONG_LEVELS = ["easy", "normal", "hard"] as const;
 export type PongLevel = (typeof PONG_LEVELS)[number];
 
-/** The "Programs" row (src/config.rs `ProgramSettings`): built-in games, later registered programs. */
-export interface ProgramSettings {
+/** The "Games" row (src/config.rs `GameSettings`): built-in games. */
+export interface GameSettings {
   pong: { enabled: boolean; computer_level: PongLevel; points_to_win: number };
+  bricks: { enabled: boolean };
 }
 
-function validatePrograms(input: unknown): ProgramSettings | string {
-  if (!isObject(input)) return "programs: must be an object";
-  const extra = unknownKey(input, ["pong"], "programs");
+function validateGames(input: unknown, where: string): GameSettings | string {
+  if (!isObject(input)) return `${where}: must be an object`;
+  const extra = unknownKey(input, ["pong", "bricks"], where);
   if (extra) return extra;
-  const programs = defaultConfig().programs;
+  const games = defaultConfig().games;
   if (input.pong !== undefined) {
     const p = input.pong;
-    if (!isObject(p)) return "programs.pong: must be an object";
-    const extraPong = unknownKey(p, ["enabled", "computer_level", "points_to_win"], "programs.pong");
+    if (!isObject(p)) return `${where}.pong: must be an object`;
+    const extraPong = unknownKey(p, ["enabled", "computer_level", "points_to_win"], `${where}.pong`);
     if (extraPong) return extraPong;
     if (p.enabled !== undefined) {
-      if (typeof p.enabled !== "boolean") return "programs.pong.enabled: must be true or false";
-      programs.pong.enabled = p.enabled;
+      if (typeof p.enabled !== "boolean") return `${where}.pong.enabled: must be true or false`;
+      games.pong.enabled = p.enabled;
     }
     if (p.computer_level !== undefined) {
       if (!(PONG_LEVELS as readonly unknown[]).includes(p.computer_level)) {
-        return `programs.pong.computer_level must be one of ${PONG_LEVELS.join(", ")}`;
+        return `${where}.pong.computer_level must be one of ${PONG_LEVELS.join(", ")}`;
       }
-      programs.pong.computer_level = p.computer_level as PongLevel;
+      games.pong.computer_level = p.computer_level as PongLevel;
     }
     if (p.points_to_win !== undefined) {
       const n = p.points_to_win;
-      if (typeof n !== "number" || !Number.isInteger(n) || n < 3 || n > 21) return "programs.pong.points_to_win must be 3 to 21";
-      programs.pong.points_to_win = n;
+      if (typeof n !== "number" || !Number.isInteger(n) || n < 3 || n > 21) return `${where}.pong.points_to_win must be 3 to 21`;
+      games.pong.points_to_win = n;
     }
   }
-  return programs;
+  if (input.bricks !== undefined) {
+    const b = input.bricks;
+    if (!isObject(b)) return `${where}.bricks: must be an object`;
+    const extraBricks = unknownKey(b, ["enabled"], `${where}.bricks`);
+    if (extraBricks) return extraBricks;
+    if (b.enabled !== undefined) {
+      if (typeof b.enabled !== "boolean") return `${where}.bricks.enabled: must be true or false`;
+      games.bricks.enabled = b.enabled;
+    }
+  }
+  return games;
 }
 
 export interface Config {
@@ -142,7 +153,7 @@ export interface Config {
   folders: FolderSettings[];
   websites: WebsiteSettings[];
   screensaver: ScreensaverSettings;
-  programs: ProgramSettings;
+  games: GameSettings;
 }
 
 export function defaultConfig(): Config {
@@ -159,7 +170,7 @@ export function defaultConfig(): Config {
     folders: [],
     websites: [],
     screensaver: { mode: "title", idle_minutes: 10, aerial_quality: "1080p_h264", aerial_videos: [] },
-    programs: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 } },
+    games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false } },
   };
 }
 
@@ -454,7 +465,7 @@ function languages(value: unknown, field: string): string[] | string {
 /** Validate untrusted input and fill in defaults. */
 export function validateConfig(input: unknown): Validation {
   if (!isObject(input)) return { ok: false, error: "config must be an object" };
-  const top = unknownKey(input, ["version", "home", "parental", "discs", "folders", "websites", "screensaver", "programs"], "config");
+  const top = unknownKey(input, ["version", "home", "parental", "discs", "folders", "websites", "screensaver", "games", "programs"], "config");
   if (top) return { ok: false, error: top };
   if (input.version !== CONFIG_VERSION) {
     return {
@@ -521,10 +532,16 @@ export function validateConfig(input: unknown): Validation {
     if (typeof parental === "string") return { ok: false, error: parental };
     config.parental = parental;
   }
+  if (input.games !== undefined) {
+    const games = validateGames(input.games, "games");
+    if (typeof games === "string") return { ok: false, error: games };
+    config.games = games;
+  }
+  // Old place of the games (before the Games tab): read if `games` is missing, never written.
   if (input.programs !== undefined) {
-    const programs = validatePrograms(input.programs);
-    if (typeof programs === "string") return { ok: false, error: programs };
-    config.programs = programs;
+    const old = validateGames(input.programs, "programs");
+    if (typeof old === "string") return { ok: false, error: old };
+    if (input.games === undefined) config.games = old;
   }
   if (input.screensaver !== undefined) {
     const s = validateScreensaver(input.screensaver);

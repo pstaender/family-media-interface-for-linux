@@ -425,7 +425,7 @@ impl PongView {
 
 /// A vertical menu; returns the selection and the chosen item (OK or a click).
 #[allow(clippy::too_many_arguments)]
-fn menu(
+pub(crate) fn menu(
     ui: &egui::Ui,
     painter: &egui::Painter,
     screen: Rect,
@@ -481,7 +481,7 @@ fn menu(
     (selected, chosen)
 }
 
-fn paint_hint(painter: &egui::Painter, screen: Rect, s: f32, text: &str) {
+pub(crate) fn paint_hint(painter: &egui::Painter, screen: Rect, s: f32, text: &str) {
     painter.text(
         Pos2::new(screen.center().x, screen.max.y - 70.0 * s),
         Align2::CENTER_CENTER,
@@ -491,7 +491,7 @@ fn paint_hint(painter: &egui::Painter, screen: Rect, s: f32, text: &str) {
     );
 }
 
-fn dim(painter: &egui::Painter, screen: Rect) {
+pub(crate) fn dim(painter: &egui::Painter, screen: Rect) {
     painter.rect_filled(screen, 0.0, Color32::from_black_alpha(170));
 }
 

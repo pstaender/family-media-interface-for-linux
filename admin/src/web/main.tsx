@@ -238,7 +238,7 @@ const PAGES: { id: string; label: string; icon: string; tabs: TabDef[] }[] = [
       { id: "folders", label: "Folders", icon: "folder", saves: true },
       { id: "websites", label: "Websites", icon: "world", saves: true },
       { id: "screensaver", label: "Screensaver", icon: "moon-stars", saves: true },
-      { id: "programs", label: "Programs", icon: "device-gamepad-2", saves: true },
+      { id: "games", label: "Games", icon: "device-gamepad-2", saves: true },
       { id: "remote", label: "Remote", icon: "device-remote" },
     ],
   },
@@ -358,8 +358,8 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
     case "media/websites":
       content = <WebsitesSection websites={config.websites} onChange={(websites) => setConfig({ ...config, websites })} />;
       break;
-    case "media/programs":
-      content = <ProgramsTab config={config} setConfig={setConfig} />;
+    case "media/games":
+      content = <GamesTab config={config} setConfig={setConfig} />;
       break;
     case "media/screensaver":
       content = <ScreensaverTab config={config} setConfig={setConfig} />;
@@ -511,26 +511,25 @@ function HomeTab({ config, setConfig }: ConfigProps) {
   );
 }
 
-function ProgramsTab({ config, setConfig }: ConfigProps) {
-  const pong = config.programs.pong;
+function GamesTab({ config, setConfig }: ConfigProps) {
+  const { pong, bricks } = config.games;
   const setPong = (patch: Partial<typeof pong>) =>
-    setConfig({ ...config, programs: { ...config.programs, pong: { ...pong, ...patch } } });
+    setConfig({ ...config, games: { ...config.games, pong: { ...pong, ...patch } } });
+  const setBricks = (patch: Partial<typeof bricks>) =>
+    setConfig({ ...config, games: { ...config.games, bricks: { ...bricks, ...patch } } });
   return (
     <>
       <section className="card">
         <p className="hint">
-          Programs appear in the "Programs" row of the home screen. For now there is a built-in game; programs
-          installed on this computer can be added here later.
+          Games appear in the "Games" row of the home screen. They are played with USB gamepads (SNES, Xbox or
+          PlayStation style; just plug them in), the remote's arrows or the keyboard, and count as usage time like
+          everything else.
         </p>
         <label className="toggle">
           <input type="checkbox" checked={pong.enabled} onChange={(e) => setPong({ enabled: e.target.checked })} />
           <span>
             Ping Pong
-            <small>
-              For 1 player (against the computer) or 2 players against each other. Played with USB gamepads (SNES,
-              Xbox or PlayStation style; just plug them in), the remote's arrows or the keyboard (W/S and the arrow
-              keys). Counts as usage time like everything else.
-            </small>
+            <small>For 1 player (against the computer) or 2 players against each other.</small>
           </span>
         </label>
         <label className="field" style={{ marginTop: 10 }}>
@@ -555,6 +554,18 @@ function ProgramsTab({ config, setConfig }: ConfigProps) {
             disabled={!pong.enabled}
             onChange={(e) => setPong({ points_to_win: Math.min(21, Math.max(3, Math.round(Number(e.target.value) || 7))) })}
           />
+        </label>
+      </section>
+      <section className="card">
+        <label className="toggle">
+          <input type="checkbox" checked={bricks.enabled} onChange={(e) => setBricks({ enabled: e.target.checked })} />
+          <span>
+            Brick Breaker
+            <small>
+              For 1 player: bounce the ball off the paddle and clear the walls of bricks. 24 stages (some with moving
+              walls) and 8 bonus stages; darker bricks give more points and make the ball faster.
+            </small>
+          </span>
         </label>
       </section>
     </>

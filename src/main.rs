@@ -1,4 +1,5 @@
 mod audio;
+mod bricks;
 mod config;
 mod control;
 mod cover;

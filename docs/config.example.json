@@ -110,11 +110,14 @@
       "6C3D54AE-0871-498A-81D0-56ED24E5FE9F"
     ]
   },
-  "programs": {
+  "games": {
     "pong": {
       "enabled": true,
       "computer_level": "easy",
       "points_to_win": 5
+    },
+    "bricks": {
+      "enabled": true
     }
   }
 }
