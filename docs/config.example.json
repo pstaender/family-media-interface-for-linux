@@ -75,6 +75,9 @@
           "enabled": true,
           "start_level": 2,
           "sound": false
+        },
+        "dodger": {
+          "enabled": true
         }
       },
       "limits": [

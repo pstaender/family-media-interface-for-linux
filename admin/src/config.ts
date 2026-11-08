@@ -110,11 +110,12 @@ export interface GameSettings {
   pong: { enabled: boolean; computer_level: PongLevel; points_to_win: number };
   bricks: { enabled: boolean; lives: number; sound: boolean };
   blocks: { enabled: boolean; start_level: number; sound: boolean };
+  dodger: { enabled: boolean };
 }
 
 function validateGames(input: unknown, where: string): GameSettings | string {
   if (!isObject(input)) return `${where}: must be an object`;
-  const extra = unknownKey(input, ["pong", "bricks", "blocks"], where);
+  const extra = unknownKey(input, ["pong", "bricks", "blocks", "dodger"], where);
   if (extra) return extra;
   const games = newHomeScreen("x", "x").games;
   if (input.pong !== undefined) {
@@ -152,6 +153,16 @@ function validateGames(input: unknown, where: string): GameSettings | string {
       const n = b.lives;
       if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > 99) return `${where}.bricks.lives must be 1 to 99`;
       games.bricks.lives = n;
+    }
+  }
+  if (input.dodger !== undefined) {
+    const d = input.dodger;
+    if (!isObject(d)) return `${where}.dodger: must be an object`;
+    const extraDodger = unknownKey(d, ["enabled"], `${where}.dodger`);
+    if (extraDodger) return extraDodger;
+    if (d.enabled !== undefined) {
+      if (typeof d.enabled !== "boolean") return `${where}.dodger.enabled: must be true or false`;
+      games.dodger.enabled = d.enabled;
     }
   }
   if (input.blocks !== undefined) {
@@ -210,7 +221,7 @@ export function newHomeScreen(id: string, name: string): HomeScreen {
     discs: { enabled: true, allow_disc_menu: true, audio_languages: [], subtitle_languages: [] },
     folders: [],
     websites: [],
-    games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false }, blocks: { enabled: false, start_level: 0, sound: false } },
+    games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false }, blocks: { enabled: false, start_level: 0, sound: false }, dodger: { enabled: false } },
     limits: [],
   };
 }

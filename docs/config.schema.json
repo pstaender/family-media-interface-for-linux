@@ -490,6 +490,18 @@
                 }
               }
             },
+            "dodger": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Star Dodger: steer a ball past the balls coming down; it gets faster every 6 balls.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Show the game in the \"Games\" row."
+                }
+              }
+            },
             "blocks": {
               "type": "object",
               "additionalProperties": false,

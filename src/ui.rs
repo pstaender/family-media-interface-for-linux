@@ -131,6 +131,8 @@ enum Screen {
     Bricks(Box<crate::bricks::BricksView>),
     /// Block Stacker ("Games" row).
     Blocks(Box<crate::blocks::BlocksView>),
+    /// Star Dodger ("Games" row).
+    Dodger(Box<crate::dodger::DodgerView>),
     /// "Exit the media center?" (exit button / Ctrl+Q).
     ConfirmExit {
         selected: usize,
@@ -686,7 +688,7 @@ impl App {
         }
         let in_game = matches!(
             self.screen,
-            Screen::Pong(_) | Screen::Bricks(_) | Screen::Blocks(_)
+            Screen::Pong(_) | Screen::Bricks(_) | Screen::Blocks(_) | Screen::Dodger(_)
         );
         let idle = self.last_mouse.elapsed();
         if crate::gamepad::hide_cursor(in_game, self.pads.count(), idle) {
@@ -761,6 +763,7 @@ impl App {
             Screen::Pong(_) => Some(Activity::new(Category::Game, "Ping Pong", "")),
             Screen::Bricks(_) => Some(Activity::new(Category::Game, "Brick Breaker", "")),
             Screen::Blocks(_) => Some(Activity::new(Category::Game, "Block Stacker", "")),
+            Screen::Dodger(_) => Some(Activity::new(Category::Game, "Star Dodger", "")),
             _ => None,
         }
     }
@@ -1027,7 +1030,9 @@ impl App {
             || matches!(&self.screen, Screen::Bricks(v)
                 if matches!(v.state, crate::bricks::BricksState::Playing(_)))
             || matches!(&self.screen, Screen::Blocks(v)
-                if matches!(v.state, crate::blocks::BlocksState::Playing(_)));
+                if matches!(v.state, crate::blocks::BlocksState::Playing(_)))
+            || matches!(&self.screen, Screen::Dodger(v)
+                if matches!(v.state, crate::dodger::DodgerState::Playing(_)));
         if activity || blocked {
             self.last_activity = Instant::now();
             if self.saver.is_some() {
@@ -1177,6 +1182,49 @@ impl App {
             clicks: !just_opened,
         };
         if let PongAction::Quit = view.show(ui, painter, screen_rect, s, dt, &input) {
+            self.screen = Screen::Home;
+        }
+    }
+
+    /// Star Dodger: left / right from gamepads, keyboard (arrows, A/D) and the remote.
+    fn dodger_screen(
+        &mut self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        screen_rect: Rect,
+        s: f32,
+        keys: &Keys,
+        nav: PadNav,
+    ) {
+        let dt = self.pong_tick.elapsed().as_secs_f32();
+        self.pong_tick = Instant::now();
+        let keys_x = ui.ctx().input(|i| {
+            let held = |k: Key| f32::from(u8::from(i.key_down(k)));
+            held(Key::ArrowRight) + held(Key::D) - held(Key::ArrowLeft) - held(Key::A)
+        });
+        let remote: f32 = self
+            .remote_down
+            .iter()
+            .filter_map(|c| self.remote_map.device_action(*c))
+            .map(|a| match a {
+                Action::Left => -1.0,
+                Action::Right => 1.0,
+                _ => 0.0,
+            })
+            .sum();
+        let input = crate::dodger::DodgerInput {
+            x: self.pads.horizontal() + keys_x + remote,
+            up: keys.up || nav.up,
+            down: keys.down || nav.down,
+            enter: keys.enter || nav.enter || nav.pause,
+            back: keys.back || nav.back,
+            pause: nav.pause,
+            clicks: !self.just_opened(),
+        };
+        let Screen::Dodger(view) = &mut self.screen else {
+            return;
+        };
+        if view.show(ui, painter, screen_rect, s, dt, &input) {
             self.screen = Screen::Home;
         }
     }
@@ -2470,7 +2518,7 @@ impl eframe::App for App {
         if ctx.input(|i| i.focused)
             && !matches!(
                 self.screen,
-                Screen::Pong(_) | Screen::Bricks(_) | Screen::Blocks(_)
+                Screen::Pong(_) | Screen::Bricks(_) | Screen::Blocks(_) | Screen::Dodger(_)
             )
         {
             keys.up |= nav.up;
@@ -2584,6 +2632,7 @@ impl eframe::App for App {
             Screen::Pong(_) => self.pong_screen(ui, &painter, screen_rect, s, &keys, nav),
             Screen::Bricks(_) => self.bricks_screen(ui, &painter, screen_rect, s, &keys, nav),
             Screen::Blocks(_) => self.blocks_screen(ui, &painter, screen_rect, s, &keys, nav),
+            Screen::Dodger(_) => self.dodger_screen(ui, &painter, screen_rect, s, &keys, nav),
             _ => self.home_screen(ui, &painter, screen_rect, s, &keys),
         }
         self.paint_time_warning(&painter, screen_rect, s);
@@ -2802,6 +2851,7 @@ impl App {
                         GameTile::Pong => paint_pong_tile(painter, rect, s, focus),
                         GameTile::Bricks => paint_bricks_tile(painter, rect, s, focus),
                         GameTile::Blocks => paint_blocks_tile(painter, rect, s, focus),
+                        GameTile::Dodger => paint_dodger_tile(painter, rect, s, focus),
                     },
                 }
                 if home && response.clicked() {
@@ -2940,6 +2990,14 @@ impl App {
                                 b.lives, b.sound,
                             )));
                         }
+                        Some(GameTile::Dodger) => {
+                            let seed = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(1, |d| d.as_nanos() as u64);
+                            log::info!("starting Star Dodger");
+                            self.screen =
+                                Screen::Dodger(Box::new(crate::dodger::DodgerView::new(seed)));
+                        }
                         Some(GameTile::Blocks) => {
                             log::info!("starting Block Stacker");
                             let b = &config.games.blocks;
@@ -2975,6 +3033,7 @@ impl App {
             | Screen::Pong(_)
             | Screen::Bricks(_)
             | Screen::Blocks(_)
+            | Screen::Dodger(_)
             | Screen::VideoChoose { .. } => {}
             Screen::SwitchHome { selected } => {
                 let count = config.screens.len() + 1;
@@ -4139,6 +4198,7 @@ enum GameTile {
     Pong,
     Bricks,
     Blocks,
+    Dodger,
 }
 
 fn game_tiles(games: &crate::config::GameSettings) -> Vec<GameTile> {
@@ -4151,6 +4211,9 @@ fn game_tiles(games: &crate::config::GameSettings) -> Vec<GameTile> {
     }
     if games.blocks.enabled {
         tiles.push(GameTile::Blocks);
+    }
+    if games.dodger.enabled {
+        tiles.push(GameTile::Dodger);
     }
     tiles
 }
@@ -4176,6 +4239,73 @@ fn typed_letters(ctx: &egui::Context) -> (Vec<char>, bool, bool) {
 }
 
 /// The Block Stacker tile: a stack of round tiles and a falling piece.
+/// The Star Dodger tile: stars, a falling ball and the striped ball.
+fn paint_dodger_tile(painter: &egui::Painter, rect: Rect, s: f32, focus: f32) {
+    let rect = rect.expand(focus * 12.0 * s);
+    let radius = CornerRadius::same((18.0 * s) as u8);
+    painter.rect_filled(rect, radius, TILE_BG);
+    if focus > 0.0 {
+        painter.rect_stroke(
+            rect,
+            radius,
+            Stroke::new(4.0 * s, ACCENT.gamma_multiply(focus)),
+            StrokeKind::Outside,
+        );
+    }
+    let w = rect.width() * 0.62;
+    let field = Rect::from_center_size(
+        Pos2::new(rect.center().x, rect.min.y + rect.height() * 0.36),
+        Vec2::new(w, w * 3.0 / 4.0),
+    );
+    painter.rect_filled(field, 0.0, Color32::from_rgb(0x0d, 0x06, 0x24));
+    let u = field.width() / 32.0;
+    let dot = |x: f32, y: f32, color| {
+        painter.rect_filled(
+            Rect::from_min_size(field.min + Vec2::new(x * u, y * u), Vec2::splat(u)),
+            0.0,
+            color,
+        );
+    };
+    for (x, y) in [
+        (3.0, 3.0),
+        (27.0, 5.0),
+        (12.0, 9.0),
+        (29.0, 15.0),
+        (5.0, 18.0),
+        (18.0, 2.0),
+    ] {
+        dot(x, y, Color32::from_rgb(0xff, 0xf6, 0xe0));
+    }
+    let ball = |cx: f32, cy: f32, r: i32, color: &dyn Fn(i32) -> Color32| {
+        for dy in -r..=r {
+            let half = crate::dodger::row_half(r, dy);
+            painter.rect_filled(
+                Rect::from_min_size(
+                    field.min + Vec2::new((cx - half as f32) * u, (cy + dy as f32) * u),
+                    Vec2::new((2 * half + 1) as f32 * u, u),
+                ),
+                0.0,
+                color(dy),
+            );
+        }
+    };
+    ball(20.0, 8.0, 3, &|_| Color32::from_rgb(0xff, 0x4f, 0xa8));
+    let stripes = [
+        Color32::WHITE,
+        Color32::from_rgb(0xff, 0xe6, 0x4a),
+        Color32::from_rgb(0x35, 0xd8, 0xff),
+    ];
+    ball(11.0, 19.0, 4, &|dy| stripes[((dy + 8) / 2) as usize % 3]);
+    paint_tile_texts(
+        painter,
+        rect,
+        s,
+        tr!("Star Dodger"),
+        tr!("Dodge the falling balls"),
+        1.0,
+    );
+}
+
 fn paint_blocks_tile(painter: &egui::Painter, rect: Rect, s: f32, focus: f32) {
     let rect = rect.expand(focus * 12.0 * s);
     let radius = CornerRadius::same((18.0 * s) as u8);

@@ -663,7 +663,7 @@ function HomeTab({ config, setConfig }: ScreenProps) {
 }
 
 function GamesTab({ config, setConfig }: ScreenProps) {
-  const { pong, bricks, blocks } = config.games;
+  const { pong, bricks, blocks, dodger } = config.games;
   const setBlocks = (patch: Partial<typeof blocks>) =>
     setConfig({ ...config, games: { ...config.games, blocks: { ...blocks, ...patch } } });
   const setPong = (patch: Partial<typeof pong>) =>
@@ -742,6 +742,19 @@ function GamesTab({ config, setConfig }: ScreenProps) {
           <span>
             Sound
             <small>Short beeps for the ball, bricks and lost paddles. Can also be switched on the TV in the game's menu.</small>
+          </span>
+        </label>
+      </section>
+      <section className="card">
+        <label className="toggle">
+          <input
+            type="checkbox"
+            checked={dodger.enabled}
+            onChange={(e) => setConfig({ ...config, games: { ...config.games, dodger: { enabled: e.target.checked } } })}
+          />
+          <span>
+            Star Dodger
+            <small>For 1 player: steer the ball left and right past the balls coming down. It gets faster every 6 balls; one hit ends the game.</small>
           </span>
         </label>
       </section>

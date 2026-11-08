@@ -229,6 +229,13 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
 - **High scores (`src/highscores.rs`, `$XDG_DATA_HOME/curator/highscores.json`):** top 10 per
   game (Brick Breaker, Block Stacker endless), shared by all home screens. Name entry: up /
   down letter, left / right position, OK done; keyboards type; starts with the last name.
+- **Star Dodger (`games.dodger`, `src/dodger.rs`):** our own game: 288 × 216 big-pixel
+  picture at a whole number of screen pixels per game pixel, objects move in screen pixels
+  (smooth), all drawn in code. Striped ball left/right past single balls coming down (each
+  in another place and color than the one before; every 3rd aimed at the player); +1 level
+  every 6 balls passed (1–9, fall speed 90 + 18 per level); one hit ends it; `m:ss.t`
+  top right, level digit bottom right; three star layers + moving grid. Not a copy of any
+  original's name or screens.
 - **Gamepads (implemented, `src/gamepad.rs`, read in `remote.rs`):** devices with joystick/
   gamepad buttons (`EVIOCGBIT`, 0x120–0x13f) also report `PadEvent`s: buttons and the
   axes X/Y/HAT0X/HAT0Y normalized with `EVIOCGABS` (SNES-style 0…255 d-pads, Xbox/PS sticks
@@ -520,6 +527,7 @@ src/
   screensaver.rs  screensaver timing, title motion/colors, aerial files
   pong.rs         the Ping Pong game (rules, computer player, menus, drawing)
   bricks.rs       Brick Breaker (rules, stages, drawing)
+  dodger.rs       Star Dodger (rules, starfield, pixel drawing)
   power.rs        power button: press / hold 3 s (log out) / hold 8 s (shut down); logind
   gamepad.rs      gamepad state and menu navigation (events from remote.rs)
   inhibit.rs      keeps the computer from blanking the screen (D-Bus inhibit)

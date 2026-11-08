@@ -241,6 +241,14 @@ pub struct GameSettings {
     pub pong: PongSettings,
     pub bricks: BricksSettings,
     pub blocks: BlocksSettings,
+    pub dodger: DodgerSettings,
+}
+
+/// Star Dodger (`src/dodger.rs`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct DodgerSettings {
+    pub enabled: bool,
 }
 
 /// Block Stacker (`src/blocks.rs`).
@@ -689,7 +697,7 @@ fn screen_sections_are_objects(value: &serde_json::Value, at: &str) -> Result<()
     for key in ["home", "discs", "games"] {
         object(value.get(key), &format!("{at}{key}"))?;
     }
-    for path in ["games/pong", "games/bricks", "games/blocks"] {
+    for path in ["games/pong", "games/bricks", "games/blocks", "games/dodger"] {
         object(
             value.pointer(&format!("/{path}")),
             &format!("{at}{}", path.replace('/', ".")),
@@ -1323,6 +1331,9 @@ mod tests {
             r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"games":{"blocks":{"enabled":1}}}]}"#,
             r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"games":{"blocks":{"speed":1}}}]}"#,
             r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"games":{"blocks":[]}}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"games":{"dodger":[]}}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"games":{"dodger":{"enabled":1}}}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"games":{"dodger":{"speed":1}}}]}"#,
             r#"{"version":2}"#,
             r#"{"version":2,"home_screens":[]}"#,
             r#"{"version":2,"home_screens":[{"id":"a","name":"A"}]}"#,

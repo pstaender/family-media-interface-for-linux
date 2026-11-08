@@ -27,9 +27,9 @@ test("the screensaver settings", () => {
 
 test("the games settings, also from their old place", () => {
   const v = validateConfig(example);
-  expect(v.ok && v.config.home_screens[0]!.games).toEqual({ pong: { enabled: true, computer_level: "easy", points_to_win: 5 }, bricks: { enabled: true, lives: 3, sound: true }, blocks: { enabled: true, start_level: 2, sound: false } });
+  expect(v.ok && v.config.home_screens[0]!.games).toEqual({ pong: { enabled: true, computer_level: "easy", points_to_win: 5 }, bricks: { enabled: true, lives: 3, sound: true }, blocks: { enabled: true, start_level: 2, sound: false }, dodger: { enabled: true } });
   const d = validateConfig({ version: 1 });
-  expect(d.ok && d.config.home_screens[0]!.games).toEqual({ pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false }, blocks: { enabled: false, start_level: 0, sound: false } });
+  expect(d.ok && d.config.home_screens[0]!.games).toEqual({ pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false }, blocks: { enabled: false, start_level: 0, sound: false }, dodger: { enabled: false } });
   const old = validateConfig({ version: 1, programs: { pong: { enabled: true, points_to_win: 9 } } });
   expect(old.ok && old.config.home_screens[0]!.games.pong).toEqual({ enabled: true, computer_level: "normal", points_to_win: 9 });
   expect(old.ok && "programs" in old.config).toBe(false);
@@ -258,6 +258,9 @@ const BAD: unknown[] = [
   { version: 2, home_screens: [{ id: "a", name: "A", default: true, games: { blocks: { enabled: 1 } } }] },
   { version: 2, home_screens: [{ id: "a", name: "A", default: true, games: { blocks: { speed: 1 } } }] },
   { version: 2, home_screens: [{ id: "a", name: "A", default: true, games: { blocks: [] } }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, games: { dodger: [] } }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, games: { dodger: { enabled: 1 } } }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, games: { dodger: { speed: 1 } } }] },
   { version: 2 },
   { version: 2, home_screens: [] },
   { version: 2, home_screens: [{ id: "a", name: "A" }] },

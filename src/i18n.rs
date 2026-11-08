@@ -370,6 +370,13 @@ const DE: &[(&str, &str)] = &[
     ("Previous", "Zurück (Titel)"),
     ("Volume up", "Lauter"),
     ("Games", "Spiele"),
+    ("Star Dodger", "Sternenflitzer"),
+    ("Dodge the falling balls", "Weiche den fallenden Bällen aus"),
+    (
+        "Left / right: dodge the balls",
+        "Links / rechts: den Bällen ausweichen",
+    ),
+    ("{time} · level {level}", "{time} · Level {level}"),
     ("Block Stacker", "Blockstapler"),
     ("1 player", "1 Person"),
     ("Start level: {n}", "Startlevel: {n}"),
