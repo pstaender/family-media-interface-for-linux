@@ -77,6 +77,8 @@ pub fn handle(line: &str, control: &Control) -> Value {
                 "used_week_secs": tracker.used_this_week(Local::now().date_naive()),
                 "unlocked_until": tracker.stored.unlocked_until,
                 "remote": remote_status(&control.remote_devices),
+                // So the admin panel can tell this one from other (stray) media centers.
+                "pid": std::process::id(),
             })
         }
         Some("unlock") => {

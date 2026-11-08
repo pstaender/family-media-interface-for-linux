@@ -12,6 +12,7 @@ const requests: Record<string, unknown>[] = [];
 let fakeMediaCenter: NetServer;
 let server: ReturnType<typeof createAdminServer>;
 let base: string;
+let runningPids: number[] = [4242];
 
 beforeAll(async () => {
   // Fake media center control socket: records commands, answers ok.
@@ -22,14 +23,22 @@ beforeAll(async () => {
         const { command } = request;
         received.push(command);
         requests.push(request);
-        const status = { ok: true, config_version: 1, config_error: null, locked: false, lock_reason: null, remaining_secs: 600, used_today_secs: 1200, used_week_secs: 5400, unlocked_until: null };
+        const status = { ok: true, pid: 4242, config_version: 1, config_error: null, locked: false, lock_reason: null, remaining_secs: 600, used_today_secs: 1200, used_week_secs: 5400, unlocked_until: null };
         socket.write(`${JSON.stringify(command === "status" ? status : { ok: true })}\n`);
       }
     });
   });
   await new Promise<void>((resolve) => fakeMediaCenter.listen(join(runtimeDir, "familynovice.sock"), resolve));
   // Own logo/aerial folders: the tests must never touch the real cache.
-  server = createAdminServer({ configDir, runtimeDir, port: 0, hostname: "127.0.0.1", logoDir: join(configDir, "logos"), aerialDir: join(configDir, "aerial") });
+  server = createAdminServer({
+    configDir,
+    runtimeDir,
+    port: 0,
+    hostname: "127.0.0.1",
+    logoDir: join(configDir, "logos"),
+    aerialDir: join(configDir, "aerial"),
+    listMediaCenters: async () => runningPids,
+  });
   base = `http://127.0.0.1:${server.port}`;
 });
 
@@ -175,6 +184,7 @@ test("saves folders", async () => {
 test("status comes from the media center", async () => {
   expect((await call("GET", "/api/status")).data).toEqual({
     running: true,
+    extraInstances: 0,
     configError: null,
     locked: false,
     lockReason: null,
@@ -184,6 +194,13 @@ test("status comes from the media center", async () => {
     unlockedUntil: null,
     remote: null,
   });
+});
+
+test("warns about media centers that don't get the changes", async () => {
+  runningPids = [4242, 5555];
+  expect((await call("GET", "/api/status")).data.extraInstances).toBe(1);
+  runningPids = [4242];
+  expect((await call("GET", "/api/status")).data.extraInstances).toBe(0);
 });
 
 test("PIN: 4-8 digits, stored only as hash, never sent to the browser, kept on save", async () => {

@@ -195,6 +195,8 @@ function LoginPage({ onDone }: { onDone: () => void }) {
 type Notice = { kind: "ok" | "warn" | "error"; text: string } | null;
 type Status = {
   running: boolean;
+  /** Media centers of this user besides the one connected to the admin panel. */
+  extraInstances?: number;
   configError?: string | null;
   error?: string | null;
   locked?: boolean;
@@ -424,6 +426,7 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
           </div>
         )}
         {notice && <div className={`banner ${notice.kind}`}>{notice.text}</div>}
+        <ExtraInstancesBanner status={status} reload={loadStatus} setNotice={setNotice} />
         {content}
         {tab.saves && (
           <div className="savebar">
@@ -698,6 +701,39 @@ function ScreensaverTab({ config, setConfig }: ConfigProps) {
         </section>
       )}
     </>
+  );
+}
+
+/** More than one media center runs: the one on the TV may not get the changes. */
+function ExtraInstancesBanner(props: { status: Status | null; reload: () => void; setNotice: (n: Notice) => void }) {
+  const [busy, setBusy] = useState(false);
+  const extra = props.status?.extraInstances ?? 0;
+  if (extra === 0) return null;
+  const stop = async () => {
+    setBusy(true);
+    try {
+      const r = await api<{ ended: number }>("POST", "/api/instances/stop-extra");
+      props.setNotice({ kind: "ok", text: `Ended ${r.ended === 1 ? "the extra media center" : `${r.ended} extra media centers`}.` });
+      setTimeout(props.reload, 1500);
+    } catch (e) {
+      props.setNotice({ kind: "error", text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const total = extra + (props.status?.running ? 1 : 0);
+  return (
+    <div className="banner warn">
+      <strong>{total > 1 ? `${total} media centers are running.` : "A media center is running that the admin panel can't reach."}</strong>{" "}
+      The one on the TV may not get your changes.{" "}
+      {props.status?.running ? (
+        <button onClick={stop} disabled={busy}>
+          {busy ? "Ending…" : extra === 1 ? "End the extra one" : "End the extra ones"}
+        </button>
+      ) : (
+        "Log the media center account out and in again, or restart the computer."
+      )}
+    </div>
   );
 }
 

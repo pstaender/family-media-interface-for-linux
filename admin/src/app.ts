@@ -23,6 +23,7 @@ import { NOT_RUNNING, sendCommand } from "./control";
 import { readJson, writeJsonAtomic } from "./files";
 import { defaultLogoDir, readLogo, refreshLogos, updateLogo } from "./logos";
 import { Aerial, sourceFor } from "./aerial";
+import { mediaCenterPids } from "./processes";
 import { AERIAL_QUALITIES, type AerialQuality } from "./config";
 import { DEFAULT_HOST, isAllowedHost, isLoopbackAddress } from "./settings";
 
@@ -42,6 +43,8 @@ export interface AdminOptions {
   logoDir?: string;
   /** Screensaver videos ($XDG_CACHE_HOME/familynovice/aerial). */
   aerialDir?: string;
+  /** Tests only: the running media centers' pids (default: from /proc). */
+  listMediaCenters?: () => Promise<number[]>;
 }
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -103,6 +106,12 @@ export function createAdminServer(options: AdminOptions) {
   const auth = new Auth(join(options.configDir, "admin.json"));
   const logoDir = options.logoDir ?? defaultLogoDir();
   const aerial = new Aerial(options.aerialDir);
+  const listMediaCenters = options.listMediaCenters ?? (() => mediaCenterPids());
+  /** Media centers of this user other than the one answering on the control socket. */
+  const strayMediaCenters = async (connectedPid: unknown): Promise<number[]> => {
+    const pids = await listMediaCenters();
+    return typeof connectedPid === "number" ? pids.filter((p) => p !== connectedPid) : pids;
+  };
   const fromThisComputer = (req: Request): boolean =>
     isLoopbackAddress(options.clientAddress ?? server.requestIP(req)?.address);
 
@@ -426,8 +435,11 @@ export function createAdminServer(options: AdminOptions) {
       "/api/status": {
         GET: api(async () => {
           const reply = await sendCommand(socketPath, "status", 2000);
+          // More than one media center: the one on the TV may not get the changes.
+          const extraInstances = (await strayMediaCenters(reply.ok ? reply.pid : undefined)).length;
           if (reply.ok) {
             return json({
+              extraInstances,
               running: true,
               configError: reply.config_error ?? null,
               locked: reply.locked === true,
@@ -439,8 +451,31 @@ export function createAdminServer(options: AdminOptions) {
               remote: reply.remote ?? null,
             });
           }
-          return json({ running: false, error: reply.error === NOT_RUNNING ? null : reply.error });
+          return json({ running: false, extraInstances, error: reply.error === NOT_RUNNING ? null : reply.error });
         }),
+      },
+
+      "/api/instances/stop-extra": {
+        // End the media centers that aren't connected to the admin panel (same user only).
+        POST: api(
+          async () => {
+            const reply = await sendCommand(socketPath, "status", 2000);
+            if (!reply.ok || typeof reply.pid !== "number") {
+              return json({ error: "None of them is connected to the admin panel. Log the media center account out and in again, or restart the computer." }, 409);
+            }
+            const stray = await strayMediaCenters(reply.pid);
+            for (const pid of stray) {
+              try {
+                process.kill(pid, "SIGTERM");
+              } catch {
+                // already gone
+              }
+            }
+            console.info(`ended stray media centers: ${stray.join(", ") || "none"}`);
+            return json({ ok: true, ended: stray.length });
+          },
+          { mutating: true },
+        ),
       },
     },
     fetch() {
