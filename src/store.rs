@@ -43,6 +43,11 @@ pub fn remote_path() -> Option<PathBuf> {
     Some(dirs::data_dir()?.join(APP).join("remote.json"))
 }
 
+/// `$XDG_DATA_HOME/curator/gamepads.json`: SNES layouts learned on the TV (`pad_setup`).
+pub fn gamepads_path() -> Option<PathBuf> {
+    Some(dirs::data_dir()?.join(APP).join("gamepads.json"))
+}
+
 /// `$XDG_CACHE_HOME/curator/player`: where players may write (screenshots, …),
 /// so they never write next to the media.
 pub fn player_cache_dir() -> Option<PathBuf> {

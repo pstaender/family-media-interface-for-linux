@@ -13,6 +13,7 @@
 //! - unlock / end_unlock / lock act on `"home_screen"` if given, else the one shown
 //! - `{"command":"switch_home_screen","home_screen":"kids"}`: show that home screen
 //! - `{"command":"calibrate_remote"}`: shows the remote calibration on the TV
+//! - `{"command":"calibrate_gamepad"}`: shows the gamepad setup (SNES buttons) on the TV
 //! - `{"command":"restart"}`: stops what plays and starts the media center again (the newest
 //!   installed version, e.g. after `scripts/install.sh --update`)
 
@@ -36,6 +37,7 @@ pub type SharedConfig = Arc<Mutex<ConfigState>>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiRequest {
     CalibrateRemote,
+    CalibrateGamepad,
     Restart,
 }
 
@@ -189,6 +191,10 @@ pub fn handle(line: &str, control: &Control) -> Value {
             json!({"ok": true})
         }
         Some("calibrate_remote") => match control.ui_requests.send(UiRequest::CalibrateRemote) {
+            Ok(()) => json!({"ok": true}),
+            Err(_) => json!({"ok": false, "error": "the media center's screen isn't running"}),
+        },
+        Some("calibrate_gamepad") => match control.ui_requests.send(UiRequest::CalibrateGamepad) {
             Ok(()) => json!({"ok": true}),
             Err(_) => json!({"ok": false, "error": "the media center's screen isn't running"}),
         },

@@ -17,6 +17,7 @@ mod lock;
 mod makemkv;
 mod mpris;
 mod music;
+mod pad_setup;
 mod pictures;
 mod pin;
 mod player;

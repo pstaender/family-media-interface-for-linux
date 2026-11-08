@@ -2222,6 +2222,15 @@ const SNES_ASPECT_LABELS: Record<SnesAspect, string> = {
 function EmulatorsSection(props: { emulators: EmulatorSettings[]; allIds: string[]; onChange: (emulators: EmulatorSettings[]) => void }) {
   const { emulators, onChange } = props;
   const update = (i: number, emulator: EmulatorSettings) => onChange(emulators.map((e, j) => (j === i ? emulator : e)));
+  const [padNote, setPadNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const setUpGamepad = async () => {
+    try {
+      await api("POST", "/api/gamepad/calibrate");
+      setPadNote({ ok: true, text: "The gamepad setup is shown on the TV now. Press the buttons it asks for." });
+    } catch (e) {
+      setPadNote({ ok: false, text: (e as Error).message });
+    }
+  };
   const add = () => {
     const taken = [...props.allIds, ...emulators.map((e) => e.id)];
     let id = "game";
@@ -2238,6 +2247,14 @@ function EmulatorsSection(props: { emulators: EmulatorSettings[]; allIds: string
         <EmulatorEditor key={emulator.id} emulator={emulator} onChange={(e) => update(i, e)} onRemove={() => onChange(emulators.filter((_, j) => j !== i))} />
       ))}
       {emulators.length < 50 && <button onClick={add}>Add game</button>}
+      <h3>Gamepad buttons for SNES games</h3>
+      <p className="hint">
+        If a button does the wrong thing in a SNES game, the TV can learn your gamepad: it asks for one button after the other, by position (B is the bottom of the four buttons). A button the gamepad doesn't have is skipped after 10 seconds. This stops whatever is playing.
+      </p>
+      <button onClick={setUpGamepad}>
+        <Icon name="device-gamepad-2" /> Set up a gamepad on the TV
+      </button>
+      {padNote && <p className={padNote.ok ? "hint" : "banner warn"}>{padNote.text}</p>}
     </section>
   );
 }

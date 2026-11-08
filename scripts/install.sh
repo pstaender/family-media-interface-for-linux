@@ -222,6 +222,10 @@ EOF
 # the session; five crashes in a row (each within a minute) end it too, back to the login screen.
 cat >"$STAGING/bin/curator-kiosk" <<'EOF'
 #!/bin/sh
+# cage 0.1.5 segfaults as soon as an X11 program closes, ending the whole session. Without
+# DISPLAY, programs use Wayland; only VLC gets it back (src/player.rs), it can't do without.
+export CURATOR_KIOSK_X11_DISPLAY="${DISPLAY:-}"
+unset DISPLAY
 # $PPID is cage: once it is gone (session ended), stop instead of starting the media center
 # into whatever display comes next (it would run twice, hidden from the admin panel).
 crashes=0

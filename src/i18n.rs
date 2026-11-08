@@ -366,6 +366,36 @@ const DE: &[(&str, &str)] = &[
     ),
     ("Available from {time}", "Verfügbar ab {time}"),
     ("Not available any more today", "Heute nicht mehr verfügbar"),
+    // Gamepad setup
+    ("Gamepad setup", "Gamepad einrichten"),
+    (
+        "Press any button on the gamepad you want to set up",
+        "Drücke eine Taste auf dem Gamepad, das du einrichten möchtest",
+    ),
+    (
+        "Back / Esc: cancel. Closes in {secs} s.",
+        "Zurück / Esc: abbrechen. Schließt in {secs} s.",
+    ),
+    (
+        "Press this button on the gamepad:",
+        "Drücke diese Taste auf dem Gamepad:",
+    ),
+    (
+        "Saved. SNES games use these buttons on this gamepad now.",
+        "Gespeichert. SNES-Spiele nutzen jetzt diese Tasten auf diesem Gamepad.",
+    ),
+    (
+        "No button was learned, so nothing changed.",
+        "Es wurde keine Taste gelernt, daher hat sich nichts geändert.",
+    ),
+    ("B (bottom button)", "B (untere Taste)"),
+    ("A (right button)", "A (rechte Taste)"),
+    ("Y (left button)", "Y (linke Taste)"),
+    ("X (top button)", "X (obere Taste)"),
+    ("L (left shoulder)", "L (linke Schultertaste)"),
+    ("R (right shoulder)", "R (rechte Schultertaste)"),
+    ("Select", "Select"),
+    ("Start", "Start"),
     // Remote setup
     ("Remote setup", "Fernbedienung einrichten"),
     (

@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::remote::{PadAxis, PadEvent, PadInput};
+use crate::remote::{PadAxis, PadEvent, PadIdentity, PadInput};
 
 const BTN_EAST: u16 = 0x131;
 const BTN_SELECT: u16 = 0x13a;
@@ -48,6 +48,8 @@ fn is_pause(code: u16) -> bool {
 
 #[derive(Debug, Default, Clone)]
 struct Pad {
+    /// What it reported when connected.
+    identity: Option<PadIdentity>,
     x: f32,
     y: f32,
     hat_x: f32,
@@ -112,8 +114,8 @@ impl Pads {
             PadInput::Gone => {
                 self.pads.remove(&event.pad);
             }
-            PadInput::Connected(_) => {
-                self.pads.entry(event.pad).or_default();
+            PadInput::Connected(identity) => {
+                self.pads.entry(event.pad).or_default().identity = Some(identity);
             }
             PadInput::Button { code, pressed } => {
                 let pad = self.pads.entry(event.pad).or_default();
@@ -136,6 +138,10 @@ impl Pads {
                 }
             }
         }
+    }
+
+    pub fn identity(&self, pad: u32) -> Option<&PadIdentity> {
+        self.pads.get(&pad)?.identity.as_ref()
     }
 
     pub fn count(&self) -> usize {
@@ -238,7 +244,7 @@ mod tests {
     #[test]
     fn directions_are_edges_and_dpad_wins_over_the_stick() {
         let mut pads = Pads::default();
-        pads.apply(event(5, PadInput::Connected("Pad".into())));
+        pads.apply(event(5, PadInput::Connected(PadIdentity::default())));
         pads.apply(event(5, PadInput::Axis(PadAxis::Y, -1.0)));
         assert!(pads.frame().up);
         assert!(!pads.frame().up, "held: only once");

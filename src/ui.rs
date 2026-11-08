@@ -35,6 +35,9 @@ use crate::{inhibit, screensaver};
 
 /// How long the remote's home button must be held to go to the home screen.
 const HOME_HOLD: Duration = Duration::from_secs(3);
+/// `ui` hasn't run for this long while something else is in front: our window is covered.
+const COVERED_AFTER: Duration = Duration::from_millis(500);
+
 /// See `App::just_opened`.
 const JUST_OPENED: Duration = Duration::from_millis(350);
 const BG: Color32 = Color32::from_rgb(0x12, 0x14, 0x1c);
@@ -90,6 +93,7 @@ enum ScanEvent {
 enum Screen {
     /// Learning the remote's buttons (started from the admin panel).
     Calibrate(Box<CalibrateView>),
+    PadSetup(Box<PadSetupView>),
     Home,
     /// Asking how to start the Blu-ray.
     Choose {
@@ -351,6 +355,12 @@ struct CalibrateView {
     done: Option<Instant>,
 }
 
+struct PadSetupView {
+    setup: crate::pad_setup::PadSetup,
+    /// Set when it is over; `true` if something was saved.
+    done: Option<(Instant, bool)>,
+}
+
 /// Channels from the background threads into the UI.
 pub struct Inputs {
     /// Keys of remotes read directly from their device (`remote::spawn`).
@@ -530,6 +540,9 @@ pub struct App {
     remote_down: std::collections::BTreeSet<u16>,
     /// The admin panel asked for the calibration; starts on the home screen.
     calibrate_requested: bool,
+    pad_setup_requested: bool,
+    /// When `ui` last ran: under Wayland a window covered by a game gets no frames.
+    last_ui_frame: Instant,
     drives_rx: Receiver<Vec<DriveReport>>,
     drives: Vec<DriveReport>,
     scan_tx: Sender<ScanEvent>,
@@ -646,6 +659,8 @@ impl App {
             remote_map: RemoteMap::load(),
             remote_down: Default::default(),
             calibrate_requested: false,
+            pad_setup_requested: false,
+            last_ui_frame: Instant::now(),
             drives_rx,
             drives: Vec::new(),
             scan_tx,
@@ -972,6 +987,178 @@ impl App {
         ctx.request_repaint_after(Duration::from_millis(100));
     }
 
+    fn device_home_held(&self) -> bool {
+        self.remote_down.iter().any(|c| self.remote_map.is_home(*c))
+    }
+
+    /// Counts how long home is held and goes home after `HOME_HOLD`. True: still counting.
+    fn track_home_hold(&mut self, held: bool) -> bool {
+        if !held {
+            self.home_since = None;
+            self.home_done = false;
+            return false;
+        }
+        if self.home_done {
+            return false;
+        }
+        let since = *self.home_since.get_or_insert_with(Instant::now);
+        if since.elapsed() >= HOME_HOLD {
+            self.home_done = true;
+            self.go_home();
+            return false;
+        }
+        true
+    }
+
+    /// The gamepad setup: asks for one SNES button after the other (see `pad_setup`).
+    fn pad_setup_screen(
+        &mut self,
+        painter: &egui::Painter,
+        screen_rect: Rect,
+        s: f32,
+        pad_events: &[remote::PadEvent],
+        keys_back: bool,
+        any_remote_press: bool,
+    ) {
+        use crate::pad_setup::{SetupEnd, SnesButton};
+        let ctx = painter.ctx().clone();
+        let Screen::PadSetup(view) = &mut self.screen else {
+            return;
+        };
+        let now = Instant::now();
+        let center = screen_rect.center();
+        let font = |size: f32| FontId::proportional(size * s);
+        painter.text(
+            Pos2::new(center.x, screen_rect.min.y + 110.0 * s),
+            Align2::CENTER_CENTER,
+            tr!("Gamepad setup"),
+            font(52.0),
+            TEXT,
+        );
+        if let Some((done, saved)) = view.done {
+            painter.text(
+                center,
+                Align2::CENTER_CENTER,
+                if saved {
+                    tr!("Saved. SNES games use these buttons on this gamepad now.")
+                } else {
+                    tr!("No button was learned, so nothing changed.")
+                },
+                font(32.0),
+                TEXT,
+            );
+            painter.text(
+                Pos2::new(center.x, screen_rect.max.y - 70.0 * s),
+                Align2::CENTER_CENTER,
+                tr!("Press any button to continue"),
+                font(24.0),
+                TEXT_DIM,
+            );
+            let pressed = keys_back
+                || any_remote_press
+                || pad_events
+                    .iter()
+                    .any(|e| matches!(e.input, remote::PadInput::Button { pressed: true, .. }));
+            if done.elapsed() > Duration::from_secs(10)
+                || (done.elapsed() > Duration::from_secs(1) && pressed)
+            {
+                self.screen = Screen::Home;
+            }
+            ctx.request_repaint_after(Duration::from_millis(250));
+            return;
+        }
+        if keys_back {
+            self.screen = Screen::Home;
+            return;
+        }
+        for event in pad_events {
+            view.setup.event(event, self.pads.identity(event.pad), now);
+        }
+        if let Some(end) = view.setup.tick(now) {
+            let profile = view.setup.profile();
+            let mut saved = false;
+            if let (SetupEnd::Finished, Some(profile)) = (end, profile) {
+                log::info!("gamepad set up: {profile:?}");
+                match crate::pad_setup::remember(profile) {
+                    Ok(()) => saved = true,
+                    Err(e) => log::warn!("could not save the gamepad's buttons: {e}"),
+                }
+            }
+            view.done = Some((now, saved));
+            ctx.request_repaint();
+            return;
+        }
+        if view.setup.waiting_for_pad() {
+            painter.text(
+                center,
+                Align2::CENTER_CENTER,
+                tr!("Press any button on the gamepad you want to set up"),
+                font(40.0),
+                ACCENT,
+            );
+            painter.text(
+                Pos2::new(center.x, center.y + 90.0 * s),
+                Align2::CENTER_CENTER,
+                tr!(
+                    "Back / Esc: cancel. Closes in {secs} s.",
+                    secs = view.setup.seconds_left(now)
+                ),
+                font(24.0),
+                TEXT_DIM,
+            );
+            ctx.request_repaint_after(Duration::from_millis(100));
+            return;
+        }
+        let Some(button) = view.setup.current() else {
+            return;
+        };
+        painter.text(
+            Pos2::new(center.x, center.y - 150.0 * s),
+            Align2::CENTER_CENTER,
+            tr!(
+                "Button {n} of {total}",
+                n = view.setup.step() + 1,
+                total = SnesButton::ALL.len()
+            ),
+            font(26.0),
+            TEXT_DIM,
+        );
+        painter.text(
+            Pos2::new(center.x, center.y - 60.0 * s),
+            Align2::CENTER_CENTER,
+            tr!("Press this button on the gamepad:"),
+            font(32.0),
+            TEXT,
+        );
+        painter.text(
+            Pos2::new(center.x, center.y + 20.0 * s),
+            Align2::CENTER_CENTER,
+            crate::i18n::tr(button.label()),
+            font(72.0),
+            ACCENT,
+        );
+        painter.text(
+            Pos2::new(center.x, center.y + 110.0 * s),
+            Align2::CENTER_CENTER,
+            tr!(
+                "No such button? It's skipped in {secs} s.",
+                secs = view.setup.seconds_left(now)
+            ),
+            font(24.0),
+            TEXT_DIM,
+        );
+        if let Some(message) = &view.setup.message {
+            painter.text(
+                Pos2::new(center.x, center.y + 170.0 * s),
+                Align2::CENTER_CENTER,
+                message,
+                font(26.0),
+                Color32::from_rgb(0xff, 0xb4, 0x5c),
+            );
+        }
+        ctx.request_repaint_after(Duration::from_millis(100));
+    }
+
     /// Holding the remote's home button (XF86HomePage) for 3 s stops what is playing and
     /// shows the home screen. While a player or website is in front, they handle it
     /// themselves (`player::MPV_HOME_SCRIPT`, `curator-web`).
@@ -983,19 +1170,8 @@ impl App {
                     action == Action::Home && Key::from_name(name).is_some_and(|k| i.key_down(k))
                 })
         });
-        let device_home = self.remote_down.iter().any(|c| self.remote_map.is_home(*c));
-        if !window_home && !device_home {
-            self.home_since = None;
-            self.home_done = false;
-            return;
-        }
-        if self.home_done {
-            return;
-        }
-        let since = *self.home_since.get_or_insert_with(Instant::now);
-        if since.elapsed() >= HOME_HOLD {
-            self.home_done = true;
-            self.go_home();
+        let device_home = self.device_home_held();
+        if !self.track_home_hold(window_home || device_home) {
             return;
         }
         let painter = ctx.layer_painter(egui::LayerId::new(
@@ -1052,7 +1228,10 @@ impl App {
         }
         // Never over a player, website or the remote setup; only if turned on.
         let blocked = settings.mode == crate::config::ScreensaverMode::Off
-            || matches!(self.screen, Screen::Playing { .. } | Screen::Calibrate(_))
+            || matches!(
+                self.screen,
+                Screen::Playing { .. } | Screen::Calibrate(_) | Screen::PadSetup(_)
+            )
             || matches!(&self.screen, Screen::Pong(v) if matches!(v.state, PongState::Playing(_)))
             || matches!(&self.screen, Screen::Bricks(v)
                 if matches!(v.state, crate::bricks::BricksState::Playing(_)))
@@ -1418,12 +1597,16 @@ impl App {
     /// The remote's volume buttons change the system volume (`volume`): from the window
     /// while it's in front, from the device while one of our players or websites is (they
     /// don't change the system volume themselves). Not during the calibration.
-    fn volume_keys(&mut self, ctx: &egui::Context, keys: &Keys, events: &[remote::KeyEvent]) {
-        if matches!(self.screen, Screen::Calibrate(_)) {
+    fn volume_keys(
+        &mut self,
+        focused: bool,
+        window_keys: Vec<VolumeCommand>,
+        events: &[remote::KeyEvent],
+    ) {
+        if matches!(self.screen, Screen::Calibrate(_) | Screen::PadSetup(_)) {
             return;
         }
-        let focused = ctx.input(|i| i.focused);
-        let mut commands = keys.volume.clone();
+        let mut commands = window_keys;
         // Not focused and nothing of ours in front: someone uses the desktop (development).
         if focused || matches!(self.screen, Screen::Playing { .. }) {
             for e in events.iter().filter(|e| e.value == 1 || e.value == 2) {
@@ -2599,7 +2782,14 @@ impl App {
                     .map(|d| dirs.cache.join(d)),
             )
             .try_for_each(std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(&cfg, text));
+            .and_then(|()| std::fs::write(&cfg, text))
+            .and_then(|()| {
+                emu::write_autoconfig(
+                    &dirs.cache.join(emu::AUTOCONFIG_DIR),
+                    emu::stock_autoconfig().as_deref(),
+                    &crate::pad_setup::active_profiles(),
+                )
+            });
         if let Err(e) = written {
             self.screen = message(tr!(
                 "The emulator could not be prepared: {error}",
@@ -2721,12 +2911,123 @@ impl App {
     }
 }
 
+impl App {
+    /// Remember which remote buttons are down.
+    fn note_remote_events(&mut self, events: &[remote::KeyEvent]) {
+        for e in events {
+            match e.value {
+                0 => {
+                    self.remote_down.remove(&e.code);
+                }
+                _ => {
+                    self.remote_down.insert(e.code);
+                    self.last_input = Instant::now();
+                }
+            }
+        }
+    }
+
+    /// A program has the focus and keeps its keys, so return / home come from the device.
+    /// (Not in the first second: that press may have been meant for the menu.)
+    fn close_program_by_remote(&mut self, events: &[remote::KeyEvent]) {
+        if matches!(
+            &self.screen,
+            Screen::Playing {
+                kind: PlayKind::Program,
+                stopping: None,
+                started,
+                ..
+            } if started.elapsed() >= Duration::from_secs(1)
+        ) && events
+            .iter()
+            .any(|e| e.value == 1 && self.remote_map.closes_program(e.code))
+        {
+            log::info!("closing the program (remote)");
+            self.go_home();
+        }
+    }
+
+    fn take_pad_events(&mut self) -> Vec<remote::PadEvent> {
+        let events: Vec<remote::PadEvent> = self.inputs.pads.try_iter().collect();
+        for e in &events {
+            self.pads.apply(e.clone());
+        }
+        events
+    }
+
+    /// Select + start held for a moment closes a program.
+    fn close_program_by_pad(&mut self) {
+        let program_runs = matches!(
+            self.screen,
+            Screen::Playing {
+                kind: PlayKind::Program,
+                stopping: None,
+                ..
+            }
+        );
+        if program_runs && self.pads.select_and_start_held() {
+            let since = *self.pad_close_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= crate::gamepad::CLOSE_COMBO_HOLD {
+                log::info!("closing the program (gamepad)");
+                self.pad_close_since = None;
+                self.go_home();
+            } else {
+                self.ctx.request_repaint_after(Duration::from_millis(50));
+            }
+        } else {
+            self.pad_close_since = None;
+        }
+    }
+
+    /// What the admin panel asked for.
+    fn handle_requests(&mut self) {
+        let requests: Vec<UiRequest> = self.inputs.requests.try_iter().collect();
+        if requests.contains(&UiRequest::Restart) {
+            self.restart();
+        }
+        if requests.contains(&UiRequest::CalibrateRemote) {
+            self.calibrate_requested = true;
+            self.go_home();
+        }
+        if requests.contains(&UiRequest::CalibrateGamepad) {
+            self.pad_setup_requested = true;
+            self.go_home();
+        }
+    }
+
+    /// A player, game or website covers our window, so `ui` isn't called (the compositor
+    /// sends no frames to it). What must go on anyway: noticing that it ended, usage and
+    /// time limits (`poll_background`), and everything that can end it.
+    fn while_covered(&mut self) {
+        self.poll_background();
+        let remote_events: Vec<remote::KeyEvent> = self.inputs.remote.try_iter().collect();
+        self.note_remote_events(&remote_events);
+        self.close_program_by_remote(&remote_events);
+        self.take_pad_events();
+        let _ = self.pads.frame();
+        self.close_program_by_pad();
+        self.handle_requests();
+        self.track_home_hold(self.device_home_held());
+        self.volume_keys(false, Vec::new(), &remote_events);
+        self.ctx.request_repaint_after(Duration::from_millis(100));
+    }
+}
+
 impl eframe::App for App {
+    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let in_front = matches!(self.screen, Screen::Playing { .. })
+            || matches!(self.saver, Some(Saver::Aerial { .. }));
+        if in_front && self.last_ui_frame.elapsed() >= COVERED_AFTER {
+            self.while_covered();
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // The language follows the config (also after a reload).
         crate::i18n::set(crate::i18n::Lang::from_setting(
             &self.config().0.home.language,
         ));
+        self.last_ui_frame = Instant::now();
         self.poll_background();
         let ctx = ui.ctx().clone();
         let screen_rect = ui.max_rect();
@@ -2751,66 +3052,22 @@ impl eframe::App for App {
             }
         }
         let remote_events: Vec<remote::KeyEvent> = self.inputs.remote.try_iter().collect();
-        for e in &remote_events {
-            match e.value {
-                0 => {
-                    self.remote_down.remove(&e.code);
-                }
-                _ => {
-                    self.remote_down.insert(e.code);
-                    self.last_input = Instant::now();
-                }
-            }
-        }
-        // A program has the focus and keeps its keys, so return / home come from the device.
-        // (Not in the first second: that press may have been meant for the menu.)
-        if matches!(
-            &self.screen,
-            Screen::Playing {
-                kind: PlayKind::Program,
-                stopping: None,
-                started,
-                ..
-            } if started.elapsed() >= Duration::from_secs(1)
-        ) && remote_events
-            .iter()
-            .any(|e| e.value == 1 && self.remote_map.closes_program(e.code))
-        {
-            log::info!("closing the program (remote)");
-            self.go_home();
-        }
+        self.note_remote_events(&remote_events);
+        self.close_program_by_remote(&remote_events);
         // Gamepads: menu navigation while the media center itself is in front (not over a
         // player or website); the game reads them itself.
-        let pad_events: Vec<remote::PadEvent> = self.inputs.pads.try_iter().collect();
+        let pad_events = self.take_pad_events();
         let pad_activity = !pad_events.is_empty();
-        for e in pad_events {
-            self.pads.apply(e);
-        }
         let nav = self.pads.frame();
-        let program_runs = matches!(
-            self.screen,
-            Screen::Playing {
-                kind: PlayKind::Program,
-                stopping: None,
-                ..
-            }
-        );
-        if program_runs && self.pads.select_and_start_held() {
-            let since = *self.pad_close_since.get_or_insert_with(Instant::now);
-            if since.elapsed() >= crate::gamepad::CLOSE_COMBO_HOLD {
-                log::info!("closing the program (gamepad)");
-                self.pad_close_since = None;
-                self.go_home();
-            } else {
-                self.ctx.request_repaint_after(Duration::from_millis(50));
-            }
-        } else {
-            self.pad_close_since = None;
-        }
+        self.close_program_by_pad();
         if ctx.input(|i| i.focused)
             && !matches!(
                 self.screen,
-                Screen::Pong(_) | Screen::Bricks(_) | Screen::Blocks(_) | Screen::Dodger(_)
+                Screen::Pong(_)
+                    | Screen::Bricks(_)
+                    | Screen::Blocks(_)
+                    | Screen::Dodger(_)
+                    | Screen::PadSetup(_)
             )
         {
             keys.up |= nav.up;
@@ -2820,14 +3077,7 @@ impl eframe::App for App {
             keys.enter |= nav.enter || nav.pause;
             keys.back |= nav.back;
         }
-        let requests: Vec<UiRequest> = self.inputs.requests.try_iter().collect();
-        if requests.contains(&UiRequest::Restart) {
-            self.restart();
-        }
-        if requests.contains(&UiRequest::CalibrateRemote) {
-            self.calibrate_requested = true;
-            self.go_home();
-        }
+        self.handle_requests();
         self.mpris.set_status(match &self.screen {
             Screen::Music(view) if view.player.state().paused => PlayStatus::Paused,
             Screen::Music(_) => PlayStatus::Playing,
@@ -2849,7 +3099,7 @@ impl eframe::App for App {
                 && crate::power::remote_key_acts(
                     power_enabled,
                     self.lock.is_some(),
-                    matches!(self.screen, Screen::Calibrate(_)),
+                    matches!(self.screen, Screen::Calibrate(_) | Screen::PadSetup(_)),
                 )
             {
                 self.remote_power_key(pin_set);
@@ -2907,7 +3157,8 @@ impl eframe::App for App {
         if self.screensaver(&painter, screen_rect, s, activity) {
             return;
         }
-        self.volume_keys(&ctx, &keys, &remote_events);
+        let focused = ctx.input(|i| i.focused);
+        self.volume_keys(focused, keys.volume.clone(), &remote_events);
         self.paint_volume(ui, screen_rect, s);
 
         if self.lock.is_some() {
@@ -2925,6 +3176,25 @@ impl eframe::App for App {
                 calibration: Calibration::new(Instant::now()),
                 done: None,
             }));
+        }
+        if self.pad_setup_requested && matches!(self.screen, Screen::Home) {
+            self.pad_setup_requested = false;
+            self.screen = Screen::PadSetup(Box::new(PadSetupView {
+                setup: crate::pad_setup::PadSetup::new(Instant::now()),
+                done: None,
+            }));
+        }
+        if matches!(self.screen, Screen::PadSetup(_)) {
+            let any_remote_press = remote_events.iter().any(|e| e.value == 1);
+            self.pad_setup_screen(
+                &painter,
+                screen_rect,
+                s,
+                &pad_events,
+                keys.back,
+                any_remote_press,
+            );
+            return;
         }
         if matches!(self.screen, Screen::Calibrate(_)) {
             self.calibrate_screen(
@@ -3387,6 +3657,7 @@ impl App {
         match &self.screen {
             Screen::Home
             | Screen::Calibrate(_)
+            | Screen::PadSetup(_)
             | Screen::Browse(_)
             | Screen::Picture(_)
             | Screen::Music(_)

@@ -322,7 +322,7 @@ fn parse_events(buf: &[u8]) -> Vec<KeyEvent> {
 pub const PAD_BUTTONS: std::ops::RangeInclusive<u16> = 0x120..=0x13f;
 
 /// The axes we use: left stick and d-pad (the d-pad of simple pads is `X`/`Y`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PadAxis {
     X,
     Y,
@@ -337,9 +337,50 @@ const PAD_AXES: [(u16, PadAxis); 4] = [
     (0x11, PadAxis::HatY), // ABS_HAT0Y
 ];
 
+/// A gamepad as RetroArch will see it (`pad_setup` writes profiles in these numbers).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PadIdentity {
+    /// Exactly as the device reports it: RetroArch compares it, trailing space included.
+    pub name: String,
+    pub vendor: u16,
+    pub product: u16,
+    /// Linux key codes; the position in this list is RetroArch's button number.
+    pub buttons: Vec<u16>,
+    /// Linux axis codes; the position is RetroArch's axis number.
+    pub axes: Vec<u16>,
+}
+
+/// The order in which RetroArch's udev driver numbers a device's buttons
+/// (`input/drivers_joypad/udev_joypad.c`).
+fn retroarch_buttons(has: impl Fn(u16) -> bool) -> Vec<u16> {
+    const KEY_UP: u16 = 103;
+    const KEY_DOWN: u16 = 108;
+    const BTN_MISC: u16 = 0x100;
+    const KEY_MAX: u16 = 0x2ff;
+    const MAX_BUTTONS: usize = 64;
+    (KEY_UP..=KEY_DOWN)
+        .chain(BTN_MISC..KEY_MAX)
+        .chain(0..KEY_UP)
+        .chain(KEY_DOWN + 1..BTN_MISC)
+        .filter(|code| has(*code))
+        .take(MAX_BUTTONS)
+        .collect()
+}
+
+/// The same for axes: hats are numbered separately, an axis without a range doesn't count.
+fn retroarch_axes(usable: impl Fn(u16) -> bool) -> Vec<u16> {
+    const ABS_HATS: std::ops::RangeInclusive<u16> = 0x10..=0x17;
+    const ABS_MISC: u16 = 0x28;
+    const MAX_AXES: usize = 32;
+    (0..ABS_MISC)
+        .filter(|code| !ABS_HATS.contains(code) && usable(*code))
+        .take(MAX_AXES)
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum PadInput {
-    Connected(String),
+    Connected(PadIdentity),
     Button {
         code: u16,
         pressed: bool,
@@ -399,6 +440,70 @@ fn pad_axes(fd: std::os::fd::RawFd) -> Option<Vec<(u16, PadAxis, i32, i32)>> {
     Some(axes)
 }
 
+/// Name, USB id and numbering of a gamepad.
+fn pad_identity(fd: std::os::fd::RawFd) -> PadIdentity {
+    let mut name = [0u8; 256];
+    // SAFETY: the buffer is as long as the size encoded in the request (EVIOCGNAME).
+    let read = unsafe { libc::ioctl(fd, eviocg(0x06, name.len() as u32), name.as_mut_ptr()) };
+    let name = if read > 0 {
+        let end = name.iter().position(|b| *b == 0).unwrap_or(name.len());
+        String::from_utf8_lossy(&name[..end]).into_owned()
+    } else {
+        String::new()
+    };
+    // struct input_id: bustype, vendor, product, version.
+    let mut id = [0u16; 4];
+    // SAFETY: as above, 8 bytes (EVIOCGID).
+    let id_read = unsafe { libc::ioctl(fd, eviocg(0x02, 8), id.as_mut_ptr()) };
+    let (vendor, product) = if id_read >= 0 { (id[1], id[2]) } else { (0, 0) };
+    let mut keys = [0u8; 0x300 / 8];
+    // SAFETY: as above (EVIOCGBIT(EV_KEY)).
+    let keys_read = unsafe {
+        libc::ioctl(
+            fd,
+            eviocg(0x20 + u32::from(EV_KEY), keys.len() as u32),
+            keys.as_mut_ptr(),
+        )
+    };
+    let mut abs = [0u8; 8];
+    // SAFETY: as above (EVIOCGBIT(EV_ABS), ABS_CNT = 64).
+    let abs_read = unsafe {
+        libc::ioctl(
+            fd,
+            eviocg(0x20 + u32::from(EV_ABS), abs.len() as u32),
+            abs.as_mut_ptr(),
+        )
+    };
+    let bit = |bits: &[u8], code: u16| bits[usize::from(code / 8)] & (1 << (code % 8)) != 0;
+    let buttons = if keys_read >= 0 {
+        retroarch_buttons(|code| bit(&keys, code))
+    } else {
+        Vec::new()
+    };
+    let axes = if abs_read >= 0 {
+        retroarch_axes(|code| {
+            if !bit(&abs, code) {
+                return false;
+            }
+            // struct input_absinfo: value, minimum, maximum, fuzz, flat, resolution.
+            let mut info = [0i32; 6];
+            // SAFETY: as above, 24 bytes (EVIOCGABS).
+            let r =
+                unsafe { libc::ioctl(fd, eviocg(0x40 + u32::from(code), 24), info.as_mut_ptr()) };
+            r >= 0 && info[2] > info[1]
+        })
+    } else {
+        Vec::new()
+    };
+    PadIdentity {
+        name,
+        vendor,
+        product,
+        buttons,
+        axes,
+    }
+}
+
 /// Names of the input devices being read (for the admin panel).
 pub type SharedDevices = Arc<Mutex<BTreeMap<PathBuf, String>>>;
 
@@ -432,7 +537,7 @@ pub fn spawn(
                         let pad = number.parse::<u32>().ok()?;
                         let _ = pads.send(PadEvent {
                             pad,
-                            input: PadInput::Connected(name.clone()),
+                            input: PadInput::Connected(pad_identity(file.as_raw_fd())),
                         });
                         Some((pad, axes, pads.clone()))
                     });
@@ -730,6 +835,20 @@ mod tests {
         assert_eq!(normalize(900, 0, 255), 1.0);
         // EVIOCGABS(ABS_Y) as in linux/input.h: 0x80184541.
         assert_eq!(eviocg(0x41, 24), 0x8018_4541);
+    }
+
+    #[test]
+    fn numbers_buttons_and_axes_like_retroarch() {
+        // The SNES-style pad: ten buttons from BTN_TRIGGER.
+        let snes = retroarch_buttons(|c| (0x120..0x12a).contains(&c));
+        assert_eq!(snes.len(), 10);
+        assert_eq!((snes[0], snes[9]), (0x120, 0x129));
+        // Arrow-like keys count first, ordinary keys last, whatever their code.
+        let mixed = retroarch_buttons(|c| [1, 103, 0x130, 0x131].contains(&c));
+        assert_eq!(mixed, [103, 0x130, 0x131, 1]);
+        // Hats have their own numbers: the right stick after them is axis 2 here.
+        let axes = retroarch_axes(|c| [0, 1, 3, 0x10, 0x11].contains(&c));
+        assert_eq!(axes, [0, 1, 3]);
     }
 
     #[test]

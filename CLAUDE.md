@@ -475,7 +475,15 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   `POST /api/emulators/upload`, raw body, names sanitized, never overwrites, 1 GB kept free;
   unused uploads are removed a day later when saving), and a file chosen on the computer is
   copied at the first start (`.cue` stays in place: it names a data file beside it). Holding select + start on a gamepad
-  for 1 s also closes programs and emulators (`CLOSE_COMBO_HOLD`).
+  for 1 s also closes programs and emulators (`CLOSE_COMBO_HOLD`). **Gamepad layouts for SNES
+  (`src/pad_setup.rs`):** RetroArch takes the first profile with a perfect match (name + USB
+  id), and its collection has several wrong ones for cheap pads (`USB Gamepad `, 0079:0011).
+  `emulator::write_autoconfig` regenerates `…/snes/autoconfig/udev/` at each start without the
+  stock files competing with ours, plus ours: learned on the TV (admin → Emulators → "Set up a
+  gamepad on the TV", `POST /api/gamepad/calibrate`, control socket `calibrate_gamepad`,
+  `Screen::PadSetup`, saved to `$XDG_DATA_HOME/curator/gamepads.json`) or built in
+  (`pad_setup::builtin`). Profiles use RetroArch's button and axis numbers
+  (`remote::PadIdentity`, mirrors `udev_joypad.c`).
 - **Implemented (`programs` of each home screen, admin: Home screen & media → Programs, row
   "Programs"):** name, icon (one of ours, `ui::paint_program_icon`), command (absolute path
   or name in `PATH`), arguments (a list, one per line in the admin panel), optional start
@@ -589,6 +597,7 @@ src/
   sound.rs        game sounds (generated WAV files, played with pw-play / paplay / aplay)
   music.rs        game music: MIDI reader, chip-style synth, looping with mpv
   emulator.rs     DOSBox and RetroArch: generated configs, DOS private copies
+  pad_setup.rs    SNES gamepad layouts: built-in and learned profiles, the setup's logic
   makemkv.rs      makemkvcon robot-output parser, main title selection
   player.rs       builds the player commands (mpv / VLC with libmmbd)
   resume.rs       resume positions via mpv IPC
@@ -805,6 +814,18 @@ Before you consider a change done, run the formatter, linter and tests for every
   systemd user service (`curator-admin.service`) with lingering. `install-state`
   (KEY=VALUE, read as data, never sourced) keeps the previous session and linger state for
   the uninstaller. No autologin changes (system settings do that).
+- **No X11 in the kiosk:** cage 0.1.5 (Ubuntu 24.04) segfaults in `wl_list_remove` as soon as
+  any X11 client closes (even `xeyes`), which ends the session. So `curator-kiosk` unsets
+  `DISPLAY` (kept in `CURATOR_KIOSK_X11_DISPLAY`) and the media center, mpv, DOSBox, RetroArch
+  and the website window use Wayland. A registered X11-only program can't start there. VLC
+  (disc menus) still gets X11, because `qtwayland5` isn't installed, so closing it still
+  ends the session. Reproduce without a screen: `WLR_BACKENDS=headless WLR_RENDERER=pixman
+  WLR_LIBINPUT_NO_DEVICES=1 cage -s -- …`.
+- **Covered window (`App::logic`, `while_covered`):** under Wayland the compositor sends no
+  frames to a window that a player or game covers, so `ui` doesn't run. eframe calls
+  `App::logic` instead (after `MISSED_REDRAW_TIMEOUT`, 250 ms). Everything that must go on while
+  something is in front has to be reachable from `while_covered`: child exit, usage and time
+  limits (`poll_background`), closing buttons, control socket requests, device volume.
 - **Kiosk escapes closed so far:** mpv's console (`` ` `` / `:`, its `run` command starts
   programs) is unbound in `MPV_INPUT_CONF`. Open: VLC's Qt menus and WebKit file-upload
   dialogs (file browsing, nothing can be started).

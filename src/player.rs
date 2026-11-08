@@ -589,6 +589,13 @@ pub fn command(
             // on HDMI that failed ("digital pass-through stream connection failure"), and
             // the system volume only works on decoded sound.
             .arg("--no-spdif");
+            // The kiosk hides X11 from everything (curator-kiosk in scripts/install.sh), but
+            // this VLC has no way to show its menus without it.
+            if let Some(display) =
+                std::env::var_os("CURATOR_KIOSK_X11_DISPLAY").filter(|d| !d.is_empty())
+            {
+                cmd.env("DISPLAY", display);
+            }
             if let Some(dir) = movie.cache_dir {
                 cmd.arg(format!(
                     "--snapshot-path={}",

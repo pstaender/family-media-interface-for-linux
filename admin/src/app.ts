@@ -479,6 +479,16 @@ export function createAdminServer(options: AdminOptions) {
         ),
       },
 
+      "/api/gamepad/calibrate": {
+        POST: api(
+          async () => {
+            const reply = await sendCommand(socketPath, "calibrate_gamepad");
+            return reply.ok ? json({ ok: true }) : json({ error: reply.error }, 502);
+          },
+          { mutating: true },
+        ),
+      },
+
       "/api/emulators/upload": {
         POST: api(
           async (req) => {

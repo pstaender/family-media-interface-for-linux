@@ -405,6 +405,47 @@ pub fn find_core() -> Option<PathBuf> {
     .find(|p| p.exists())
 }
 
+/// RetroArch's gamepad profiles for this start, inside its cache folder.
+pub const AUTOCONFIG_DIR: &str = "autoconfig";
+
+/// The profiles `scripts/setup.sh` installed.
+pub fn stock_autoconfig() -> Option<PathBuf> {
+    asset("autoconfig")
+}
+
+/// RetroArch's profile folder: the stock ones, except those competing with `profiles`, and
+/// `profiles` themselves. RetroArch reads only one folder and takes the first perfect match,
+/// so adding ours isn't enough. `target` is entirely ours (in the cache) and made anew.
+pub fn write_autoconfig(
+    target: &Path,
+    stock: Option<&Path>,
+    profiles: &[crate::pad_setup::PadProfile],
+) -> std::io::Result<()> {
+    if target.exists() {
+        std::fs::remove_dir_all(target)?;
+    }
+    let udev = target.join("udev");
+    std::fs::create_dir_all(&udev)?;
+    let stock_files = stock.and_then(|s| std::fs::read_dir(s.join("udev")).ok());
+    for entry in stock_files.into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "cfg") {
+            continue;
+        }
+        let bytes = std::fs::read(&path)?;
+        let text = String::from_utf8_lossy(&bytes);
+        if !profiles.iter().any(|p| p.replaces(&text)) {
+            std::fs::write(udev.join(entry.file_name()), &bytes)?;
+        }
+    }
+    for (index, profile) in profiles.iter().enumerate() {
+        if let Some(text) = profile.cfg() {
+            std::fs::write(udev.join(format!("curator-{index}.cfg")), text)?;
+        }
+    }
+    Ok(())
+}
+
 pub struct RetroArchDirs {
     /// Where the core is: RetroArch needs its info file to know it can save states.
     pub core_dir: PathBuf,
@@ -479,9 +520,7 @@ pub fn retroarch_cfg(options: &SnesOptions, dirs: &RetroArchDirs, shader: bool) 
             dirs.core_dir.to_string_lossy().into_owned(),
         ),
     ];
-    if let Some(dir) = asset("autoconfig") {
-        lines.push(("joypad_autoconfig_dir", dir.to_string_lossy().into_owned()));
-    }
+    lines.push(("joypad_autoconfig_dir", format!("{cache}/{AUTOCONFIG_DIR}")));
     lines
         .into_iter()
         .map(|(key, value)| format!("{key} = \"{value}\"\n"))
@@ -542,6 +581,43 @@ mod tests {
             ["A:", "call run.bat", "exit"]
         );
         assert_eq!(autostart_lines("", 'D'), ["D:"], "stays at the DOS prompt");
+    }
+
+    #[test]
+    fn our_gamepad_profile_is_the_only_perfect_match() {
+        use crate::pad_setup::{PadBind, PadProfile, SnesButton};
+        let dir = std::env::temp_dir().join(format!("curator-autoconfig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let stock = dir.join("stock");
+        std::fs::create_dir_all(stock.join("udev")).unwrap();
+        let file = |name: &str, device: &str| {
+            let text = format!(
+                "input_driver = \"udev\"\ninput_device = \"{device}\"\n\
+                 input_vendor_id = \"121\"\ninput_product_id = \"17\"\n"
+            );
+            std::fs::write(stock.join("udev").join(name), text).unwrap();
+        };
+        file("nes.cfg", "USB Gamepad ");
+        file("saturn.cfg", "USB Gamepad ");
+        file("other.cfg", "Other Pad");
+        std::fs::write(stock.join("udev/readme.txt"), "x").unwrap();
+        let ours = PadProfile {
+            name: "USB Gamepad ".into(),
+            vendor: 121,
+            product: 17,
+            binds: [(SnesButton::B, PadBind::Button(2))].into(),
+        };
+        let target = dir.join("out");
+        std::fs::create_dir_all(target.join("udev")).unwrap();
+        std::fs::write(target.join("udev/stale.cfg"), "old").unwrap();
+        write_autoconfig(&target, Some(&stock), &[ours]).unwrap();
+        let mut names: Vec<_> = std::fs::read_dir(target.join("udev"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["curator-0.cfg", "other.cfg"]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
