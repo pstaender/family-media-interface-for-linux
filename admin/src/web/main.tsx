@@ -1169,7 +1169,7 @@ function WebsitesSection(props: { websites: WebsiteSettings[]; onChange: (websit
     const taken = websites.map((w) => w.id);
     let id = "website";
     for (let n = 2; taken.includes(id); n++) id = `website-${n}`;
-    onChange([...websites, { id, name: "", url: "https://", allow_subdomains: true }]);
+    onChange([...websites, { id, name: "", url: "https://", allow_subdomains: true, show_logo: true }]);
   };
 
   return (
@@ -1234,7 +1234,12 @@ function WebsiteEditor(props: {
           onChange={(e) => onChange({ allow_subdomains: e.target.checked })}
         />{" "}
         Allow all subdomains
+      </label>{" "}
+      <label className="check" style={{ marginLeft: 18 }}>
+        <input type="checkbox" checked={site.show_logo} onChange={(e) => onChange({ show_logo: e.target.checked })} />{" "}
+        Show the website's logo on the tile
       </label>
+      {site.show_logo && <LogoPreview id={site.id} url={site.url} />}
       {domain !== null && (
         <p className="hint" style={{ margin: "8px 0 0" }}>
           {typeof domain === "string" ? (
@@ -1250,6 +1255,64 @@ function WebsiteEditor(props: {
           )}
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * The logo stored for a website. It is looked up when the settings are saved (in the
+ * background), so right after saving there may be none yet; "Look again" fetches it now.
+ */
+function LogoPreview({ id, url }: { id: string; url: string }) {
+  const [version, setVersion] = useState(0);
+  const [state, setState] = useState<"loading" | "shown" | "none">("loading");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Saving looks for the logo in the background: check again a few times.
+  useEffect(() => {
+    if (state !== "none") return;
+    const timer = setTimeout(() => setVersion((v) => v + 1), 4000);
+    return () => clearTimeout(timer);
+  }, [state, version]);
+
+  const lookAgain = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api("POST", `/api/websites/${id}/logo`);
+      setVersion((v) => v + 1);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="logo-preview">
+      <div className="logo-plate">
+        <img
+          key={`${version}-${url}`}
+          src={`/api/websites/${id}/logo?v=${version}`}
+          alt=""
+          style={{ display: state === "shown" ? "block" : "none" }}
+          onLoad={() => setState("shown")}
+          onError={() => setState("none")}
+        />
+        {state !== "shown" && <span className="hint">no logo yet</span>}
+      </div>
+      <div>
+        <p className="hint" style={{ margin: 0 }}>
+          {state === "shown"
+            ? "This logo is shown on the tile."
+            : "The logo is looked up on the website after saving. Without one, the tile shows a globe."}
+        </p>
+        <button className="small" disabled={busy} onClick={lookAgain}>
+          {busy ? "Looking…" : "Look again"}
+        </button>
+        {error && <p className="hint" style={{ color: "var(--err-text)", margin: "4px 0 0" }}>{error}</p>}
+      </div>
     </div>
   );
 }

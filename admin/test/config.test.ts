@@ -23,6 +23,8 @@ test("the example websites are valid", () => {
   expect(v.ok && v.config.websites.map((w) => [w.id, w.allow_subdomains])).toEqual([["kika", true], ["wiki", false]]);
   const w = validateConfig({ version: 1, websites: [{ id: "k", name: "K", url: "https://kika.de/" }] });
   expect(w.ok && w.config.websites[0]!.allow_subdomains).toBe(true);
+  expect(w.ok && w.config.websites[0]!.show_logo).toBe(true);
+  expect(v.ok && v.config.websites[1]!.show_logo).toBe(false);
 });
 
 test("website domains like src/sites.rs", () => {
@@ -103,6 +105,7 @@ const BAD: unknown[] = [
   { version: 1, websites: [{ id: "a", name: "A", url: "kika.de" }] },
   { version: 1, websites: [{ id: "a", name: "A", url: "https://user:pw@kika.de/" }] },
   { version: 1, websites: [{ id: "a", name: "A", url: "https://kika.de/", allow_subdomains: "yes" }] },
+  { version: 1, websites: [{ id: "a", name: "A", url: "https://kika.de/", show_logo: 1 }] },
   { version: 1, websites: [{ id: "a", name: "A", url: "https://kika.de/", extra: 1 }] },
   { version: 1, websites: [{ id: "a", name: "A", url: "https://a.de/" }, { id: "a", name: "B", url: "https://b.de/" }] },
   { version: 1, home: { title: "" } },

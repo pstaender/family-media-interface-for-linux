@@ -5,6 +5,10 @@
 
 import { createAdminServer } from "./app";
 import { defaultConfigDir, defaultRuntimeDir } from "./files";
+import { defaultLogoDir, refreshLogos } from "./logos";
+import { readJson } from "./files";
+import { validateConfig } from "./config";
+import { join } from "node:path";
 import { USAGE, loadServerSettings, reachableUrls } from "./settings";
 
 const configDir = defaultConfigDir();
@@ -31,3 +35,11 @@ const server = createAdminServer({
 console.log("familynovice admin:");
 for (const url of reachableUrls(host, server.port!)) console.log(`  ${url}`);
 console.log(`config directory: ${configDir}`);
+
+// Logos still missing (e.g. after an update), in the background.
+readJson(join(configDir, "config.json"))
+  .then((stored) => {
+    const v = stored === undefined ? null : validateConfig(stored);
+    if (v?.ok) return refreshLogos(defaultLogoDir(), v.config.websites);
+  })
+  .catch((e) => console.warn(`logos: ${(e as Error).message}`));

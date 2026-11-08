@@ -258,6 +258,18 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   frames) only blocks local addresses. Pop-ups never open a new window: allowed ones load in
   the same window, others show the same dialog. **Downloads are blocked** (non-destructive). Cookies/cache live in
   `$XDG_CACHE_HOME/familynovice/web`.
+- **Logos (`show_logo`, default on):** when the config is saved (and at admin start for
+  missing ones), the admin interface (`admin/src/logos.ts`, Bun `fetch` + `HTMLRewriter`)
+  reads the start page and picks the largest usable picture: icons ≥ 96 px (web app
+  manifest, apple-touch-icon, `<link rel=icon sizes>`), then the preview image
+  (`og:image`/`twitter:image`), then small icons, then `/favicon.ico`; no SVG. Only http(s)
+  to public domain names (DNS answers in the home network are refused too), redirects
+  checked per hop, 10 s / 4 MB limits, magic-byte check (PNG/JPEG/GIF/WebP/ICO/BMP). Stored
+  as `$XDG_CACHE_HOME/familynovice/logos/<id>.img` + `<id>.json` (source), atomically;
+  turned-off/removed ones are deleted. The media center never fetches anything: it checks
+  the files' times every 5 s, decodes in a thread and draws the logo on a light plate
+  (`WebsiteTile`); otherwise the globe. Admin: preview + "Look again"
+  (`GET|POST /api/websites/:id/logo`, POST only for the saved website's URL).
 - The media center starts it like a player (`--url`, `--allow` rules, `--title`,
   `--data-dir`), keeps it in front and can stop it (Esc on the "Playing…" screen). It looks
   for `familynovice-web` next to its own binary, then in `PATH`; if missing, website tiles are
@@ -442,6 +454,8 @@ Before you consider a change done, run the formatter, linter and tests for every
 - Non-destructive: never write outside familynovice's own folders (see "Non-destructive:
   read-only media access"). Review every new file operation against this.
 - No telemetry and no unneeded network calls. Usage data and config stay on the machine.
+  (The only fetches besides the websites themselves: the website logos, by the admin
+  interface, from the configured websites when saving.)
 - Follow the XDG Base Directory spec for config, data and cache locations.
 - Stay desktop-environment agnostic (see Deployment target).
 - Add dependencies sparingly and prefer well-maintained crates and packages. Explain why a new

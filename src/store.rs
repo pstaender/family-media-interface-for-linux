@@ -60,6 +60,17 @@ pub fn web_data_dir() -> Option<PathBuf> {
     Some(dirs::cache_dir()?.join(APP).join("web"))
 }
 
+/// `$XDG_CACHE_HOME/familynovice/logos/<website id>.img`: the website's logo, fetched by the
+/// admin interface (`admin/src/logos.ts`); the media center only reads it.
+pub fn logo_path(website_id: &str) -> Option<PathBuf> {
+    Some(
+        dirs::cache_dir()?
+            .join(APP)
+            .join("logos")
+            .join(format!("{website_id}.img")),
+    )
+}
+
 /// Socket for talking to the running mpv (`$XDG_RUNTIME_DIR`, falls back to the temp dir).
 pub fn mpv_socket_path() -> PathBuf {
     dirs::runtime_dir()

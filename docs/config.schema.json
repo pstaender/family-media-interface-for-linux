@@ -193,6 +193,11 @@
           "type": "boolean",
           "default": true,
           "description": "Allow the domain without leading www. and all its subdomains; otherwise only exactly the start host."
+        },
+        "show_logo": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the website's own logo on the tile. The admin interface fetches it (largest icon of the page: web app manifest, apple-touch-icon, icon links, og:image, favicon) into $XDG_CACHE_HOME/familynovice/logos/<id>.img; otherwise the generic website icon."
         }
       }
     },

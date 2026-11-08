@@ -199,6 +199,10 @@ pub struct WebsiteSettings {
     pub url: String,
     #[serde(default = "yes")]
     pub allow_subdomains: bool,
+    /// Show the website's own logo on the tile (fetched by the admin interface, see
+    /// `logos`); otherwise the generic website icon.
+    #[serde(default = "yes")]
+    pub show_logo: bool,
 }
 
 fn yes() -> bool {
@@ -538,6 +542,8 @@ mod tests {
             parse(r#"{"version":1,"websites":[{"id":"k","name":"K","url":"https://kika.de/"}]}"#)
                 .unwrap();
         assert!(c.websites[0].allow_subdomains);
+        assert!(c.websites[0].show_logo); // logo on by default
+        assert!(!config.websites[1].show_logo);
     }
 
     #[test]
@@ -623,6 +629,7 @@ mod tests {
             r#"{"version":1,"websites":[{"id":"a","name":"A","url":"kika.de"}]}"#,
             r#"{"version":1,"websites":[{"id":"a","name":"A","url":"https://user:pw@kika.de/"}]}"#,
             r#"{"version":1,"websites":[{"id":"a","name":"A","url":"https://kika.de/","allow_subdomains":"yes"}]}"#,
+            r#"{"version":1,"websites":[{"id":"a","name":"A","url":"https://kika.de/","show_logo":1}]}"#,
             r#"{"version":1,"websites":[{"id":"a","name":"A","url":"https://kika.de/","extra":1}]}"#,
             r#"{"version":1,"websites":[{"id":"a","name":"A","url":"https://a.de/"},{"id":"a","name":"B","url":"https://b.de/"}]}"#,
             r#"{"version":1,"home":{"title":""}}"#,

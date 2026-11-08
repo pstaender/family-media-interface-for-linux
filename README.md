@@ -161,6 +161,8 @@ to itself (`target/release/` or `target/debug/`), otherwise in `PATH`.
 
 1. Open http://127.0.0.1:8787/ on the computer and choose an admin password.
 2. **Home screen & media:** title, disc settings, folders (with a folder picker) and websites.
+   For websites, the panel looks up the site's logo after saving and shows it on the tile
+   (option "Show the website's logo on the tile"; without it, a globe).
 3. **Password & PIN:** set a PIN (4–8 digits). It unlocks the media center when time is up and
    enables the lock button on the home screen.
 4. **Parental control → Time limits:** time budgets or time windows for today, specific
@@ -249,7 +251,7 @@ Blocked pages are logged as `familynovice-web: blocked …`.
 | `~/.config/familynovice/config.json` | settings (written by the admin panel) |
 | `~/.config/familynovice/admin.json` | admin password hash |
 | `~/.local/share/familynovice/` | resume positions, usage time (`usage.json`) |
-| `~/.cache/familynovice/` | disc info, website cookies, player screenshots, MakeMKV build |
+| `~/.cache/familynovice/` | disc info, website cookies and logos, player screenshots, MakeMKV build |
 | `/run/user/<uid>/familynovice*.sock` | control sockets |
 | `/opt/familynovice/` | installed programs (`scripts/install.sh`), `install-state` for the uninstaller |
 | `/usr/share/wayland-sessions/familynovice.desktop` | the kiosk login session |

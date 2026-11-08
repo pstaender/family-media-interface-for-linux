@@ -36,6 +36,8 @@ export interface WebsiteSettings {
   /** Start page. */
   url: string;
   allow_subdomains: boolean;
+  /** Show the website's own logo on the tile (fetched by the admin interface, see logos.ts). */
+  show_logo: boolean;
 }
 
 /** The media center's home screen. */
@@ -117,7 +119,7 @@ export function websiteDomain(address: string, allowSubdomains: boolean): { host
 
 function validateWebsite(input: unknown): WebsiteSettings | string {
   if (!isObject(input)) return "must be an object";
-  const extra = unknownKey(input, ["id", "name", "url", "allow_subdomains"], "website");
+  const extra = unknownKey(input, ["id", "name", "url", "allow_subdomains", "show_logo"], "website");
   if (extra) return extra;
   const idName = checkIdAndName(input.id, input.name);
   if (idName) return idName;
@@ -129,9 +131,14 @@ function validateWebsite(input: unknown): WebsiteSettings | string {
     if (typeof input.allow_subdomains !== "boolean") return "allow_subdomains: must be true or false";
     allow_subdomains = input.allow_subdomains;
   }
+  let show_logo = true;
+  if (input.show_logo !== undefined) {
+    if (typeof input.show_logo !== "boolean") return "show_logo: must be true or false";
+    show_logo = input.show_logo;
+  }
   const domain = websiteDomain(url, allow_subdomains);
   if (typeof domain === "string") return `url "${url}": ${domain}`;
-  return { id: input.id as string, name: input.name as string, url, allow_subdomains };
+  return { id: input.id as string, name: input.name as string, url, allow_subdomains, show_logo };
 }
 
 const MAX_LIMITS = 50;

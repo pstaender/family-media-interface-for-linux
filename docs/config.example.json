@@ -50,7 +50,8 @@
       "id": "wiki",
       "name": "Klexikon",
       "url": "https://klexikon.zum.de/",
-      "allow_subdomains": false
+      "allow_subdomains": false,
+      "show_logo": false
     }
   ],
   "parental": {

@@ -21,6 +21,7 @@ import {
 import { isNormalizedAbsolutePath, validateConfig, defaultConfig, type Config } from "./config";
 import { NOT_RUNNING, sendCommand } from "./control";
 import { readJson, writeJsonAtomic } from "./files";
+import { defaultLogoDir, readLogo, refreshLogos, updateLogo } from "./logos";
 import { DEFAULT_HOST, isAllowedHost, isLoopbackAddress } from "./settings";
 
 export interface AdminOptions {
@@ -35,6 +36,8 @@ export interface AdminOptions {
   development?: boolean;
   /** Tests only: pretend requests come from this client address. */
   clientAddress?: string;
+  /** Website logos ($XDG_CACHE_HOME/familynovice/logos). */
+  logoDir?: string;
 }
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -88,6 +91,7 @@ export function createAdminServer(options: AdminOptions) {
   const configPath = join(options.configDir, "config.json");
   const socketPath = join(options.runtimeDir, "familynovice.sock");
   const auth = new Auth(join(options.configDir, "admin.json"));
+  const logoDir = options.logoDir ?? defaultLogoDir();
   const fromThisComputer = (req: Request): boolean =>
     isLoopbackAddress(options.clientAddress ?? server.requestIP(req)?.address);
 
@@ -228,7 +232,10 @@ export function createAdminServer(options: AdminOptions) {
             const stored = (await loadConfig()).config.parental;
             if (stored.pin_hash !== undefined) v.config.parental.pin_hash = stored.pin_hash;
             if (stored.pin_length !== undefined) v.config.parental.pin_length = stored.pin_length;
-            return json(await saveAndApply(v.config));
+            const result = await saveAndApply(v.config);
+            // In the background: the media center picks up new logo files by itself.
+            void refreshLogos(logoDir, v.config.websites);
+            return json(result);
           },
           { mutating: true },
         ),
@@ -294,6 +301,40 @@ export function createAdminServer(options: AdminOptions) {
           async () => {
             const reply = await sendCommand(socketPath, "lock");
             return reply.ok ? json({ ok: true }) : json({ error: reply.error }, 502);
+          },
+          { mutating: true },
+        ),
+      },
+
+      "/api/websites/:id/logo": {
+        // The stored logo (preview in the website settings).
+        GET: api(async (req) => {
+          const id = (req as Request & { params: { id: string } }).params.id;
+          if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(id)) return json({ error: "Invalid id." }, 400);
+          const logo = await readLogo(logoDir, id);
+          if (!logo) return json({ error: "No logo yet." }, 404);
+          return new Response(new Blob([new Uint8Array(logo.bytes)]), {
+            headers: {
+              "Content-Type": logo.type,
+              "Cache-Control": "no-store",
+              "X-Content-Type-Options": "nosniff",
+              ...(logo.meta ? { "X-Logo-Source": encodeURI(logo.meta.source) } : {}),
+            },
+          });
+        }),
+        // Look for the logo again now (of the saved website, never a URL from the request).
+        POST: api(
+          async (req) => {
+            const id = (req as Request & { params: { id: string } }).params.id;
+            const site = (await loadConfig()).config.websites.find((w) => w.id === id);
+            if (!site) return json({ error: "Save the website first." }, 404);
+            if (!site.show_logo) return json({ error: "The logo is turned off for this website." }, 400);
+            try {
+              const meta = await updateLogo(logoDir, site);
+              return json({ ok: true, source: meta.source });
+            } catch (e) {
+              return json({ error: `No logo found: ${(e as Error).message}` }, 502);
+            }
           },
           { mutating: true },
         ),

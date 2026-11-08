@@ -362,6 +362,10 @@ pub struct App {
     /// Whether each folder (by id) can be read; refreshed every few seconds.
     folder_ok: HashMap<String, bool>,
     folder_checked: Option<Instant>,
+    /// Website logos by website id: file time of the loaded logo and its texture.
+    logos: HashMap<String, (std::time::SystemTime, Option<egui::TextureHandle>)>,
+    logo_tx: Sender<(String, std::time::SystemTime, Result<Picture, String>)>,
+    logo_rx: Receiver<(String, std::time::SystemTime, Result<Picture, String>)>,
     picture_tx: Sender<(PathBuf, Result<Picture, String>)>,
     picture_rx: Receiver<(PathBuf, Result<Picture, String>)>,
     /// Whether our window is currently pushed below a running player.
@@ -390,6 +394,7 @@ impl App {
         let (picture_tx, picture_rx) = mpsc::channel();
         let (pin_tx, pin_rx) = mpsc::channel();
         let (media_tx, media_rx) = mpsc::channel();
+        let (logo_tx, logo_rx) = mpsc::channel();
         let repaint = ctx.clone();
         let mpris = Mpris::start(media_tx, move || repaint.request_repaint());
         Self {
@@ -412,6 +417,9 @@ impl App {
             web_helper: find_web_helper(),
             folder_ok: HashMap::new(),
             folder_checked: None,
+            logos: HashMap::new(),
+            logo_tx,
+            logo_rx,
             picture_tx,
             picture_rx,
             window_below_player: false,
@@ -432,6 +440,39 @@ impl App {
     }
 
     /// Pull updates from background threads.
+    /// Load website logos that are new or changed (the admin interface writes them), drop
+    /// those that are gone or turned off. Read-only; decoding happens in a thread.
+    fn check_logos(&mut self, config: &Config) {
+        let wanted: Vec<_> = config.websites.iter().filter(|w| w.show_logo).collect();
+        self.logos
+            .retain(|id, _| wanted.iter().any(|w| &w.id == id));
+        for site in wanted {
+            let Some(path) = store::logo_path(&site.id) else {
+                continue;
+            };
+            let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
+                self.logos.remove(&site.id);
+                continue;
+            };
+            if self
+                .logos
+                .get(&site.id)
+                .is_some_and(|(t, _)| *t == modified)
+            {
+                continue;
+            }
+            // Remember the time now, so the file isn't decoded twice; keep the old texture
+            // until the new one is there.
+            let old = self.logos.remove(&site.id).and_then(|(_, t)| t);
+            self.logos.insert(site.id.clone(), (modified, old));
+            let (tx, id, ctx) = (self.logo_tx.clone(), site.id.clone(), self.ctx.clone());
+            std::thread::spawn(move || {
+                let _ = tx.send((id, modified, pictures::load(&path, 384, 384)));
+                ctx.request_repaint();
+            });
+        }
+    }
+
     fn poll_background(&mut self) {
         while let Ok(drives) = self.drives_rx.try_recv() {
             self.drives = drives;
@@ -509,6 +550,25 @@ impl App {
                 .collect();
             self.folder_checked = Some(Instant::now());
             self.ctx.request_repaint_after(Duration::from_secs(5));
+            self.check_logos(&config);
+        }
+        while let Ok((id, modified, result)) = self.logo_rx.try_recv() {
+            match result {
+                Ok(p) => {
+                    let image =
+                        egui::ColorImage::from_rgba_unmultiplied([p.width, p.height], &p.rgba);
+                    let texture = self.ctx.load_texture(
+                        format!("logo-{id}"),
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    self.logos.insert(id, (modified, Some(texture)));
+                }
+                Err(e) => {
+                    log::warn!("logo of website {id}: {e}");
+                    self.logos.insert(id, (modified, None));
+                }
+            }
         }
         // Every new Blu-ray: use the cached disc info, or start a MakeMKV scan.
         for report in &self.drives {
@@ -1286,9 +1346,17 @@ impl App {
                         } else {
                             "Not installed".into()
                         };
-                        paint_website_tile(
-                            painter, rect, s, &site.name, &subtitle, available, focus,
-                        );
+                        let logo = site
+                            .show_logo
+                            .then(|| self.logos.get(&site.id).and_then(|(_, t)| t.as_ref()))
+                            .flatten();
+                        let tile = WebsiteTile {
+                            title: &site.name,
+                            subtitle: &subtitle,
+                            available,
+                            logo,
+                        };
+                        paint_website_tile(painter, rect, s, &tile, focus);
                     }
                 }
                 if home && response.clicked() {
@@ -2004,15 +2072,22 @@ fn website_domain(site: &crate::config::WebsiteSettings) -> String {
     }
 }
 
-fn paint_website_tile(
-    painter: &egui::Painter,
-    rect: Rect,
-    s: f32,
-    title: &str,
-    subtitle: &str,
+/// What a website tile shows.
+struct WebsiteTile<'a> {
+    title: &'a str,
+    subtitle: &'a str,
     available: bool,
-    focus: f32,
-) {
+    /// The website's logo; `None`: our globe icon.
+    logo: Option<&'a egui::TextureHandle>,
+}
+
+fn paint_website_tile(painter: &egui::Painter, rect: Rect, s: f32, tile: &WebsiteTile, focus: f32) {
+    let WebsiteTile {
+        title,
+        subtitle,
+        available,
+        logo,
+    } = *tile;
     let alpha = if available { 1.0 } else { UNAVAILABLE_ALPHA };
     let rect = rect.expand(focus * 12.0 * s);
     let radius = CornerRadius::same((18.0 * s) as u8);
@@ -2026,7 +2101,27 @@ fn paint_website_tile(
         );
     }
     let center = Pos2::new(rect.center().x, rect.min.y + rect.height() * 0.36);
-    paint_globe_icon(painter, center, rect.width() * 0.27, alpha);
+    match logo {
+        Some(texture) => {
+            // On a light rounded plate: many logos are dark or transparent.
+            let edge = rect.width() * 0.5;
+            let plate = Rect::from_center_size(center, Vec2::splat(edge + 20.0 * s));
+            painter.rect_filled(
+                plate,
+                CornerRadius::same((14.0 * s) as u8),
+                Color32::from_rgb(0xf4, 0xf5, 0xf8).gamma_multiply(alpha),
+            );
+            let size = texture.size_vec2();
+            let scale = (edge / size.x).min(edge / size.y);
+            painter.image(
+                texture.id(),
+                Rect::from_center_size(center, size * scale),
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::WHITE.gamma_multiply(alpha),
+            );
+        }
+        None => paint_globe_icon(painter, center, rect.width() * 0.27, alpha),
+    }
     paint_tile_texts(painter, rect, s, title, subtitle, alpha);
 }
 

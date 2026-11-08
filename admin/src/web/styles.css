@@ -630,3 +630,37 @@ select {
 .budget-usage .bar div.full {
   background: #d63a3a;
 }
+
+/* ---------------------------------------------------------------- website logos */
+
+.logo-preview {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.logo-plate {
+  width: 72px;
+  height: 72px;
+  flex: none;
+  border-radius: 12px;
+  background: #f4f5f8; /* the same light plate as on the tile */
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.logo-plate img {
+  max-width: 56px;
+  max-height: 56px;
+}
+
+.logo-plate .hint {
+  margin: 0;
+  font-size: 11px;
+  text-align: center;
+  color: #5d6475;
+}
