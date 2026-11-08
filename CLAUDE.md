@@ -628,7 +628,11 @@ Before you consider a change done, run the formatter, linter and tests for every
   `bin/familynovice-session`: `cage -s` (VT switching stays) plus the system keyboard layout
   from `/etc/default/keyboard`, logging via `systemd-cat -t familynovice`. Inside cage,
   `bin/familynovice-kiosk` restarts the media center after crashes (exit 0 = Ctrl+Q ends the
-  session; 5 quick crashes end it too). The default session is set via AccountsService
+  session; 5 quick crashes end it too) and stops once its cage is gone (`kill -0 $PPID`):
+  an orphaned loop once started a second media center into the next session, hidden from
+  the admin panel. Also, only one media center runs per user (`flock` on
+  `$XDG_RUNTIME_DIR/familynovice.lock`, `store::lock_instance`; released on exit/exec); a
+  second one exits with 0. The default session is set via AccountsService
   (`SetSession`/`SetXSession`/`SetSessionType`, read by GDM and LightDM). The admin panel is a
   systemd user service (`familynovice-admin.service`) with lingering. `install-state`
   (KEY=VALUE, read as data, never sourced) keeps the previous session and linger state for

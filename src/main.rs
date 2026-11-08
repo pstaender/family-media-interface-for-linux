@@ -35,6 +35,20 @@ fn main() -> eframe::Result {
     )
     .init();
 
+    // One media center per user: a second one (e.g. started by a kiosk loop whose session
+    // already ended) would cover the screen without getting the admin panel's changes.
+    let _instance = match store::lock_instance(&store::instance_lock_path()) {
+        Ok(Some(lock)) => Some(lock),
+        Ok(None) => {
+            log::error!("another familynovice is already running for this user; exiting");
+            return Ok(());
+        }
+        Err(e) => {
+            log::warn!("single-instance lock not available ({e}); continuing");
+            None
+        }
+    };
+
     // `--windowed` for development; the media center normally runs fullscreen.
     let windowed = std::env::args().any(|a| a == "--windowed");
 

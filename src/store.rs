@@ -116,6 +116,38 @@ pub fn audio_socket_path() -> PathBuf {
         .join(format!("{APP}-audio.sock"))
 }
 
+/// Held (flock) by the running media center, so a second one for the same user exits.
+pub fn instance_lock_path() -> PathBuf {
+    dirs::runtime_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("{APP}.lock"))
+}
+
+/// Take the single-instance lock. `Ok(None)`: another media center of this user runs.
+/// The lock lasts as long as the returned file stays open (also released by `exec`, as
+/// files are opened close-on-exec, so a restart takes it again).
+pub fn lock_instance(path: &Path) -> std::io::Result<Option<std::fs::File>> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .open(path)?;
+    // SAFETY: flock(2) on a file descriptor we own.
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result == 0 {
+        return Ok(Some(file));
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        Ok(None)
+    } else {
+        Err(error)
+    }
+}
+
 /// The media center's control socket (see `control.rs`), used by the admin interface.
 pub fn control_socket_path() -> PathBuf {
     dirs::runtime_dir()
@@ -174,6 +206,17 @@ pub fn remove(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_one_instance_gets_the_lock() {
+        let path = std::env::temp_dir().join(format!("familynovice-lock-{}", std::process::id()));
+        let first = lock_instance(&path).unwrap();
+        assert!(first.is_some());
+        assert!(lock_instance(&path).unwrap().is_none());
+        drop(first);
+        assert!(lock_instance(&path).unwrap().is_some());
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn file_names_are_safe() {

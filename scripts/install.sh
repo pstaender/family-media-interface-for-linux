@@ -204,8 +204,11 @@ EOF
 # the session; five crashes in a row (each within a minute) end it too, back to the login screen.
 cat >"$STAGING/bin/familynovice-kiosk" <<'EOF'
 #!/bin/sh
+# $PPID is cage: once it is gone (session ended), stop instead of starting the media center
+# into whatever display comes next (it would run twice, hidden from the admin panel).
 crashes=0
 while :; do
+    kill -0 "$PPID" 2>/dev/null || exit 0
     started=$(date +%s)
     /opt/familynovice/bin/familynovice && exit 0
     code=$?
