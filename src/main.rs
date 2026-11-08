@@ -3,6 +3,7 @@ mod config;
 mod control;
 mod cover;
 mod disc;
+mod i18n;
 mod library;
 mod limits;
 mod lock;

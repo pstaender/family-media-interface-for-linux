@@ -5,6 +5,7 @@
 use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Key, Pos2, Rect, Sense, Vec2};
 
 use crate::limits::{self, LockReason};
+use crate::tr;
 
 /// Number pad: 1–9, then ⌫, 0, OK.
 const KEYS: [&str; 12] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "OK"];
@@ -14,9 +15,9 @@ const MAX_DIGITS: usize = 8;
 
 /// Unlock choices after a correct PIN: minutes (`None` = rest of today).
 pub const UNLOCK_CHOICES: [(&str, Option<u32>); 3] = [
-    ("30 more minutes", Some(30)),
-    ("1 more hour", Some(60)),
-    ("Rest of today", None),
+    (crate::tr_noop!("30 more minutes"), Some(30)),
+    (crate::tr_noop!("1 more hour"), Some(60)),
+    (crate::tr_noop!("Rest of today"), None),
 ];
 
 pub struct LockView {
@@ -66,7 +67,7 @@ impl LockView {
             self.message = None;
             self.unlock_menu = Some(0);
         } else {
-            self.message = Some("Wrong PIN".into());
+            self.message = Some(tr!("Wrong PIN").into());
         }
     }
 
@@ -81,9 +82,9 @@ impl LockView {
         painter.rect_filled(screen, 0.0, Color32::from_rgb(0x0c, 0x0e, 0x14));
         let center = screen.center();
         let (title, color) = match self.reason {
-            LockReason::Parent => ("Locked", crate::ui::TEXT),
-            LockReason::BudgetUsed => ("Time is up", crate::ui::TEXT),
-            LockReason::OutsideWindow { .. } => ("Not now", crate::ui::TEXT),
+            LockReason::Parent => (tr!("Locked"), crate::ui::TEXT),
+            LockReason::BudgetUsed => (tr!("Time is up"), crate::ui::TEXT),
+            LockReason::OutsideWindow { .. } => (tr!("Not now"), crate::ui::TEXT),
         };
         painter.text(
             Pos2::new(center.x, screen.min.y + 120.0 * s),
@@ -95,7 +96,7 @@ impl LockView {
         painter.text(
             Pos2::new(center.x, screen.min.y + 210.0 * s),
             Align2::CENTER_TOP,
-            limits::reason_text(&self.reason),
+            limits::reason_text_with(&self.reason, crate::i18n::tr),
             FontId::proportional(30.0 * s),
             crate::ui::TEXT_DIM,
         );
@@ -107,7 +108,7 @@ impl LockView {
             painter.text(
                 center,
                 Align2::CENTER_CENTER,
-                "A parent can unlock it in the admin panel.",
+                tr!("A parent can unlock it in the admin panel."),
                 FontId::proportional(30.0 * s),
                 crate::ui::TEXT,
             );
@@ -142,11 +143,11 @@ impl LockView {
         self.unlock_menu = Some(selected);
         let mut items: Vec<crate::ui::MenuItem> = UNLOCK_CHOICES
             .iter()
-            .map(|(label, _)| crate::ui::MenuItem::new(*label, ""))
+            .map(|(label, _)| crate::ui::MenuItem::new(crate::i18n::tr(label), ""))
             .collect();
-        items.push(crate::ui::MenuItem::new("Cancel", ""));
+        items.push(crate::ui::MenuItem::new(tr!("Cancel"), ""));
         let clicked =
-            crate::ui::paint_menu(ui, painter, screen, s, "Unlock for…", &items, selected);
+            crate::ui::paint_menu(ui, painter, screen, s, tr!("Unlock for…"), &items, selected);
         match clicked.or(enter.then_some(selected)) {
             _ if back => {
                 self.unlock_menu = None;
@@ -185,9 +186,12 @@ impl LockView {
             }
         }
         let status = if self.checking {
-            Some("Checking…".to_string())
+            Some(tr!("Checking…").to_string())
         } else if info.wait_secs > 0 {
-            Some(format!("Wrong PIN. Try again in {} s", info.wait_secs))
+            Some(tr!(
+                "Wrong PIN. Try again in {secs} s",
+                secs = info.wait_secs
+            ))
         } else {
             self.message.clone()
         };
@@ -308,7 +312,7 @@ impl LockView {
                     self.checking = true;
                     return LockAction::CheckPin(self.entered.clone());
                 }
-                self.message = Some("The PIN has 4 to 8 digits".into());
+                self.message = Some(tr!("The PIN has 4 to 8 digits").into());
             }
             Some(i) => {
                 if self.entered.len() < info.pin_length.unwrap_or(MAX_DIGITS) {

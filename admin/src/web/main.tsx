@@ -5,6 +5,7 @@ import {
   websiteDomain,
   type Config,
   type FolderSettings,
+  type Language,
   type LimitRule,
   type Scope,
   type WebsiteSettings,
@@ -472,6 +473,18 @@ function HomeTab({ config, setConfig }: ConfigProps) {
             setConfig({ ...config, home: { ...config.home, title } });
           }}
         />
+      </label>
+      <label className="field" style={{ marginTop: 6 }}>
+        <span>Language</span>
+        <select
+          value={config.home.language}
+          onChange={(e) => setConfig({ ...config, home: { ...config.home, language: e.target.value as Language } })}
+        >
+          <option value="auto">Automatic (the computer's language, otherwise English)</option>
+          <option value="en">English</option>
+          <option value="de">Deutsch (German)</option>
+        </select>
+        <small className="hint">Language of the media center on the TV (and of the website window).</small>
       </label>
     </section>
   );

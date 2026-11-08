@@ -1,7 +1,8 @@
 //! familynovice-web: a locked-down fullscreen browser window for one website.
 //!
 //! Started by the media center:
-//! `familynovice-web --url <start page> --allow <rule>… [--title <name>] [--data-dir <dir>]`
+//! `familynovice-web --url <start page> --allow <rule>… [--title <name>] [--data-dir <dir>]
+//! [--lang en|de]`
 //! (`--windowed` for development). Rules: `kika.de` (exactly) or `*.kika.de` (with
 //! subdomains), see `src/sites.rs`, which is shared with the media center.
 //!
@@ -19,6 +20,11 @@
 #[path = "../../src/sites.rs"]
 #[allow(dead_code)]
 mod sites;
+
+// Shared with the media center (interface texts; language from `--lang`).
+#[path = "../../src/i18n.rs"]
+#[allow(dead_code)]
+mod i18n;
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -94,6 +100,10 @@ fn parse_args() -> Result<Args, String> {
             "--title" => title = value()?,
             "--data-dir" => data_dir = Some(PathBuf::from(value()?)),
             "--windowed" => windowed = true,
+            "--lang" => {
+                let v = value()?;
+                i18n::set(i18n::Lang::from_code(&v).ok_or(format!("unknown language: {v}"))?);
+            }
             other => return Err(format!("unknown argument: {other}")),
         }
     }
@@ -139,7 +149,10 @@ impl BlockedDialog {
         container.style_context().add_class("fn-dialog");
         container.set_halign(gtk::Align::Center);
         container.set_valign(gtk::Align::Center);
-        let title = gtk::Label::new(Some(&format!("This page is not part of {site_name}")));
+        let title = gtk::Label::new(Some(&tr!(
+            "This page is not part of {site}",
+            site = site_name
+        )));
         title.style_context().add_class("fn-dialog-title");
         title.set_line_wrap(true);
         title.set_max_width_chars(40);
@@ -150,10 +163,10 @@ impl BlockedDialog {
         let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 16);
         buttons.set_halign(gtk::Align::Center);
         buttons.set_margin_top(12);
-        let back_button = gtk::Button::with_label("Go back");
+        let back_button = gtk::Button::with_label(tr!("Go back"));
         back_button.style_context().add_class("fn-btn");
         back_button.style_context().add_class("fn-primary");
-        let close_button = gtk::Button::with_label("Close website");
+        let close_button = gtk::Button::with_label(tr!("Close website"));
         close_button.style_context().add_class("fn-btn");
         buttons.pack_start(&back_button, false, false, 0);
         buttons.pack_start(&close_button, false, false, 0);
@@ -195,7 +208,7 @@ fn main() {
             eprintln!(
                 "familynovice-web: {e}\n\
                  usage: familynovice-web --url URL --allow RULE [--allow RULE…] \
-                 [--title NAME] [--data-dir DIR] [--windowed]"
+                 [--title NAME] [--data-dir DIR] [--lang en|de] [--windowed]"
             );
             std::process::exit(2);
         }
@@ -241,7 +254,7 @@ fn run(args: Args) -> Result<(), String> {
     close.set_valign(gtk::Align::Start);
     close.set_margin_top(20);
     close.set_margin_end(20);
-    close.set_tooltip_text(Some("Close"));
+    close.set_tooltip_text(Some(tr!("Close")));
     close.set_can_focus(false); // keyboard focus stays in the page
     overlay.add_overlay(&close);
     let p = proxy.clone();
@@ -256,12 +269,12 @@ fn run(args: Args) -> Result<(), String> {
     back.set_valign(gtk::Align::Start);
     back.set_margin_top(20);
     back.set_margin_start(20);
-    back.set_tooltip_text(Some("Previous page"));
+    back.set_tooltip_text(Some(tr!("Previous page")));
     back.set_can_focus(false);
     back.set_sensitive(false);
     overlay.add_overlay(&back);
 
-    let hint = gtk::Label::new(Some("Keep holding Esc to close…"));
+    let hint = gtk::Label::new(Some(tr!("Keep holding Esc to close…")));
     hint.style_context().add_class("fn-hint");
     hint.set_halign(gtk::Align::Center);
     hint.set_valign(gtk::Align::Start);
@@ -428,9 +441,12 @@ fn run(args: Args) -> Result<(), String> {
     let held: Rc<Cell<Option<(Instant, UserEvent)>>> = Rc::default();
     let hold_action = |key: gdk::keys::Key| {
         if key == gdk::keys::constants::Escape || key == gdk::keys::constants::Back {
-            Some((UserEvent::Close, "Keep holding Esc to close…"))
+            Some((UserEvent::Close, tr!("Keep holding Esc to close…")))
         } else if key == gdk::keys::constants::HomePage {
-            Some((UserEvent::GoHome, "Keep holding to go to the home screen…"))
+            Some((
+                UserEvent::GoHome,
+                tr!("Keep holding to go to the home screen…"),
+            ))
         } else {
             None
         }

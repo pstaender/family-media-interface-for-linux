@@ -28,6 +28,12 @@
           "type": "boolean",
           "default": true,
           "description": "Show the title at all."
+        },
+        "language": {
+          "type": "string",
+          "enum": ["auto", "en", "de"],
+          "default": "auto",
+          "description": "Language of the media center's interface: auto = the computer's language (LANGUAGE / LC_ALL / LC_MESSAGES / LANG), English if it isn't available; en = English; de = German."
         }
       }
     },

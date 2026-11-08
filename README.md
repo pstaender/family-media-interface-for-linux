@@ -160,7 +160,8 @@ to itself (`target/release/` or `target/debug/`), otherwise in `PATH`.
 ### First steps in the admin panel
 
 1. Open http://127.0.0.1:8787/ on the computer and choose an admin password.
-2. **Home screen & media:** title, disc settings, folders (with a folder picker) and websites.
+2. **Home screen & media:** title, language of the TV interface (automatic, English or
+   German), disc settings, folders (with a folder picker) and websites.
    For websites, the panel looks up the site's logo after saving and shows it on the tile
    (option "Show the website's logo on the tile"; without it, a globe).
 3. **Password & PIN:** set a PIN (4–8 digits). It unlocks the media center when time is up and

@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::store;
+use crate::{tr, tr_noop};
 
 /// `KEY_HOMEPAGE`: the home button of most remotes.
 pub const KEY_HOMEPAGE: u16 = 172;
@@ -66,16 +67,16 @@ impl Action {
 
     pub fn label(self) -> &'static str {
         match self {
-            Action::Ok => "OK",
-            Action::Back => "Back / Return",
-            Action::Home => "Home",
-            Action::Up => "Up",
-            Action::Down => "Down",
-            Action::Left => "Left",
-            Action::Right => "Right",
-            Action::PlayPause => "Play / Pause",
-            Action::Next => "Next",
-            Action::Previous => "Previous",
+            Action::Ok => tr_noop!("OK"),
+            Action::Back => tr_noop!("Back / Return"),
+            Action::Home => tr_noop!("Home"),
+            Action::Up => tr_noop!("Up"),
+            Action::Down => tr_noop!("Down"),
+            Action::Left => tr_noop!("Left"),
+            Action::Right => tr_noop!("Right"),
+            Action::PlayPause => tr_noop!("Play / Pause"),
+            Action::Next => tr_noop!("Next"),
+            Action::Previous => tr_noop!("Previous"),
         }
     }
 }
@@ -150,24 +151,40 @@ impl RemoteMap {
         })
     }
 
-    /// For the summary screen and the admin panel: "OK: Enter key, remote code 353".
+    /// For the admin panel (English): "Enter key, remote code 353".
     pub fn describe(&self, action: Action) -> String {
+        self.describe_with(action, |t| t)
+    }
+
+    /// The same, with the texts translated by `t` (the TV: `i18n::tr`).
+    pub fn describe_with(&self, action: Action, t: fn(&'static str) -> &'static str) -> String {
         let Some(b) = self.buttons.get(&action) else {
-            return "not set up (skipped)".into();
+            return t(tr_noop!("not set up (skipped)")).into();
+        };
+        let fill = |text: &'static str, name: &str, value: &str| {
+            t(text).replace(&format!("{{{name}}}"), value)
         };
         let mut parts: Vec<String> = b
             .window
             .iter()
             .map(|w| match w.split_once(':') {
-                Some(("key", k)) => format!("{k} key"),
-                Some(("mouse", m)) => format!("{m} click"),
-                Some(("desktop", d)) => format!("{d} via the desktop (media key)"),
+                Some(("key", k)) => fill(tr_noop!("{key} key"), "key", k),
+                Some(("mouse", m)) => fill(tr_noop!("{button} click"), "button", m),
+                Some(("desktop", d)) => fill(
+                    tr_noop!("{command} via the desktop (media key)"),
+                    "command",
+                    d,
+                ),
                 _ => w.clone(),
             })
             .collect();
-        parts.extend(b.codes.iter().map(|c| format!("remote code {c}")));
+        parts.extend(
+            b.codes
+                .iter()
+                .map(|c| fill(tr_noop!("remote code {code}"), "code", &c.to_string())),
+        );
         if b.window.is_empty() && !b.codes.is_empty() {
-            parts.push("read from the remote directly".into());
+            parts.push(t(tr_noop!("read from the remote directly")).into());
         }
         parts.join(", ")
     }
@@ -390,9 +407,9 @@ impl Calibration {
             });
             self.cooldown_until = Some(now + COOLDOWN);
             if let Some((other, _)) = used_by {
-                self.message = Some(format!(
-                    "That button is already {}. Press another one, or wait to skip.",
-                    other.label()
+                self.message = Some(tr!(
+                    "That button is already {action}. Press another one, or wait to skip.",
+                    action = crate::i18n::tr(other.label())
                 ));
                 self.step_started = now;
                 return false;

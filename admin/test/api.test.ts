@@ -134,7 +134,7 @@ test("reads default config, rejects invalid, saves and applies valid config", as
   const written = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
   expect(written).toEqual({
     version: 1,
-    home: { title: "familynovice", show_title: true },
+    home: { title: "familynovice", show_title: true, language: "auto" },
     parental: { pin_backoff_doubling: true, limits: [] },
     discs: { enabled: true, allow_disc_menu: false, audio_languages: ["deu"], subtitle_languages: [] },
     folders: [],

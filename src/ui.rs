@@ -24,6 +24,7 @@ use crate::pictures::{self, Picture};
 use crate::player::{self, MovieOptions, PlayMode};
 use crate::recent;
 use crate::remote::{self, Action, Calibration, RemoteMap};
+use crate::tr;
 use crate::usage::SharedTracker;
 use crate::{cover, resume, sites, store};
 
@@ -68,7 +69,7 @@ impl ScanState {
                 progress: Some(p),
                 phase_started,
             } => Some((p.phase.label(), p.estimate(phase_started.elapsed()))),
-            ScanState::Running { progress: None, .. } => Some(("Reading disc", 0.0)),
+            ScanState::Running { progress: None, .. } => Some((tr!("Reading disc"), 0.0)),
             _ => None,
         }
     }
@@ -582,19 +583,22 @@ impl App {
         painter.text(
             Pos2::new(center.x, screen_rect.min.y + 110.0 * s),
             Align2::CENTER_CENTER,
-            "Remote setup",
+            tr!("Remote setup"),
             font(52.0),
             TEXT,
         );
 
         if let Some(done) = view.done {
             // Summary; any button (or 20 s) closes it.
-            let mut lines = vec!["Saved. Your remote's buttons:".to_string(), String::new()];
+            let mut lines = vec![
+                tr!("Saved. Your remote's buttons:").to_string(),
+                String::new(),
+            ];
             for action in Action::ALL {
                 lines.push(format!(
                     "{}:  {}",
-                    action.label(),
-                    view.calibration.map.describe(action)
+                    crate::i18n::tr(action.label()),
+                    view.calibration.map.describe_with(action, crate::i18n::tr)
                 ));
             }
             painter.text(
@@ -607,7 +611,7 @@ impl App {
             painter.text(
                 Pos2::new(center.x, screen_rect.max.y - 70.0 * s),
                 Align2::CENTER_CENTER,
-                "Press any button to continue",
+                tr!("Press any button to continue"),
                 font(24.0),
                 TEXT_DIM,
             );
@@ -645,17 +649,17 @@ impl App {
         painter.text(
             Pos2::new(center.x, screen_rect.min.y + 175.0 * s),
             Align2::CENTER_CENTER,
-            "Switch the remote's mouse / pointer mode off first.",
+            tr!("Switch the remote's mouse / pointer mode off first."),
             font(28.0),
             Color32::from_rgb(0xff, 0xb4, 0x5c),
         );
         painter.text(
             Pos2::new(center.x, center.y - 150.0 * s),
             Align2::CENTER_CENTER,
-            format!(
-                "Button {} of {}",
-                view.calibration.step() + 1,
-                Action::ALL.len()
+            tr!(
+                "Button {n} of {total}",
+                n = view.calibration.step() + 1,
+                total = Action::ALL.len()
             ),
             font(26.0),
             TEXT_DIM,
@@ -663,23 +667,23 @@ impl App {
         painter.text(
             Pos2::new(center.x, center.y - 60.0 * s),
             Align2::CENTER_CENTER,
-            "Press this button on the remote:",
+            tr!("Press this button on the remote:"),
             font(32.0),
             TEXT,
         );
         painter.text(
             Pos2::new(center.x, center.y + 20.0 * s),
             Align2::CENTER_CENTER,
-            action.label(),
+            crate::i18n::tr(action.label()),
             font(72.0),
             ACCENT,
         );
         painter.text(
             Pos2::new(center.x, center.y + 110.0 * s),
             Align2::CENTER_CENTER,
-            format!(
-                "No such button? It's skipped in {} s.",
-                view.calibration.seconds_left(now)
+            tr!(
+                "No such button? It's skipped in {secs} s.",
+                secs = view.calibration.seconds_left(now)
             ),
             font(24.0),
             TEXT_DIM,
@@ -697,8 +701,8 @@ impl App {
             .iter()
             .take(view.calibration.step())
             .map(|a| match view.calibration.map.buttons.get(a) {
-                Some(_) => format!("{} ✓", a.label()),
-                None => format!("{} –", a.label()),
+                Some(_) => format!("{} ✓", crate::i18n::tr(a.label())),
+                None => format!("{} –", crate::i18n::tr(a.label())),
             })
             .collect();
         painter.text(
@@ -753,7 +757,7 @@ impl App {
         painter.text(
             rect.center(),
             Align2::CENTER_CENTER,
-            "Keep holding to go to the home screen…",
+            tr!("Keep holding to go to the home screen…"),
             FontId::proportional(26.0 * s),
             TEXT,
         );
@@ -986,13 +990,18 @@ impl App {
                     if !status.success() && started.elapsed() < Duration::from_secs(10) =>
                 {
                     let text = match kind {
-                        PlayKind::Disc => format!(
-                            "The player stopped right away ({status}).\n\
-                             Is MakeMKV installed and registered? See scripts/setup.sh."
+                        PlayKind::Disc => tr!(
+                            "The player stopped right away ({status}).\nIs MakeMKV installed and registered? See scripts/setup.sh.",
+                            status = status
                         ),
-                        PlayKind::File => format!("This file could not be played ({status})."),
+                        PlayKind::File => {
+                            tr!("This file could not be played ({status}).", status = status)
+                        }
                         PlayKind::Website => {
-                            format!("The website could not be opened ({status}).")
+                            tr!(
+                                "The website could not be opened ({status}).",
+                                status = status
+                            )
                         }
                     };
                     next = Some(Screen::Message {
@@ -1003,7 +1012,7 @@ impl App {
                 Ok(Some(_)) => next = Some(back.take().map_or(Screen::Home, Screen::Browse)),
                 Err(e) => {
                     next = Some(Screen::Message {
-                        text: format!("Lost track of the player: {e}"),
+                        text: tr!("Lost track of the player: {error}", error = e),
                         back: back.take(),
                     })
                 }
@@ -1178,11 +1187,14 @@ impl App {
         // Countdown m:ss; refreshed several times a second so no second is skipped.
         self.ctx.request_repaint_after(Duration::from_millis(250));
         let left = left.max(0);
-        let text = format!("Time left {}:{:02}", left / 60, left % 60);
+        let text = tr!(
+            "Time left {time}",
+            time = format!("{}:{:02}", left / 60, left % 60)
+        );
         let font = FontId::proportional(30.0 * s);
         // Width from a fixed template, so the box doesn't change size every second.
         let size = painter
-            .layout_no_wrap("Time left 0:00".to_string(), font.clone(), TEXT)
+            .layout_no_wrap(tr!("Time left {time}", time = "0:00"), font.clone(), TEXT)
             .size();
         let box_size = size + Vec2::new(44.0 * s, 22.0 * s);
         let rect = Rect::from_min_size(
@@ -1237,12 +1249,12 @@ impl App {
         let (config, error) = self.config();
         if !config.discs.enabled {
             return match error {
-                Some(_) => tile(false, "Blu-ray", "Settings could not be loaded"),
-                None => tile(false, "Blu-ray", "Discs are turned off"),
+                Some(_) => tile(false, "Blu-ray", tr!("Settings could not be loaded")),
+                None => tile(false, "Blu-ray", tr!("Discs are turned off")),
             };
         }
         if self.drives.is_empty() {
-            return tile(false, "Blu-ray", "No disc drive found");
+            return tile(false, "Blu-ray", tr!("No disc drive found"));
         }
         // Prefer a drive with a Blu-ray in it.
         let bd = self.drives.iter().find_map(|r| match &r.state {
@@ -1278,15 +1290,15 @@ impl App {
         let state = &self.drives[0].state;
         match state {
             DriveState::Loaded(d) if d.kind == MediaKind::Dvd => {
-                tile(false, "Blu-ray", "DVDs are not supported yet")
+                tile(false, "Blu-ray", tr!("DVDs are not supported yet"))
             }
-            DriveState::Loaded(_) => tile(false, "Blu-ray", "This disc is not a Blu-ray"),
-            DriveState::NotReady => tile(false, "Blu-ray", "Reading disc…"),
-            DriveState::TrayOpen => tile(false, "Blu-ray", "Tray is open"),
-            DriveState::Empty => tile(false, "Blu-ray", "Insert a Blu-ray"),
+            DriveState::Loaded(_) => tile(false, "Blu-ray", tr!("This disc is not a Blu-ray")),
+            DriveState::NotReady => tile(false, "Blu-ray", tr!("Reading disc…")),
+            DriveState::TrayOpen => tile(false, "Blu-ray", tr!("Tray is open")),
+            DriveState::Empty => tile(false, "Blu-ray", tr!("Insert a Blu-ray")),
             DriveState::Error(e) => {
                 log::debug!("drive error: {e}");
-                tile(false, "Blu-ray", "Drive not accessible")
+                tile(false, "Blu-ray", tr!("Drive not accessible"))
             }
         }
     }
@@ -1341,9 +1353,10 @@ impl App {
                     stopping: None,
                 }
             }
-            Err(e) => message(format!(
-                "Could not start the player ({:?}): {e}.\nRun scripts/setup.sh to install it.",
-                cmd.get_program()
+            Err(e) => message(tr!(
+                "Could not start the player ({player}): {error}.\nRun scripts/setup.sh to install it.",
+                player = cmd.get_program().to_string_lossy(),
+                error = e
             )),
         };
     }
@@ -1424,7 +1437,7 @@ impl App {
         let rules = match sites::rules_for(&site.url, site.allow_subdomains) {
             Ok(rules) => rules,
             Err(e) => {
-                self.screen = message(format!("This website can't be opened: {e}"));
+                self.screen = message(tr!("This website can't be opened: {error}", error = e));
                 return;
             }
         };
@@ -1432,7 +1445,9 @@ impl App {
         cmd.arg("--url")
             .arg(&site.url)
             .arg("--title")
-            .arg(&site.name);
+            .arg(&site.name)
+            .arg("--lang")
+            .arg(crate::i18n::current().code());
         for rule in &rules {
             cmd.arg("--allow").arg(rule.to_arg());
         }
@@ -1450,7 +1465,7 @@ impl App {
                 kind: PlayKind::Website,
                 stopping: None,
             },
-            Err(e) => message(format!("Could not open the website: {e}")),
+            Err(e) => message(tr!("Could not open the website: {error}", error = e)),
         };
     }
 
@@ -1487,7 +1502,7 @@ impl App {
                 }
             }
             Err(e) => Screen::Message {
-                text: format!("Could not start the player (mpv): {e}"),
+                text: tr!("Could not start the player (mpv): {error}", error = e),
                 back: Some(browse),
             },
         };
@@ -1496,6 +1511,10 @@ impl App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // The language follows the config (also after a reload).
+        crate::i18n::set(crate::i18n::Lang::from_setting(
+            &self.config().0.home.language,
+        ));
         self.poll_background();
         let ctx = ui.ctx().clone();
         let screen_rect = ui.max_rect();
@@ -1706,9 +1725,9 @@ impl App {
                 continue;
             }
             let label = match kind {
-                RowKind::Discs => "Discs",
-                RowKind::Folders => "Folders",
-                RowKind::Websites => "Websites",
+                RowKind::Discs => tr!("Discs"),
+                RowKind::Folders => tr!("Folders"),
+                RowKind::Websites => tr!("Websites"),
             };
             painter.text(
                 screen_rect.min + Vec2::new(margin, y),
@@ -1751,7 +1770,7 @@ impl App {
                         let subtitle = if available {
                             folder_kinds(folder)
                         } else {
-                            "Not available".into()
+                            tr!("Not available").into()
                         };
                         paint_folder_tile(
                             painter,
@@ -1769,7 +1788,7 @@ impl App {
                         let subtitle = if available {
                             website_domain(site)
                         } else {
-                            "Not installed".into()
+                            tr!("Not installed").into()
                         };
                         let logo = site
                             .show_logo
@@ -1901,8 +1920,8 @@ impl App {
                     painter,
                     screen_rect,
                     s,
-                    "Ejecting…",
-                    "The tray opens in a moment.",
+                    tr!("Ejecting…"),
+                    tr!("The tray opens in a moment."),
                 );
             }
             Screen::Playing {
@@ -1928,11 +1947,11 @@ impl App {
                 }
                 let pid = child.id();
                 let body = if stopping.is_some() {
-                    "Stopping…"
+                    tr!("Stopping…")
                 } else {
-                    "Esc / Back: stop"
+                    tr!("Esc / Back: stop")
                 };
-                paint_overlay(painter, screen_rect, s, "Playing…", body);
+                paint_overlay(painter, screen_rect, s, tr!("Playing…"), body);
                 if stop_now {
                     stop_player(pid);
                     if let Screen::Playing { stopping, .. } = &mut self.screen {
@@ -1941,7 +1960,7 @@ impl App {
                 }
             }
             Screen::Message { text, .. } => {
-                paint_overlay(painter, screen_rect, s, "Something went wrong", text);
+                paint_overlay(painter, screen_rect, s, tr!("Something went wrong"), text);
                 if keys.enter || keys.back || ctx.input(|i| i.pointer.any_click()) {
                     let Screen::Message { back, .. } =
                         std::mem::replace(&mut self.screen, Screen::Home)
@@ -2037,14 +2056,14 @@ impl App {
                 painter,
                 screen_rect,
                 s,
-                "This folder can't be opened right now",
+                tr!("This folder can't be opened right now"),
                 &elide(error, 90),
             );
         } else if total == 0 {
             painter.text(
                 screen_rect.center(),
                 Align2::CENTER_CENTER,
-                "Nothing to show here",
+                tr!("Nothing to show here"),
                 FontId::proportional(32.0 * s),
                 TEXT_DIM,
             );
@@ -2079,7 +2098,7 @@ impl App {
                             screen_rect.min.y + y + (row_h - 10.0 * s) / 2.0 + 8.0 * s,
                         ),
                         Align2::LEFT_CENTER,
-                        "Recently played",
+                        tr!("Recently played"),
                         FontId::proportional(28.0 * s),
                         TEXT_DIM,
                     );
@@ -2136,7 +2155,7 @@ impl App {
         painter.text(
             Pos2::new(screen_rect.min.x + margin, screen_rect.max.y - 50.0 * s),
             Align2::LEFT_CENTER,
-            "Enter: open     Esc / Backspace: back",
+            tr!("Enter: open     Esc / Backspace: back"),
             FontId::proportional(22.0 * s),
             TEXT_DIM,
         );
@@ -2262,14 +2281,14 @@ impl App {
                 painter,
                 screen_rect,
                 s,
-                "This picture can't be shown",
+                tr!("This picture can't be shown"),
                 &elide(error, 90),
             );
         } else if view.shown != Some(view.index) {
             painter.text(
                 screen_rect.center(),
                 Align2::CENTER_CENTER,
-                "Loading…",
+                tr!("Loading…"),
                 FontId::proportional(32.0 * s),
                 TEXT_DIM,
             );
@@ -2296,7 +2315,11 @@ impl App {
         painter.text(
             Pos2::new(band.max.x - 40.0 * s, band.center().y),
             Align2::RIGHT_CENTER,
-            format!("{} / {n}     ← →  ·  Esc: back", view.index + 1),
+            tr!(
+                "{n} / {total}     ← →  ·  Esc: back",
+                n = view.index + 1,
+                total = n
+            ),
             FontId::proportional(22.0 * s),
             TEXT_DIM,
         );
@@ -2423,10 +2446,11 @@ impl App {
         painter.text(
             center + Vec2::new(0.0, 35.0 * s),
             Align2::CENTER_CENTER,
-            format!(
-                "{folder_name}  ·  Track {} of {}",
-                current + 1,
-                view.tracks.len()
+            tr!(
+                "{folder}  ·  Track {n} of {total}",
+                folder = folder_name,
+                n = current + 1,
+                total = view.tracks.len()
             ),
             FontId::proportional(24.0 * s),
             TEXT_DIM,
@@ -2465,7 +2489,7 @@ impl App {
             painter.text(
                 center + Vec2::new(0.0, 200.0 * s),
                 Align2::CENTER_CENTER,
-                "Paused",
+                tr!("Paused"),
                 FontId::proportional(32.0 * s),
                 TEXT,
             );
@@ -2473,7 +2497,7 @@ impl App {
         painter.text(
             Pos2::new(center.x, screen_rect.max.y - 60.0 * s),
             Align2::CENTER_CENTER,
-            "Enter: pause   ← →: previous / next   ↑ ↓: ±30 s   Esc: stop",
+            tr!("Enter: pause   ← →: previous / next   ↑ ↓: ±30 s   Esc: stop"),
             FontId::proportional(22.0 * s),
             TEXT_DIM,
         );
@@ -2500,11 +2524,14 @@ impl App {
         };
         let items = [
             MenuItem::new(
-                format!("Resume from {}", resume::format_time(position)),
-                "Continues where you stopped",
+                tr!("Resume from {time}", time = resume::format_time(position)),
+                tr!("Continues where you stopped"),
             ),
-            MenuItem::new("Play from beginning", "Starts the video from the start"),
-            MenuItem::new("Back", ""),
+            MenuItem::new(
+                tr!("Play from beginning"),
+                tr!("Starts the video from the start"),
+            ),
+            MenuItem::new(tr!("Back"), ""),
         ];
         if keys.prev() {
             selected = selected.saturating_sub(1);
@@ -2558,7 +2585,7 @@ fn website_domain(site: &crate::config::WebsiteSettings) -> String {
             .first()
             .map(|r| r.to_arg().trim_start_matches("*.").to_string())
             .unwrap_or_default(),
-        Err(_) => "Invalid address".into(),
+        Err(_) => tr!("Invalid address").into(),
     }
 }
 
@@ -2699,7 +2726,7 @@ fn paint_back_button(painter: &egui::Painter, rect: Rect, hovered: bool, s: f32)
     painter.text(
         rect.center(),
         Align2::CENTER_CENTER,
-        "‹  Back",
+        tr!("‹  Back"),
         FontId::proportional(28.0 * s),
         TEXT,
     );
@@ -2721,9 +2748,9 @@ fn stop_player(pid: u32) {
 fn folder_kinds(folder: &FolderSettings) -> String {
     let mut kinds: Vec<String> = Vec::new();
     for (on, name) in [
-        (folder.video, "Videos"),
-        (folder.audio, "Music"),
-        (folder.images, "Pictures"),
+        (folder.video, tr!("Videos")),
+        (folder.audio, tr!("Music")),
+        (folder.images, tr!("Pictures")),
     ] {
         if on {
             kinds.push(name.into());
@@ -2948,20 +2975,22 @@ fn paint_chooser(
             let waiting = matches!(choice, Choice::Resume(_) | Choice::MainMovie) && !scan_ready;
             let mut item = match choice {
                 Choice::Resume(pos) => MenuItem::new(
-                    format!("Resume from {}", resume::format_time(*pos)),
-                    "Continues where you stopped",
+                    tr!("Resume from {time}", time = resume::format_time(*pos)),
+                    tr!("Continues where you stopped"),
                 ),
-                Choice::MainMovie if has_resume => {
-                    MenuItem::new("Play from beginning", "Starts the movie from the start")
-                }
+                Choice::MainMovie if has_resume => MenuItem::new(
+                    tr!("Play from beginning"),
+                    tr!("Starts the movie from the start"),
+                ),
                 Choice::MainMovie => {
-                    MenuItem::new("Play movie", "Starts the main movie right away")
+                    MenuItem::new(tr!("Play movie"), tr!("Starts the main movie right away"))
                 }
-                Choice::DiscMenu => {
-                    MenuItem::new("Disc menu", "Starts the disc like a normal player")
-                }
-                Choice::Eject => MenuItem::new("Eject disc", "Opens the tray"),
-                Choice::Back => MenuItem::new("Back", ""),
+                Choice::DiscMenu => MenuItem::new(
+                    tr!("Disc menu"),
+                    tr!("Starts the disc like a normal player"),
+                ),
+                Choice::Eject => MenuItem::new(tr!("Eject disc"), tr!("Opens the tray")),
+                Choice::Back => MenuItem::new(tr!("Back"), ""),
             };
             if waiting {
                 item.hint = match tile.progress {

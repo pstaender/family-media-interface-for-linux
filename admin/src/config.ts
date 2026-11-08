@@ -45,7 +45,12 @@ export interface HomeSettings {
   /** Shown in the top-left corner. */
   title: string;
   show_title: boolean;
+  /** Interface language of the media center: "auto" = the computer's language (English if not available). */
+  language: Language;
 }
+
+export const LANGUAGES = ["auto", "en", "de"] as const;
+export type Language = (typeof LANGUAGES)[number];
 
 export const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 export type Weekday = (typeof WEEKDAYS)[number];
@@ -83,7 +88,7 @@ export interface Config {
 export function defaultConfig(): Config {
   return {
     version: CONFIG_VERSION,
-    home: { title: "familynovice", show_title: true },
+    home: { title: "familynovice", show_title: true, language: "auto" },
     parental: { pin_backoff_doubling: true, limits: [] },
     discs: {
       enabled: true,
@@ -362,7 +367,7 @@ export function validateConfig(input: unknown): Validation {
   if (input.home !== undefined) {
     const h = input.home;
     if (!isObject(h)) return { ok: false, error: "home: must be an object" };
-    const extra = unknownKey(h, ["title", "show_title"], "home");
+    const extra = unknownKey(h, ["title", "show_title", "language"], "home");
     if (extra) return { ok: false, error: extra };
     if (h.title !== undefined) {
       const problem = checkText(h.title);
@@ -372,6 +377,12 @@ export function validateConfig(input: unknown): Validation {
     if (h.show_title !== undefined) {
       if (typeof h.show_title !== "boolean") return { ok: false, error: "home.show_title: must be true or false" };
       config.home.show_title = h.show_title;
+    }
+    if (h.language !== undefined) {
+      if (!(LANGUAGES as readonly unknown[]).includes(h.language)) {
+        return { ok: false, error: `home.language must be one of ${LANGUAGES.join(", ")}` };
+      }
+      config.home.language = h.language as Language;
     }
   }
   if (input.discs !== undefined) {

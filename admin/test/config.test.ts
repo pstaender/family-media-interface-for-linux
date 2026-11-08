@@ -56,9 +56,9 @@ test("parental settings", () => {
 
 test("home title", () => {
   const v = validateConfig(example);
-  expect(v.ok && v.config.home).toEqual({ title: "Family Cinema", show_title: true });
+  expect(v.ok && v.config.home).toEqual({ title: "Family Cinema", show_title: true, language: "de" });
   const w = validateConfig({ version: 1, home: { show_title: false } });
-  expect(w.ok && w.config.home).toEqual({ title: "familynovice", show_title: false });
+  expect(w.ok && w.config.home).toEqual({ title: "familynovice", show_title: false, language: "auto" });
 });
 
 test("paths are checked like on the Rust side", () => {
@@ -112,6 +112,9 @@ const BAD: unknown[] = [
   { version: 1, home: { title: " Kino" } },
   { version: 1, home: { title: "a\u0007b" } },
   { version: 1, home: { show_title: "no" } },
+  { version: 1, home: { language: "fr" } },
+  { version: 1, home: { language: "DE" } },
+  { version: 1, home: { language: 1 } },
   { version: 1, home: { logo: "x" } },
   { version: 1, parental: { pin_hash: "1234" } },
   { version: 1, parental: { pin_hash: "$argon2id$x", pin_length: 3 } },

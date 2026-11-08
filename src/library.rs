@@ -95,7 +95,7 @@ pub fn resolve(root: &Path, sub: &[String]) -> Result<PathBuf, String> {
         .canonicalize()
         .map_err(|e| format!("{}: {e}", path.display()))?;
     if !path.starts_with(&root) {
-        return Err("this folder is outside the shared folder".into());
+        return Err(crate::tr!("this folder is outside the shared folder").into());
     }
     Ok(path)
 }

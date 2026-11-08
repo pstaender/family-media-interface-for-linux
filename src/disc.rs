@@ -153,16 +153,17 @@ pub fn eject(device: &Path) -> Result<(), String> {
         // kernel won't unlock while other processes have the device open. util-linux
         // `eject` falls back to SCSI commands (ALLOW MEDIUM REMOVAL + START STOP UNIT).
         log::info!("eject still refused ({e}), trying util-linux eject");
-        let out = Command::new("eject")
-            .arg(device)
-            .output()
-            .map_err(|e| format!("The disc could not be ejected (eject: {e})."))?;
+        let out = Command::new("eject").arg(device).output().map_err(|e| {
+            crate::tr!("The disc could not be ejected (eject: {error}).", error = e)
+        })?;
         if !out.status.success() {
             log::warn!(
                 "eject failed: {}",
                 String::from_utf8_lossy(&out.stderr).trim()
             );
-            return Err("The disc could not be ejected. Is it still in use?".to_string());
+            return Err(
+                crate::tr!("The disc could not be ejected. Is it still in use?").to_string(),
+            );
         }
     }
     log::info!("ejected {} after unmounting", device.display());

@@ -2,7 +2,8 @@
   "version": 1,
   "home": {
     "title": "Family Cinema",
-    "show_title": true
+    "show_title": true,
+    "language": "de"
   },
   "discs": {
     "enabled": true,

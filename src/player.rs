@@ -63,7 +63,7 @@ local timer = nil
 mp.add_forced_key_binding("HOMEPAGE", "familynovice-home", function(e)
     if e.event == "down" then
         if timer then timer:kill() end
-        mp.osd_message("Keep holding to go to the home screen…", 3)
+        mp.osd_message("{hold}", 3)
         timer = mp.add_timeout(3, function() mp.commandv("quit", "4") end)
     elseif e.event == "up" then
         if timer then timer:kill() end
@@ -73,6 +73,14 @@ mp.add_forced_key_binding("HOMEPAGE", "familynovice-home", function(e)
 end, { complex = true })
 "#;
 pub const MPV_HOME_SCRIPT_NAME: &str = "familynovice-home.lua";
+
+/// `MPV_HOME_SCRIPT` with the hint in the interface language.
+pub fn mpv_home_script() -> String {
+    let hold = crate::tr!("Keep holding to go to the home screen…")
+        .replace(['\\', '"'], "")
+        .replace('\n', " ");
+    MPV_HOME_SCRIPT.replace("{hold}", &hold)
+}
 
 /// Forward a media key to the running video (mpv's IPC socket, see `resume`): play/pause,
 /// next/previous chapter. Does nothing if mpv isn't listening (VLC, already closed).

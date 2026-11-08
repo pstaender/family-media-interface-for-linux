@@ -178,13 +178,20 @@ pub struct HomeSettings {
     /// Shown in the top-left corner.
     pub title: String,
     pub show_title: bool,
+    /// Interface language: `auto` (the computer's language, English if it isn't
+    /// available), or one of `LANGUAGES`.
+    pub language: String,
 }
+
+/// Values of `home.language`.
+pub const LANGUAGES: &[&str] = &["auto", "en", "de"];
 
 impl Default for HomeSettings {
     fn default() -> Self {
         Self {
             title: "familynovice".into(),
             show_title: true,
+            language: "auto".into(),
         }
     }
 }
@@ -315,6 +322,12 @@ fn validate(config: &Config) -> Result<(), String> {
         ));
     }
     check_text(&config.home.title).map_err(|e| format!("home.title: {e}"))?;
+    if !LANGUAGES.contains(&config.home.language.as_str()) {
+        return Err(format!(
+            "home.language must be one of {}",
+            LANGUAGES.join(", ")
+        ));
+    }
     if let Some(hash) = &config.parental.pin_hash
         && (!hash.starts_with("$argon2") || hash.len() > 512)
     {
@@ -554,6 +567,8 @@ mod tests {
         assert_eq!(c.home.title, "familynovice");
         assert!(!c.home.show_title);
         assert!(parse(r#"{"version":1}"#).unwrap().home.show_title);
+        assert_eq!(c.home.language, "auto");
+        assert_eq!(config.home.language, "de");
     }
 
     #[test]
@@ -636,6 +651,9 @@ mod tests {
             r#"{"version":1,"home":{"title":" Kino"}}"#,
             r#"{"version":1,"home":{"title":"a\u0007b"}}"#,
             r#"{"version":1,"home":{"show_title":"no"}}"#,
+            r#"{"version":1,"home":{"language":"fr"}}"#,
+            r#"{"version":1,"home":{"language":"DE"}}"#,
+            r#"{"version":1,"home":{"language":1}}"#,
             r#"{"version":1,"home":{"logo":"x"}}"#,
             r#"{"version":1,"parental":{"pin_hash":"1234"}}"#,
             r#"{"version":1,"parental":{"pin_hash":"$argon2id$x","pin_length":3}}"#,

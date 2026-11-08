@@ -43,9 +43,9 @@ impl AudioPlayer {
         let mut cmd = player::audio_command(files, start, &socket, cache.as_deref())
             .ok_or("no track to play")?;
         log::info!("starting music: {cmd:?}");
-        let child = cmd
-            .spawn()
-            .map_err(|e| format!("Could not start the music player (mpv): {e}"))?;
+        let child = cmd.spawn().map_err(|e| {
+            crate::tr!("Could not start the music player (mpv): {error}", error = e)
+        })?;
         let player = Self {
             child,
             writer: Arc::new(Mutex::new(None)),

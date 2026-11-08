@@ -143,6 +143,18 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
   `player::EXIT_GO_HOME` (4); familynovice-web exits with the same code; the "Playing"
   screen then goes home instead of back to the folder. VLC (disc menus) has no hold
   detection. Not yet confirmed which key the tested remote sends for home.
+- **Languages (implemented, `src/i18n.rs`):** English and German. `home.language`: `auto`
+  (default: `LC_ALL` / `LC_MESSAGES` / `LANG`, then the `LANGUAGE` list as in gettext;
+  English if none is known), `en`, `de`; set in the admin panel (Home screen tab), applied
+  live on reload. gettext style: the English text is the key, `tr!("Back")`,
+  `tr!("Track {n} of {total}", n = …, total = …)` (named placeholders); the German table
+  `DE` sits in the same file. Texts also sent to the admin panel (remote button labels,
+  lock reasons) stay English in code (`tr_noop!`) and are translated where the TV draws them
+  (`i18n::tr`, `describe_with`, `reason_text_with`). The test `every_text_is_translated`
+  scans `src/` and `web/src/` for `tr!`/`tr_noop!` literals: a text without German entry,
+  an unused entry or different placeholders fail. The website window gets `--lang`
+  (`web/` includes `i18n.rs` via `#[path]`); mpv's home-hold hint is written into its Lua
+  script in the current language. The admin panel itself is English only.
 - **Touch/mouse:** folder browser, picture viewer and music player have a "‹ Back" button
   (no keyboard needed); the lock screen's number pad is clickable.
 - **10-foot UI:** usable from the couch with a remote, gamepad or keyboard (mouse optional).
@@ -389,6 +401,7 @@ src/
   disc.rs         optical drive + disc detection (ioctl + udev)
   remote.rs       remote read from its input device, calibration (remote.json)
   recent.rs       recently played files per folder (recent.json)
+  i18n.rs         interface languages (tr!, German table), also used by web/
   library.rs      read-only folder browsing (media filters, confinement to the folder)
   sites.rs        website rules (allowed pages, always-blocked addresses); also used by web/
   pictures.rs     picture decoding for the built-in viewer

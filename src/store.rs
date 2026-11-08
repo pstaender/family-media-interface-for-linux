@@ -59,16 +59,16 @@ pub fn prepare_player_cache() -> Option<PathBuf> {
     for (name, content) in [
         (
             crate::player::MPV_INPUT_CONF_NAME,
-            crate::player::MPV_INPUT_CONF,
+            crate::player::MPV_INPUT_CONF.to_string(),
         ),
         (
             crate::player::MPV_HOME_SCRIPT_NAME,
-            crate::player::MPV_HOME_SCRIPT,
+            crate::player::mpv_home_script(),
         ),
     ] {
         let path = dir.join(name);
-        if std::fs::read_to_string(&path).ok().as_deref() != Some(content)
-            && let Err(e) = std::fs::write(&path, content)
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(content.as_str())
+            && let Err(e) = std::fs::write(&path, &content)
         {
             log::warn!("could not write {}: {e}", path.display());
         }

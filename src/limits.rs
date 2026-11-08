@@ -153,15 +153,23 @@ pub fn evaluate(rules: &[LimitRule], situation: &Situation, now: NaiveDateTime) 
     }
 }
 
-/// Short text for the lock screen and the admin panel.
+/// Short text for the admin panel (English).
 pub fn reason_text(reason: &LockReason) -> String {
+    reason_text_with(reason, |t| t)
+}
+
+/// The same, translated by `t` (the lock screen: `i18n::tr`).
+pub fn reason_text_with(reason: &LockReason, t: fn(&'static str) -> &'static str) -> String {
     match reason {
-        LockReason::Parent => "Locked by a parent".into(),
-        LockReason::BudgetUsed => "The time for today is used up".into(),
+        LockReason::Parent => t(crate::tr_noop!("Locked by a parent")).into(),
+        LockReason::BudgetUsed => t(crate::tr_noop!("The time for today is used up")).into(),
         LockReason::OutsideWindow {
             opens_at: Some(time),
-        } => format!("Available from {}", time.format("%H:%M")),
-        LockReason::OutsideWindow { opens_at: None } => "Not available any more today".into(),
+        } => t(crate::tr_noop!("Available from {time}"))
+            .replace("{time}", &time.format("%H:%M").to_string()),
+        LockReason::OutsideWindow { opens_at: None } => {
+            t(crate::tr_noop!("Not available any more today")).into()
+        }
     }
 }
 

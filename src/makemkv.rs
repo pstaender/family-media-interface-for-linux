@@ -116,10 +116,10 @@ impl Phase {
     /// Text for the UI.
     pub fn label(self) -> &'static str {
         match self {
-            Phase::FindingDrive => "Starting",
-            Phase::ReadingDisc => "Reading disc",
-            Phase::Decrypting | Phase::CopyProtection => "Unlocking copy protection",
-            Phase::FindingMovie => "Finding the movie",
+            Phase::FindingDrive => crate::tr!("Starting"),
+            Phase::ReadingDisc => crate::tr!("Reading disc"),
+            Phase::Decrypting | Phase::CopyProtection => crate::tr!("Unlocking copy protection"),
+            Phase::FindingMovie => crate::tr!("Finding the movie"),
         }
     }
 
@@ -211,7 +211,8 @@ pub fn scan(device: &Path, mut on_progress: impl FnMut(ScanProgress)) -> Result<
         .spawn()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                "MakeMKV is not installed (makemkvcon not found). Run scripts/setup.sh.".into()
+                crate::tr!("MakeMKV is not installed (makemkvcon not found). Run scripts/setup.sh.")
+                    .into()
             } else {
                 format!("Could not run makemkvcon: {e}")
             }
@@ -242,7 +243,10 @@ pub fn scan(device: &Path, mut on_progress: impl FnMut(ScanProgress)) -> Result<
             .last()
             .cloned()
             .unwrap_or_else(|| format!("makemkvcon exited with {status}"));
-        return Err(format!("MakeMKV found no titles: {detail}"));
+        return Err(crate::tr!(
+            "MakeMKV found no titles: {detail}",
+            detail = detail
+        ));
     }
     Ok(info)
 }
