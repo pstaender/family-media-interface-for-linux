@@ -28,12 +28,10 @@ pub struct LockView {
     pub message: Option<String>,
     /// After a correct PIN: the selected unlock choice (`UNLOCK_CHOICES`, then "Cancel").
     pub unlock_menu: Option<usize>,
-    /// Asking for the PIN to exit the media center (not a lock): back cancels, a correct
-    /// PIN exits.
-    exit: bool,
-    exit_ok: bool,
-    /// Exit mode: shut the computer down instead of only exiting.
-    shutdown: bool,
+    /// Asking for the PIN for something (not a lock): back cancels, a correct PIN
+    /// confirms it.
+    purpose: Option<Purpose>,
+    confirmed: bool,
 }
 
 /// Navigation keys this frame, from the window, calibrated remote buttons and buttons only
@@ -56,12 +54,23 @@ pub enum LockAction {
     CheckPin(String),
     /// Unlock for minutes / rest of today.
     Unlock(Option<u32>),
-    /// Exit mode: the PIN was right (`shutdown`: shut the computer down).
-    Exit {
-        shutdown: bool,
-    },
-    /// Exit mode: cancelled.
+    /// The PIN was right for this.
+    Confirmed(Purpose),
+    /// Asking for the PIN for something: cancelled.
     Cancel,
+}
+
+/// What only a parent may do on the TV (asks for the PIN).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Purpose {
+    /// Exit the media center (log out).
+    Exit,
+    ShutDown,
+    /// Show another home screen.
+    Switch {
+        id: String,
+        name: String,
+    },
 }
 
 /// What the lock screen needs to show.
@@ -82,26 +91,41 @@ impl LockView {
             checking: false,
             message: None,
             unlock_menu: None,
-            exit: false,
-            exit_ok: false,
-            shutdown: false,
+            purpose: None,
+            confirmed: false,
         }
     }
 
-    /// The PIN pad for exiting the media center, or for shutting the computer down.
-    pub fn for_exit(shutdown: bool) -> Self {
+    /// The PIN pad to confirm something only a parent may do.
+    pub fn for_purpose(purpose: Purpose) -> Self {
         Self {
-            exit: true,
-            shutdown,
+            purpose: Some(purpose),
             ..Self::new(LockReason::Parent)
         }
+    }
+
+    fn purpose_texts(&self) -> Option<(String, String)> {
+        Some(match self.purpose.as_ref()? {
+            Purpose::Exit => (
+                tr!("Exit the media center").into(),
+                tr!("Enter the PIN to exit. Back: cancel.").into(),
+            ),
+            Purpose::ShutDown => (
+                tr!("Shut down the computer").into(),
+                tr!("Enter the PIN to shut down. Back: cancel.").into(),
+            ),
+            Purpose::Switch { name, .. } => (
+                tr!("Switch to “{name}”", name = name),
+                tr!("Enter the PIN to switch the home screen. Back: cancel.").into(),
+            ),
+        })
     }
 
     pub fn pin_checked(&mut self, ok: bool) {
         self.checking = false;
         self.entered.clear();
-        if ok && self.exit {
-            self.exit_ok = true;
+        if ok && self.purpose.is_some() {
+            self.confirmed = true;
         } else if ok {
             self.message = None;
             self.unlock_menu = Some(0);
@@ -119,27 +143,25 @@ impl LockView {
         info: &LockInfo,
         nav: &Nav,
     ) -> LockAction {
-        if self.exit_ok {
-            return LockAction::Exit {
-                shutdown: self.shutdown,
-            };
+        if self.confirmed
+            && let Some(purpose) = self.purpose.clone()
+        {
+            return LockAction::Confirmed(purpose);
         }
         painter.rect_filled(screen, 0.0, Color32::from_rgb(0x0c, 0x0e, 0x14));
         let center = screen.center();
-        let (title, color) = match self.reason {
-            _ if self.exit && self.shutdown => (tr!("Shut down the computer"), crate::ui::TEXT),
-            _ if self.exit => (tr!("Exit the media center"), crate::ui::TEXT),
-            LockReason::Parent => (tr!("Locked"), crate::ui::TEXT),
-            LockReason::BudgetUsed => (tr!("Time is up"), crate::ui::TEXT),
-            LockReason::OutsideWindow { .. } => (tr!("Not now"), crate::ui::TEXT),
-        };
-        let subtitle = if self.exit && self.shutdown {
-            tr!("Enter the PIN to shut down. Back: cancel.").to_string()
-        } else if self.exit {
-            tr!("Enter the PIN to exit. Back: cancel.").to_string()
-        } else {
-            limits::reason_text_with(&self.reason, crate::i18n::tr)
-        };
+        let (title, subtitle) = self.purpose_texts().unwrap_or_else(|| {
+            let title = match self.reason {
+                LockReason::Parent => tr!("Locked"),
+                LockReason::BudgetUsed => tr!("Time is up"),
+                LockReason::OutsideWindow { .. } => tr!("Not now"),
+            };
+            (
+                title.to_string(),
+                limits::reason_text_with(&self.reason, crate::i18n::tr),
+            )
+        });
+        let color = crate::ui::TEXT;
         painter.text(
             Pos2::new(center.x, screen.min.y + 120.0 * s),
             Align2::CENTER_TOP,
@@ -334,7 +356,7 @@ impl LockView {
             press = Some(self.focus);
         }
         // Exiting: back with nothing entered cancels (also while waiting after wrong PINs).
-        if self.exit && (back || clear) && self.entered.is_empty() {
+        if self.purpose.is_some() && (back || clear) && self.entered.is_empty() {
             return LockAction::Cancel;
         }
         if disabled {

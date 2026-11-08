@@ -7,7 +7,7 @@ import { createAdminServer } from "./app";
 import { defaultConfigDir, defaultRuntimeDir, migrateOldFolders } from "./files";
 import { defaultLogoDir, refreshLogos } from "./logos";
 import { readJson } from "./files";
-import { validateConfig } from "./config";
+import { allWebsites, validateConfig } from "./config";
 import { join } from "node:path";
 import { USAGE, loadServerSettings, reachableUrls } from "./settings";
 
@@ -44,6 +44,6 @@ readJson(join(configDir, "config.json"))
     const v = stored === undefined ? null : validateConfig(stored);
     if (!v?.ok) return;
     server.aerial.sync(v.config.screensaver);
-    return refreshLogos(defaultLogoDir(), v.config.websites);
+    return refreshLogos(defaultLogoDir(), allWebsites(v.config));
   })
   .catch((e) => console.warn(`logos: ${(e as Error).message}`));

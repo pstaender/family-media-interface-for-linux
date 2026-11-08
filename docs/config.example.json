@@ -1,105 +1,180 @@
 {
-  "version": 1,
-  "home": {
-    "title": "Family Cinema",
-    "show_title": true,
-    "language": "de"
-  },
-  "discs": {
-    "enabled": true,
-    "allow_disc_menu": true,
-    "audio_languages": [
-      "deu",
-      "eng"
-    ],
-    "subtitle_languages": []
-  },
-  "folders": [
+  "version": 2,
+  "home_screens": [
     {
-      "id": "movies",
-      "name": "Movies",
-      "path": "/srv/media/movies",
-      "video": true,
-      "audio": false,
-      "images": false
+      "id": "family",
+      "name": "Family",
+      "default": true,
+      "home": {
+        "title": "Family Cinema",
+        "show_title": true,
+        "language": "de"
+      },
+      "discs": {
+        "enabled": true,
+        "allow_disc_menu": true,
+        "audio_languages": [
+          "deu",
+          "eng"
+        ],
+        "subtitle_languages": []
+      },
+      "folders": [
+        {
+          "id": "movies",
+          "name": "Movies",
+          "path": "/srv/media/movies",
+          "video": true,
+          "audio": false,
+          "images": false
+        },
+        {
+          "id": "photos",
+          "name": "Holiday photos",
+          "path": "/home/shared/Pictures/Holidays",
+          "video": true,
+          "audio": false,
+          "images": true
+        },
+        {
+          "id": "stories",
+          "name": "Stories",
+          "path": "/home/shared/Stories",
+          "video": false,
+          "audio": true,
+          "images": false
+        }
+      ],
+      "websites": [
+        {
+          "id": "kika",
+          "name": "KiKA",
+          "url": "https://www.kika.de/",
+          "allow_subdomains": true
+        },
+        {
+          "id": "wiki",
+          "name": "Klexikon",
+          "url": "https://klexikon.zum.de/",
+          "allow_subdomains": false,
+          "show_logo": false
+        }
+      ],
+      "games": {
+        "pong": {
+          "enabled": true,
+          "computer_level": "easy",
+          "points_to_win": 5
+        },
+        "bricks": {
+          "enabled": true,
+          "lives": 3,
+          "sound": true
+        }
+      },
+      "limits": [
+        {
+          "type": "budget",
+          "minutes": 60,
+          "scope": {
+            "kind": "every_day"
+          }
+        },
+        {
+          "type": "window",
+          "from": "07:00",
+          "until": "19:30",
+          "scope": {
+            "kind": "weekdays",
+            "days": [
+              "mon",
+              "tue",
+              "wed",
+              "thu",
+              "fri"
+            ]
+          }
+        },
+        {
+          "type": "budget",
+          "minutes": 120,
+          "scope": {
+            "kind": "weekdays",
+            "days": [
+              "sat",
+              "sun"
+            ]
+          }
+        },
+        {
+          "type": "budget",
+          "minutes": 420,
+          "scope": {
+            "kind": "this_week",
+            "week_of": "2026-11-02"
+          }
+        }
+      ]
     },
     {
-      "id": "photos",
-      "name": "Holiday photos",
-      "path": "/home/shared/Pictures/Holidays",
-      "video": true,
-      "audio": false,
-      "images": true
-    },
-    {
-      "id": "stories",
-      "name": "Stories",
-      "path": "/home/shared/Stories",
-      "video": false,
-      "audio": true,
-      "images": false
-    }
-  ],
-  "websites": [
-    {
-      "id": "kika",
-      "name": "KiKA",
-      "url": "https://www.kika.de/",
-      "allow_subdomains": true
-    },
-    {
-      "id": "wiki",
-      "name": "Klexikon",
-      "url": "https://klexikon.zum.de/",
-      "allow_subdomains": false,
-      "show_logo": false
+      "id": "kids",
+      "name": "Kids",
+      "home": {
+        "title": "Kids corner",
+        "show_title": true,
+        "language": "de"
+      },
+      "discs": {
+        "enabled": false,
+        "allow_disc_menu": false,
+        "audio_languages": [
+          "deu"
+        ],
+        "subtitle_languages": []
+      },
+      "folders": [
+        {
+          "id": "kids-stories",
+          "name": "Stories",
+          "path": "/home/shared/Stories",
+          "video": false,
+          "audio": true,
+          "images": false
+        }
+      ],
+      "websites": [
+        {
+          "id": "kids-kika",
+          "name": "KiKA",
+          "url": "https://www.kika.de/",
+          "allow_subdomains": true
+        }
+      ],
+      "games": {
+        "pong": {
+          "enabled": true,
+          "computer_level": "easy",
+          "points_to_win": 5
+        },
+        "bricks": {
+          "enabled": false,
+          "lives": 5,
+          "sound": false
+        }
+      },
+      "limits": [
+        {
+          "type": "budget",
+          "minutes": 30,
+          "scope": {
+            "kind": "every_day"
+          }
+        }
+      ]
     }
   ],
   "parental": {
-    "pin_backoff_doubling": true,
-    "limits": [
-      {
-        "type": "budget",
-        "minutes": 60,
-        "scope": {
-          "kind": "every_day"
-        }
-      },
-      {
-        "type": "window",
-        "from": "07:00",
-        "until": "19:30",
-        "scope": {
-          "kind": "weekdays",
-          "days": [
-            "mon",
-            "tue",
-            "wed",
-            "thu",
-            "fri"
-          ]
-        }
-      },
-      {
-        "type": "budget",
-        "minutes": 120,
-        "scope": {
-          "kind": "weekdays",
-          "days": [
-            "sat",
-            "sun"
-          ]
-        }
-      },
-      {
-        "type": "budget",
-        "minutes": 420,
-        "scope": {
-          "kind": "this_week",
-          "week_of": "2026-11-02"
-        }
-      }
-    ]
+    "pin_backoff_doubling": true
   },
   "screensaver": {
     "mode": "aerial",
@@ -110,16 +185,8 @@
       "6C3D54AE-0871-498A-81D0-56ED24E5FE9F"
     ]
   },
-  "games": {
-    "pong": {
-      "enabled": true,
-      "computer_level": "easy",
-      "points_to_win": 5
-    },
-    "bricks": {
-      "enabled": true,
-      "lives": 3,
-      "sound": true
-    }
+  "statistics": {
+    "enabled": true,
+    "keep_days": 90
   }
 }

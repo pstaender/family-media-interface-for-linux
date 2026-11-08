@@ -1,16 +1,16 @@
 import { expect, test } from "bun:test";
 import example from "../../docs/config.example.json";
-import { defaultConfig, isNormalizedAbsolutePath, validateConfig, websiteDomain } from "../src/config";
+import { addHomeScreen, cleanScreenName, defaultConfig, defaultScreen, makeDefaultScreen, removeHomeScreen, isNormalizedAbsolutePath, validateConfig, websiteDomain } from "../src/config";
 
 test("the example config is valid", () => {
   const v = validateConfig(example);
   expect(v.ok).toBe(true);
-  if (v.ok) expect(v.config.discs.audio_languages).toEqual(["deu", "eng"]);
+  if (v.ok) expect(v.config.home_screens[0]!.discs.audio_languages).toEqual(["deu", "eng"]);
 });
 
 test("the example folders are valid", () => {
   const v = validateConfig(example);
-  expect(v.ok && v.config.folders.map((f) => f.id)).toEqual(["movies", "photos", "stories"]);
+  expect(v.ok && v.config.home_screens[0]!.folders.map((f) => f.id)).toEqual(["movies", "photos", "stories"]);
 });
 
 test("the screensaver settings", () => {
@@ -27,28 +27,86 @@ test("the screensaver settings", () => {
 
 test("the games settings, also from their old place", () => {
   const v = validateConfig(example);
-  expect(v.ok && v.config.games).toEqual({ pong: { enabled: true, computer_level: "easy", points_to_win: 5 }, bricks: { enabled: true, lives: 3, sound: true } });
+  expect(v.ok && v.config.home_screens[0]!.games).toEqual({ pong: { enabled: true, computer_level: "easy", points_to_win: 5 }, bricks: { enabled: true, lives: 3, sound: true } });
   const d = validateConfig({ version: 1 });
-  expect(d.ok && d.config.games).toEqual({ pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false } });
+  expect(d.ok && d.config.home_screens[0]!.games).toEqual({ pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false } });
   const old = validateConfig({ version: 1, programs: { pong: { enabled: true, points_to_win: 9 } } });
-  expect(old.ok && old.config.games.pong).toEqual({ enabled: true, computer_level: "normal", points_to_win: 9 });
+  expect(old.ok && old.config.home_screens[0]!.games.pong).toEqual({ enabled: true, computer_level: "normal", points_to_win: 9 });
   expect(old.ok && "programs" in old.config).toBe(false);
   const both = validateConfig({ version: 1, programs: { pong: { enabled: true } }, games: { pong: { enabled: false } } });
-  expect(both.ok && both.config.games.pong.enabled).toBe(false);
+  expect(both.ok && both.config.home_screens[0]!.games.pong.enabled).toBe(false);
+});
+
+test("home screens", () => {
+  const v = validateConfig(example);
+  if (!v.ok) throw new Error(v.error);
+  expect(v.config.home_screens.map((s) => [s.id, s.default])).toEqual([["family", true], ["kids", false]]);
+  expect(defaultScreen(v.config).id).toBe("family");
+  expect(v.config.home_screens[1]!.limits.length).toBe(1);
+  expect(v.config.statistics).toEqual({ enabled: true, keep_days: 90 });
+  // Written form is accepted again unchanged.
+  const again = validateConfig(JSON.parse(JSON.stringify(v.config)));
+  expect(again.ok && again.config).toEqual(v.config);
+});
+
+test("adding, starring and removing home screens", () => {
+  const v = validateConfig(example);
+  if (!v.ok) throw new Error(v.error);
+  const added = addHomeScreen(v.config, "Kids");
+  expect(added.id).toBe("kids-2"); // "kids" is taken
+  const copy = added.config.home_screens.at(-1)!;
+  const family = v.config.home_screens[0]!;
+  expect(copy.default).toBe(false);
+  expect(copy.name).toBe("Kids");
+  expect(copy.folders.map((f) => f.path)).toEqual(family.folders.map((f) => f.path));
+  expect(copy.limits).toEqual(family.limits);
+  // The copy is valid: its folder and website ids are new.
+  expect(validateConfig(added.config).ok).toBe(true);
+  copy.limits.length = 0;
+  expect(family.limits.length).toBe(4); // a real copy
+
+  const starred = makeDefaultScreen(added.config, added.id);
+  expect(starred.home_screens.filter((s) => s.default).map((s) => s.id)).toEqual([added.id]);
+  expect(validateConfig(starred).ok).toBe(true);
+
+  expect(removeHomeScreen(added.config, added.id).home_screens.length).toBe(2);
+  expect(removeHomeScreen(added.config, "family")).toBe(added.config); // not the default one
+
+  expect(cleanScreenName("  Kids\u0007 ")).toBe("Kids");
+  expect(cleanScreenName("   ")).toBeNull();
+  expect(cleanScreenName("x".repeat(31))).toBeNull();
+});
+
+test("version 1 becomes one home screen", () => {
+  const v = validateConfig({
+    version: 1,
+    home: { title: "Kino" },
+    folders: [{ id: "m", name: "M", path: "/m", video: true }],
+    parental: { pin_backoff_doubling: false, limits: [{ type: "budget", minutes: 60, scope: { kind: "every_day" } }] },
+    programs: { pong: { enabled: true } },
+  });
+  if (!v.ok) throw new Error(v.error);
+  expect(v.config.version).toBe(2);
+  const s = v.config.home_screens[0]!;
+  expect([s.id, s.name, s.default]).toEqual(["home", "Home", true]);
+  expect(s.home.title).toBe("Kino");
+  expect(s.limits.length).toBe(1);
+  expect(s.games.pong.enabled).toBe(true);
+  expect(v.config.parental).toEqual({ pin_backoff_doubling: false });
 });
 
 test("the removed extensions option is ignored", () => {
   const v = validateConfig({ version: 1, folders: [{ id: "a", name: "A", path: "/x", video: true, extensions: ["pdf"] }] });
-  expect(v.ok && v.config.folders[0]).toEqual({ id: "a", name: "A", path: "/x", video: true, audio: false, images: false });
+  expect(v.ok && v.config.home_screens[0]!.folders[0]).toEqual({ id: "a", name: "A", path: "/x", video: true, audio: false, images: false });
 });
 
 test("the example websites are valid", () => {
   const v = validateConfig(example);
-  expect(v.ok && v.config.websites.map((w) => [w.id, w.allow_subdomains])).toEqual([["kika", true], ["wiki", false]]);
+  expect(v.ok && v.config.home_screens[0]!.websites.map((w) => [w.id, w.allow_subdomains])).toEqual([["kika", true], ["wiki", false]]);
   const w = validateConfig({ version: 1, websites: [{ id: "k", name: "K", url: "https://kika.de/" }] });
-  expect(w.ok && w.config.websites[0]!.allow_subdomains).toBe(true);
-  expect(w.ok && w.config.websites[0]!.show_logo).toBe(true);
-  expect(v.ok && v.config.websites[1]!.show_logo).toBe(false);
+  expect(w.ok && w.config.home_screens[0]!.websites[0]!.allow_subdomains).toBe(true);
+  expect(w.ok && w.config.home_screens[0]!.websites[0]!.show_logo).toBe(true);
+  expect(v.ok && v.config.home_screens[0]!.websites[1]!.show_logo).toBe(false);
 });
 
 test("website domains like src/sites.rs", () => {
@@ -62,8 +120,8 @@ test("website domains like src/sites.rs", () => {
 
 test("parental settings", () => {
   const v = validateConfig(example);
-  expect(v.ok && v.config.parental.limits.length).toBe(4);
-  expect(v.ok && v.config.parental.limits[1]).toEqual({
+  expect(v.ok && v.config.home_screens[0]!.limits.length).toBe(4);
+  expect(v.ok && v.config.home_screens[0]!.limits[1]).toEqual({
     type: "window",
     from: "07:00",
     until: "19:30",
@@ -75,14 +133,14 @@ test("parental settings", () => {
   });
   expect(week.ok).toBe(true);
   const def = validateConfig({ version: 1 });
-  expect(def.ok && def.config.parental).toEqual({ pin_backoff_doubling: true, limits: [] });
+  expect(def.ok && def.config.parental).toEqual({ pin_backoff_doubling: true });
 });
 
 test("home title", () => {
   const v = validateConfig(example);
-  expect(v.ok && v.config.home).toEqual({ title: "Family Cinema", show_title: true, language: "de" });
+  expect(v.ok && v.config.home_screens[0]!.home).toEqual({ title: "Family Cinema", show_title: true, language: "de" });
   const w = validateConfig({ version: 1, home: { show_title: false } });
-  expect(w.ok && w.config.home).toEqual({ title: "curator", show_title: false, language: "auto" });
+  expect(w.ok && w.config.home_screens[0]!.home).toEqual({ title: "curator", show_title: false, language: "auto" });
 });
 
 test("paths are checked like on the Rust side", () => {
@@ -94,7 +152,7 @@ test("missing fields take defaults", () => {
   const v = validateConfig({ version: 1 });
   expect(v).toEqual({ ok: true, config: defaultConfig() });
   const w = validateConfig({ version: 1, discs: { enabled: false } });
-  expect(w.ok && w.config.discs).toEqual({ ...defaultConfig().discs, enabled: false });
+  expect(w.ok && w.config.home_screens[0]!.discs).toEqual({ ...defaultConfig().home_screens[0]!.discs, enabled: false });
 });
 
 // Keep in sync with `rejects_bad_configs` in src/config.rs.
@@ -195,6 +253,29 @@ const BAD: unknown[] = [
   { version: 1, websites: [[]] },
   { version: 1, parental: { limits: [["budget", 60]] } },
   { version: 1, parental: { limits: [{ type: "budget", minutes: 60, scope: ["every_day"] }] } },
+  // Version 2: home screens.
+  { version: 2 },
+  { version: 2, home_screens: [] },
+  { version: 2, home_screens: [{ id: "a", name: "A" }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true }, { id: "b", name: "B", default: true }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true }, { id: "a", name: "B" }] },
+  { version: 2, home_screens: [{ id: "A", name: "A", default: true }] },
+  { version: 2, home_screens: [{ id: "a", name: "", default: true }] },
+  { version: 2, home_screens: [{ id: "a", name: "A name that is much too long for it", default: true }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, pin: "1" }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, folders: [{ id: "f", name: "F", path: "/f", video: true }] }, { id: "b", name: "B", folders: [{ id: "f", name: "F", path: "/g", video: true }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, websites: [{ id: "w", name: "W", url: "https://a.de/" }] }, { id: "b", name: "B", websites: [{ id: "w", name: "W", url: "https://b.de/" }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, limits: [{ type: "budget", minutes: 0, scope: { kind: "every_day" } }] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, discs: [] }] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true, limits: [["budget"]] }] },
+  { version: 2, home_screens: [["a"]] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true }], statistics: { keep_days: 0 } },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true }], statistics: { keep_days: 3651 } },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true }], statistics: { enabled: "yes" } },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true }], statistics: [] },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true }], parental: { limits: [] } },
+  { version: 2, home_screens: [{ id: "a", name: "A", default: true }], folders: [] },
+  { version: 3, home_screens: [{ id: "a", name: "A", default: true }] },
   "not an object",
   null,
   [],

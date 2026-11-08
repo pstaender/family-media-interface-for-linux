@@ -22,6 +22,7 @@ mod remote;
 mod resume;
 mod screensaver;
 mod sound;
+mod stats;
 // Parts of it are only used by the browser window (web/, includes this file).
 #[allow(dead_code)]
 mod sites;
@@ -68,6 +69,13 @@ fn main() -> eframe::Result {
         log::info!("config: {}", path.display());
     }
     let shared = Arc::new(Mutex::new(config::load_initial(config_path.as_deref())));
+    // Old usage statistics go when the media center starts (and when it's unlocked).
+    {
+        let state = shared.lock().unwrap_or_else(|p| p.into_inner());
+        if state.config.statistics.enabled {
+            stats::prune(state.config.statistics.keep_days);
+        }
+    }
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

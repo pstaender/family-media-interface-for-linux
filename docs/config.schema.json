@@ -2,88 +2,30 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://curator.local/config.schema.json",
   "title": "curator media center config",
-  "description": "Stored as $XDG_CONFIG_HOME/curator/config.json of the media center user. Written by the admin interface (admin/src/config.ts), read by the media center (src/config.rs). Change both sides together and bump `version` for incompatible changes.",
+  "description": "Stored as $XDG_CONFIG_HOME/curator/config.json of the media center user. Written by the admin interface (admin/src/config.ts), read by the media center (src/config.rs). Change both sides together and bump `version` for incompatible changes. Version 1 files (one home screen, everything at the top level) are still read and converted into one home screen \"Home\" (id \"home\"), then written as version 2.",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "version"
+    "version",
+    "home_screens"
   ],
   "properties": {
     "version": {
-      "const": 1
+      "const": 2
     },
-    "home": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "The media center's home screen. Missing fields take their defaults.",
-      "properties": {
-        "title": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 60,
-          "default": "curator",
-          "description": "Shown in the top-left corner. No control characters, no leading/trailing spaces."
-        },
-        "show_title": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show the title at all."
-        },
-        "language": {
-          "type": "string",
-          "enum": ["auto", "en", "de"],
-          "default": "auto",
-          "description": "Language of the media center's interface: auto = the computer's language (LANGUAGE / LC_ALL / LC_MESSAGES / LANG), English if it isn't available; en = English; de = German."
-        }
-      }
-    },
-    "discs": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "DVD/Blu-ray playback. Missing fields take their defaults.",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show the disc tile as usable at all."
-        },
-        "allow_disc_menu": {
-          "type": "boolean",
-          "default": true,
-          "description": "Offer \"Disc menu\" (regular start with the disc's own menus)."
-        },
-        "audio_languages": {
-          "$ref": "#/$defs/languages",
-          "description": "Preferred audio languages, most preferred first."
-        },
-        "subtitle_languages": {
-          "$ref": "#/$defs/languages",
-          "description": "Preferred subtitle languages, most preferred first. Empty: no subtitles."
-        }
-      }
-    },
-    "folders": {
+    "home_screens": {
       "type": "array",
-      "maxItems": 50,
-      "default": [],
-      "description": "Folders shown in the \"Folders\" row. Always accessed read-only.",
+      "minItems": 1,
+      "maxItems": 10,
       "items": {
-        "$ref": "#/$defs/folder"
-      }
-    },
-    "websites": {
-      "type": "array",
-      "maxItems": 50,
-      "default": [],
-      "description": "Websites shown in the \"Websites\" row, each opened in a locked-down fullscreen browser window.",
-      "items": {
-        "$ref": "#/$defs/website"
-      }
+        "$ref": "#/$defs/homeScreen"
+      },
+      "description": "At least one; exactly one has \"default\": true."
     },
     "parental": {
       "type": "object",
       "additionalProperties": false,
-      "description": "PIN and time limits (src/limits.rs). Missing fields take their defaults.",
+      "description": "PIN (one for all home screens). Missing fields take their defaults.",
       "properties": {
         "pin_hash": {
           "type": "string",
@@ -101,15 +43,6 @@
           "type": "boolean",
           "default": true,
           "description": "After a wrong PIN wait 5 s; with this option the wait doubles after each further wrong PIN (max 1 h)."
-        },
-        "limits": {
-          "type": "array",
-          "maxItems": 50,
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/limit"
-          },
-          "description": "If several rules of the same kind match a day, the most specific wins: today > weekdays > this_week > every_day. A this_week budget counts the whole week."
         }
       }
     },
@@ -120,7 +53,11 @@
       "properties": {
         "mode": {
           "type": "string",
-          "enum": ["off", "title", "aerial"],
+          "enum": [
+            "off",
+            "title",
+            "aerial"
+          ],
           "default": "title",
           "description": "title: the title moves slowly over a very dark background whose color changes a little every minute. aerial: the chosen aerial videos in random order (falls back to title while none is downloaded)."
         },
@@ -133,7 +70,11 @@
         },
         "aerial_quality": {
           "type": "string",
-          "enum": ["1080p_h264", "1080p_hevc", "4k_hevc"],
+          "enum": [
+            "1080p_h264",
+            "1080p_hevc",
+            "4k_hevc"
+          ],
           "default": "1080p_h264",
           "description": "Which file of each aerial video is downloaded. Videos that only exist in 4K use their 4K file."
         },
@@ -150,65 +91,24 @@
         }
       }
     },
-    "games": {
+    "statistics": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The \"Games\" row of the home screen: built-in games. Missing fields take their defaults.",
+      "description": "Usage statistics (src/stats.rs). Missing fields take their defaults.",
       "properties": {
-        "pong": {
-          "type": "object",
-          "additionalProperties": false,
-          "description": "Ping Pong for 1 player (against the computer) or 2 players; gamepads, remote or keyboard.",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "default": false,
-              "description": "Show the game in the \"Games\" row."
-            },
-            "computer_level": {
-              "type": "string",
-              "enum": ["easy", "normal", "hard"],
-              "default": "normal",
-              "description": "How well the computer plays in the 1-player game."
-            },
-            "points_to_win": {
-              "type": "integer",
-              "minimum": 3,
-              "maximum": 21,
-              "default": 7
-            }
-          }
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Record what is used when (stays on this computer)."
         },
-        "bricks": {
-          "type": "object",
-          "additionalProperties": false,
-          "description": "Brick Breaker: a paddle, a ball and walls of bricks; 32 stages including bonus stages.",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "default": false,
-              "description": "Show the game in the \"Games\" row."
-            },
-            "lives": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 9,
-              "default": 5,
-              "description": "Paddles at the start of a game (more are earned with points, up to 9)."
-            },
-            "sound": {
-              "type": "boolean",
-              "default": false,
-              "description": "Sound on at the start; can be switched in the game's menu."
-            }
-          }
+        "keep_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3650,
+          "default": 90,
+          "description": "Older days are deleted when the media center starts or is unlocked."
         }
       }
-    },
-    "programs": {
-      "$ref": "#/properties/games",
-      "deprecated": true,
-      "description": "Old place of `games` (before the Games tab). Still read if `games` is missing, then written as `games`."
     }
   },
   "$defs": {
@@ -435,6 +335,173 @@
           }
         }
       ]
+    },
+    "homeScreen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ],
+      "description": "One home screen, like a profile: its own items and time limits.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
+          "description": "Key of this home screen's usage data."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 30,
+          "description": "Short title (menus on the TV, admin panel). No control characters, no leading/trailing spaces."
+        },
+        "default": {
+          "type": "boolean",
+          "default": false,
+          "description": "Exactly one home screen is the default (star): shown at the start and preselected in the admin panel."
+        },
+        "home": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The media center's home screen. Missing fields take their defaults.",
+          "properties": {
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 60,
+              "default": "curator",
+              "description": "Shown in the top-left corner. No control characters, no leading/trailing spaces."
+            },
+            "show_title": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show the title at all."
+            },
+            "language": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "en",
+                "de"
+              ],
+              "default": "auto",
+              "description": "Language of the media center's interface: auto = the computer's language (LANGUAGE / LC_ALL / LC_MESSAGES / LANG), English if it isn't available; en = English; de = German."
+            }
+          }
+        },
+        "discs": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "DVD/Blu-ray playback. Missing fields take their defaults.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show the disc tile as usable at all."
+            },
+            "allow_disc_menu": {
+              "type": "boolean",
+              "default": true,
+              "description": "Offer \"Disc menu\" (regular start with the disc's own menus)."
+            },
+            "audio_languages": {
+              "$ref": "#/$defs/languages",
+              "description": "Preferred audio languages, most preferred first."
+            },
+            "subtitle_languages": {
+              "$ref": "#/$defs/languages",
+              "description": "Preferred subtitle languages, most preferred first. Empty: no subtitles."
+            }
+          }
+        },
+        "folders": {
+          "type": "array",
+          "maxItems": 50,
+          "default": [],
+          "description": "Folders shown in the \"Folders\" row. Always accessed read-only. Ids are unique across all home screens.",
+          "items": {
+            "$ref": "#/$defs/folder"
+          }
+        },
+        "websites": {
+          "type": "array",
+          "maxItems": 50,
+          "default": [],
+          "description": "Websites shown in the \"Websites\" row, each opened in a locked-down fullscreen browser window. Ids are unique across all home screens.",
+          "items": {
+            "$ref": "#/$defs/website"
+          }
+        },
+        "games": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The \"Games\" row of the home screen: built-in games. Missing fields take their defaults.",
+          "properties": {
+            "pong": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Ping Pong for 1 player (against the computer) or 2 players; gamepads, remote or keyboard.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Show the game in the \"Games\" row."
+                },
+                "computer_level": {
+                  "type": "string",
+                  "enum": [
+                    "easy",
+                    "normal",
+                    "hard"
+                  ],
+                  "default": "normal",
+                  "description": "How well the computer plays in the 1-player game."
+                },
+                "points_to_win": {
+                  "type": "integer",
+                  "minimum": 3,
+                  "maximum": 21,
+                  "default": 7
+                }
+              }
+            },
+            "bricks": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Brick Breaker: a paddle, a ball and walls of bricks; 32 stages including bonus stages.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Show the game in the \"Games\" row."
+                },
+                "lives": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9,
+                  "default": 5,
+                  "description": "Paddles at the start of a game (more are earned with points, up to 9)."
+                },
+                "sound": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Sound on at the start; can be switched in the game's menu."
+                }
+              }
+            }
+          }
+        },
+        "limits": {
+          "type": "array",
+          "maxItems": 50,
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/limit"
+          },
+          "description": "If several rules of the same kind match a day, the most specific wins: today > weekdays > this_week > every_day. A this_week budget counts the whole week."
+        }
+      }
     }
   }
 }

@@ -102,6 +102,11 @@ pub fn aerial_dir() -> Option<PathBuf> {
     Some(dirs::cache_dir()?.join(APP).join("aerial"))
 }
 
+/// `$XDG_DATA_HOME/curator/statistics`: usage statistics, one file per day (`stats.rs`).
+pub fn statistics_dir() -> Option<PathBuf> {
+    Some(dirs::data_dir()?.join(APP).join("statistics"))
+}
+
 /// `$XDG_CACHE_HOME/curator/sounds`: the games' sound files (made by `sound.rs`).
 pub fn sounds_dir() -> Option<PathBuf> {
     Some(dirs::cache_dir()?.join(APP).join("sounds"))

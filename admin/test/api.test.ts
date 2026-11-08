@@ -37,6 +37,7 @@ beforeAll(async () => {
     hostname: "127.0.0.1",
     logoDir: join(configDir, "logos"),
     aerialDir: join(configDir, "aerial"),
+    statisticsDir: join(configDir, "statistics"),
     listMediaCenters: async () => runningPids,
   });
   base = `http://127.0.0.1:${server.port}`;
@@ -131,7 +132,7 @@ test("rejects requests from another origin (CSRF)", async () => {
 test("reads default config, rejects invalid, saves and applies valid config", async () => {
   const get = await call("GET", "/api/config");
   expect(get.status).toBe(200);
-  expect(get.data.config.discs.enabled).toBe(true);
+  expect(get.data.config.home_screens[0].discs.enabled).toBe(true);
 
   const bad = await call("PUT", "/api/config", { version: 1, discs: { audio_languages: ["german"] } });
   expect(bad.status).toBe(400);
@@ -142,15 +143,25 @@ test("reads default config, rejects invalid, saves and applies valid config", as
   expect(good.data).toEqual({ saved: true, applied: { ok: true } });
   expect(received).toEqual(["reload"]);
   const written = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+  // Version 1 input is written as version 2: one home screen.
   expect(written).toEqual({
-    version: 1,
-    home: { title: "curator", show_title: true, language: "auto" },
-    parental: { pin_backoff_doubling: true, limits: [] },
-    discs: { enabled: true, allow_disc_menu: false, audio_languages: ["deu"], subtitle_languages: [] },
-    folders: [],
-    websites: [],
+    version: 2,
+    home_screens: [
+      {
+        id: "home",
+        name: "Home",
+        default: true,
+        home: { title: "curator", show_title: true, language: "auto" },
+        discs: { enabled: true, allow_disc_menu: false, audio_languages: ["deu"], subtitle_languages: [] },
+        folders: [],
+        websites: [],
+        games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false } },
+        limits: [],
+      },
+    ],
+    parental: { pin_backoff_doubling: true },
     screensaver: { mode: "title", idle_minutes: 10, aerial_quality: "1080p_h264", aerial_videos: [] },
-    games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false } },
+    statistics: { enabled: false, keep_days: 90 },
   });
 });
 
@@ -159,6 +170,28 @@ test("restart is passed to the media center", async () => {
   const r = await call("POST", "/api/restart");
   expect(r.data).toEqual({ ok: true });
   expect(received).toEqual(["restart"]);
+});
+
+test("usage statistics are read and can be deleted", async () => {
+  const dir = join(configDir, "statistics");
+  mkdirSync(dir, { recursive: true });
+  const now = Math.floor(Date.now() / 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const d = new Date();
+  const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  writeFileSync(
+    join(dir, `${today}.jsonl`),
+    `${JSON.stringify({ from: now - 600, until: now - 300, home_screen: "kids", category: "music", item: "Stories", detail: "a.mp3" })}\nnot json\n`,
+  );
+  writeFileSync(join(dir, "notes.txt"), "keep me");
+  const r = await call("GET", "/api/statistics?days=7");
+  expect(r.data.entries).toEqual([
+    { from: now - 600, until: now - 300, home_screen: "kids", category: "music", item: "Stories", detail: "a.mp3" },
+  ]);
+  for (const bad of ["0", "367", "x"]) expect((await call("GET", `/api/statistics?days=${bad}`)).status).toBe(400);
+  expect((await call("DELETE", "/api/statistics")).data).toEqual({ ok: true, deleted: 1 });
+  expect((await call("GET", "/api/statistics?days=7")).data.entries).toEqual([]);
+  expect(readFileSync(join(dir, "notes.txt"), "utf8")).toBe("keep me");
 });
 
 test("folder picker lists only visible directories, read-only", async () => {
@@ -179,12 +212,15 @@ test("saves folders", async () => {
   const folders = [{ id: "movies", name: "Movies", path: "/srv/movies", video: true, audio: false, images: true }];
   const r = await call("PUT", "/api/config", { version: 1, folders });
   expect(r.data.saved).toBe(true);
-  expect(JSON.parse(readFileSync(join(configDir, "config.json"), "utf8")).folders).toEqual(folders);
+  expect(JSON.parse(readFileSync(join(configDir, "config.json"), "utf8")).home_screens[0].folders).toEqual(folders);
 });
 
 test("status comes from the media center", async () => {
   expect((await call("GET", "/api/status")).data).toEqual({
     running: true,
+    homeScreen: null,
+    activeHomeScreen: null,
+    activeLocked: false,
     extraInstances: 0,
     extraPids: [],
     configError: null,
@@ -224,11 +260,12 @@ test("PIN: 4-8 digits, stored only as hash, never sent to the browser, kept on s
 
   // A normal save keeps the PIN; the browser can't set the hash directly.
   const limits = [{ type: "budget", minutes: 60, scope: { kind: "every_day" } }];
-  await call("PUT", "/api/config", { ...got.data.config, parental: { pin_backoff_doubling: false, limits } });
+  const screens = got.data.config.home_screens.map((s: object) => ({ ...s, limits }));
+  await call("PUT", "/api/config", { ...got.data.config, home_screens: screens, parental: { pin_backoff_doubling: false } });
   const after = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
   expect(after.parental.pin_hash).toStartWith("$argon2id$");
   expect(after.parental.pin_length).toBe(4);
-  expect(after.parental.limits).toEqual(limits);
+  expect(after.home_screens[0].limits).toEqual(limits);
   expect(after.parental.pin_backoff_doubling).toBe(false);
   const sneaky = await call("PUT", "/api/config", { version: 1, parental: { pin_hash: "$argon2id$x" } });
   expect(sneaky.status).toBe(400);
@@ -252,6 +289,26 @@ test("unlock and lock are forwarded to the media center", async () => {
     { command: "end_unlock" },
     { command: "lock" },
   ]);
+  // For a certain home screen; switching the TV.
+  requests.length = 0;
+  await call("POST", "/api/lock", { home_screen: "kids" });
+  await call("POST", "/api/unlock", { minutes: 30, home_screen: "kids" });
+  await call("POST", "/api/unlock/end", { home_screen: "kids" });
+  await call("POST", "/api/home-screen", { home_screen: "kids" });
+  await call("GET", "/api/status?home_screen=kids");
+  expect(requests).toEqual([
+    { command: "lock", home_screen: "kids" },
+    { command: "unlock", minutes: 30, home_screen: "kids" },
+    { command: "end_unlock", home_screen: "kids" },
+    { command: "switch_home_screen", home_screen: "kids" },
+    { command: "status", home_screen: "kids" },
+  ]);
+  for (const bad of ["../x", "A", 5]) {
+    expect((await call("POST", "/api/lock", { home_screen: bad })).status).toBe(400);
+    expect((await call("POST", "/api/home-screen", { home_screen: bad })).status).toBe(400);
+  }
+  expect((await call("POST", "/api/home-screen", {})).status).toBe(400);
+  expect((await call("GET", "/api/status?home_screen=..%2Fx")).status).toBe(400);
   requests.length = 0;
   expect((await call("POST", "/api/remote/calibrate")).data).toEqual({ ok: true });
   expect(requests).toEqual([{ command: "calibrate_remote" }]);

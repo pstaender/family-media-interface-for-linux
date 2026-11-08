@@ -1,7 +1,13 @@
 // The media center config. Format: docs/config.schema.json.
 // Must accept and reject exactly what the Rust side (src/config.rs) does.
 
-export const CONFIG_VERSION = 1;
+/** 2: home screens, each with its own items and time limits; version 1 is still read. */
+export const CONFIG_VERSION = 2;
+export const MAX_HOME_SCREENS = 10;
+export const MAX_SCREEN_NAME_CHARS = 30;
+/** The home screen a version-1 config becomes (same as `V1_SCREEN_ID` in src/config.rs). */
+export const V1_SCREEN_ID = "home";
+export const MAX_KEEP_DAYS = 3650;
 const MAX_LANGUAGES = 10;
 const MAX_FOLDERS = 50;
 const MAX_NAME_CHARS = 60;
@@ -73,7 +79,6 @@ export interface ParentalSettings {
   /** Number of PIN digits (4-8), only together with pin_hash. Also never sent to the browser. */
   pin_length?: number;
   pin_backoff_doubling: boolean;
-  limits: LimitRule[];
 }
 
 export const SCREENSAVER_MODES = ["off", "title", "aerial"] as const;
@@ -110,7 +115,7 @@ function validateGames(input: unknown, where: string): GameSettings | string {
   if (!isObject(input)) return `${where}: must be an object`;
   const extra = unknownKey(input, ["pong", "bricks"], where);
   if (extra) return extra;
-  const games = defaultConfig().games;
+  const games = newHomeScreen("x", "x").games;
   if (input.pong !== undefined) {
     const p = input.pong;
     if (!isObject(p)) return `${where}.pong: must be an object`;
@@ -151,33 +156,129 @@ function validateGames(input: unknown, where: string): GameSettings | string {
   return games;
 }
 
-export interface Config {
-  version: number;
+/** One home screen: its own items and time limits (src/config.rs `HomeScreen`). */
+export interface HomeScreen {
+  id: string;
+  /** Short title (menus on the TV, admin panel). */
+  name: string;
+  /** Exactly one home screen is the default (★). */
+  default: boolean;
   home: HomeSettings;
-  parental: ParentalSettings;
   discs: DiscSettings;
   folders: FolderSettings[];
   websites: WebsiteSettings[];
-  screensaver: ScreensaverSettings;
   games: GameSettings;
+  limits: LimitRule[];
+}
+
+export interface StatisticsSettings {
+  enabled: boolean;
+  keep_days: number;
+}
+
+export interface Config {
+  version: number;
+  home_screens: HomeScreen[];
+  parental: ParentalSettings;
+  screensaver: ScreensaverSettings;
+  statistics: StatisticsSettings;
+}
+
+export function newHomeScreen(id: string, name: string): HomeScreen {
+  return {
+    id,
+    name,
+    default: false,
+    home: { title: "curator", show_title: true, language: "auto" },
+    discs: { enabled: true, allow_disc_menu: true, audio_languages: [], subtitle_languages: [] },
+    folders: [],
+    websites: [],
+    games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false } },
+    limits: [],
+  };
 }
 
 export function defaultConfig(): Config {
   return {
     version: CONFIG_VERSION,
-    home: { title: "curator", show_title: true, language: "auto" },
-    parental: { pin_backoff_doubling: true, limits: [] },
-    discs: {
-      enabled: true,
-      allow_disc_menu: true,
-      audio_languages: [],
-      subtitle_languages: [],
-    },
-    folders: [],
-    websites: [],
+    home_screens: [{ ...newHomeScreen(V1_SCREEN_ID, "Home"), default: true }],
+    parental: { pin_backoff_doubling: true },
     screensaver: { mode: "title", idle_minutes: 10, aerial_quality: "1080p_h264", aerial_videos: [] },
-    games: { pong: { enabled: false, computer_level: "normal", points_to_win: 7 }, bricks: { enabled: false, lives: 5, sound: false } },
+    statistics: { enabled: false, keep_days: 90 },
   };
+}
+
+/** An id from a name that isn't in `taken` (lowercase letters, digits and -). */
+export function uniqueId(name: string, taken: Iterable<string>): string {
+  const used = new Set(taken);
+  const base =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 34) || "item";
+  if (!used.has(base)) return base;
+  for (let n = 2; ; n++) {
+    const id = `${base}-${n}`;
+    if (!used.has(id)) return id;
+  }
+}
+
+/** A short title as typed: control characters and outer spaces removed; `null` if unusable. */
+export function cleanScreenName(name: string): string | null {
+  const clean = name.replace(/\p{Cc}/gu, "").trim();
+  const chars = [...clean].length;
+  return chars >= 1 && chars <= MAX_SCREEN_NAME_CHARS ? clean : null;
+}
+
+/** All folder and website ids (unique across home screens). */
+export function allItemIds(config: Config): string[] {
+  return config.home_screens.flatMap((s) => [...s.folders.map((f) => f.id), ...s.websites.map((w) => w.id)]);
+}
+
+/**
+ * A new home screen: a copy of the default one (nothing has to be entered twice), not the
+ * default itself, with new folder and website ids. Returns the new config and the screen's id.
+ */
+export function addHomeScreen(config: Config, name: string): { config: Config; id: string } {
+  const id = uniqueId(name, config.home_screens.map((s) => s.id));
+  const source: HomeScreen = structuredClone(defaultScreen(config));
+  const taken = new Set(allItemIds(config));
+  const fresh = (old: string) => {
+    const next = uniqueId(old, taken);
+    taken.add(next);
+    return next;
+  };
+  const screen: HomeScreen = {
+    ...source,
+    id,
+    name,
+    default: false,
+    folders: source.folders.map((f) => ({ ...f, id: fresh(f.id) })),
+    websites: source.websites.map((w) => ({ ...w, id: fresh(w.id) })),
+  };
+  return { config: { ...config, home_screens: [...config.home_screens, screen] }, id };
+}
+
+/** Make this one the default (★); the star moves, so there is always exactly one. */
+export function makeDefaultScreen(config: Config, id: string): Config {
+  return { ...config, home_screens: config.home_screens.map((s) => ({ ...s, default: s.id === id })) };
+}
+
+/** Remove a home screen; the default one can't be removed. */
+export function removeHomeScreen(config: Config, id: string): Config {
+  if (defaultScreen(config).id === id) return config;
+  return { ...config, home_screens: config.home_screens.filter((s) => s.id !== id) };
+}
+
+/** The websites of all home screens (their logos). */
+export function allWebsites(config: Config): WebsiteSettings[] {
+  return config.home_screens.flatMap((s) => s.websites);
+}
+
+/** The default (★) home screen. */
+export function defaultScreen(config: Config): HomeScreen {
+  return config.home_screens.find((s) => s.default) ?? config.home_screens[0]!;
 }
 
 function validateScreensaver(input: unknown): ScreensaverSettings | string {
@@ -351,11 +452,25 @@ function validateLimit(input: unknown): LimitRule | string {
   return `unknown type "${String(input.type)}"`;
 }
 
-function validateParental(input: unknown): ParentalSettings | string {
+function validateLimits(value: unknown, at: string): LimitRule[] | string {
+  if (!Array.isArray(value)) return `${at}: must be a list`;
+  if (value.length > MAX_LIMITS) return `${at}: at most ${MAX_LIMITS} rules`;
+  const rules: LimitRule[] = [];
+  for (const [i, raw] of value.entries()) {
+    const rule = validateLimit(raw);
+    if (typeof rule === "string") return `${at}[${i}]: ${rule}`;
+    rules.push(rule);
+  }
+  return rules;
+}
+
+/** `parental`; in version 1 it also had the time limits (`withLimits`). */
+function validateParental(input: unknown, withLimits: boolean): { parental: ParentalSettings; limits: LimitRule[] } | string {
   if (!isObject(input)) return "parental: must be an object";
-  const extra = unknownKey(input, ["pin_hash", "pin_length", "pin_backoff_doubling", "limits"], "parental");
+  const keys = ["pin_hash", "pin_length", "pin_backoff_doubling", ...(withLimits ? ["limits"] : [])];
+  const extra = unknownKey(input, keys, "parental");
   if (extra) return extra;
-  const parental: ParentalSettings = { pin_backoff_doubling: true, limits: [] };
+  const parental: ParentalSettings = { pin_backoff_doubling: true };
   if (input.pin_hash !== undefined) {
     const h = input.pin_hash;
     if (typeof h !== "string" || !h.startsWith("$argon2") || h.length > 512) {
@@ -373,16 +488,13 @@ function validateParental(input: unknown): ParentalSettings | string {
     if (typeof input.pin_backoff_doubling !== "boolean") return "parental.pin_backoff_doubling: must be true or false";
     parental.pin_backoff_doubling = input.pin_backoff_doubling;
   }
+  let limits: LimitRule[] = [];
   if (input.limits !== undefined) {
-    if (!Array.isArray(input.limits)) return "parental.limits: must be a list";
-    if (input.limits.length > MAX_LIMITS) return `parental.limits: at most ${MAX_LIMITS} rules`;
-    for (const [i, raw] of input.limits.entries()) {
-      const rule = validateLimit(raw);
-      if (typeof rule === "string") return `parental.limits[${i}]: ${rule}`;
-      parental.limits.push(rule);
-    }
+    const rules = validateLimits(input.limits, "parental.limits");
+    if (typeof rules === "string") return rules;
+    limits = rules;
   }
-  return parental;
+  return { parental, limits };
 }
 
 /** Same rules as `validate_id_and_name` in src/config.rs. */
@@ -468,103 +580,188 @@ function languages(value: unknown, field: string): string[] | string {
   return value as string[];
 }
 
-/** Validate untrusted input and fill in defaults. */
-export function validateConfig(input: unknown): Validation {
-  if (!isObject(input)) return { ok: false, error: "config must be an object" };
-  const top = unknownKey(input, ["version", "home", "parental", "discs", "folders", "websites", "screensaver", "games", "programs"], "config");
-  if (top) return { ok: false, error: top };
-  if (input.version !== CONFIG_VERSION) {
-    return {
-      ok: false,
-      error: `unsupported config version ${String(input.version)} (expected ${CONFIG_VERSION})`,
-    };
-  }
-  const config = defaultConfig();
+/** A home screen's sections (home, discs, folders, websites, games) into `screen`; `at` prefixes errors. */
+function validateSections(input: Record<string, unknown>, at: string, screen: HomeScreen): string | null {
   if (input.home !== undefined) {
     const h = input.home;
-    if (!isObject(h)) return { ok: false, error: "home: must be an object" };
-    const extra = unknownKey(h, ["title", "show_title", "language"], "home");
-    if (extra) return { ok: false, error: extra };
+    if (!isObject(h)) return `${at}home: must be an object`;
+    const extra = unknownKey(h, ["title", "show_title", "language"], `${at}home`);
+    if (extra) return extra;
     if (h.title !== undefined) {
       const problem = checkText(h.title);
-      if (problem) return { ok: false, error: `home.title: ${problem}` };
-      config.home.title = h.title as string;
+      if (problem) return `${at}home.title: ${problem}`;
+      screen.home.title = h.title as string;
     }
     if (h.show_title !== undefined) {
-      if (typeof h.show_title !== "boolean") return { ok: false, error: "home.show_title: must be true or false" };
-      config.home.show_title = h.show_title;
+      if (typeof h.show_title !== "boolean") return `${at}home.show_title: must be true or false`;
+      screen.home.show_title = h.show_title;
     }
     if (h.language !== undefined) {
-      if (!(LANGUAGES as readonly unknown[]).includes(h.language)) {
-        return { ok: false, error: `home.language must be one of ${LANGUAGES.join(", ")}` };
-      }
-      config.home.language = h.language as Language;
+      if (!(LANGUAGES as readonly unknown[]).includes(h.language)) return `${at}home.language must be one of ${LANGUAGES.join(", ")}`;
+      screen.home.language = h.language as Language;
     }
   }
   if (input.discs !== undefined) {
     const d = input.discs;
-    if (!isObject(d)) return { ok: false, error: "discs: must be an object" };
-    const extra = unknownKey(
-      d,
-      ["enabled", "allow_disc_menu", "audio_languages", "subtitle_languages"],
-      "discs",
-    );
-    if (extra) return { ok: false, error: extra };
+    if (!isObject(d)) return `${at}discs: must be an object`;
+    const extra = unknownKey(d, ["enabled", "allow_disc_menu", "audio_languages", "subtitle_languages"], `${at}discs`);
+    if (extra) return extra;
     for (const key of ["enabled", "allow_disc_menu"] as const) {
       if (d[key] === undefined) continue;
-      if (typeof d[key] !== "boolean") return { ok: false, error: `discs.${key}: must be true or false` };
-      config.discs[key] = d[key];
+      if (typeof d[key] !== "boolean") return `${at}discs.${key}: must be true or false`;
+      screen.discs[key] = d[key];
     }
     for (const key of ["audio_languages", "subtitle_languages"] as const) {
-      const result = languages(d[key], `discs.${key}`);
-      if (typeof result === "string") return { ok: false, error: result };
-      config.discs[key] = result;
+      const result = languages(d[key], `${at}discs.${key}`);
+      if (typeof result === "string") return result;
+      screen.discs[key] = result;
     }
   }
   if (input.folders !== undefined) {
-    if (!Array.isArray(input.folders)) return { ok: false, error: "folders: must be a list" };
-    if (input.folders.length > MAX_FOLDERS) return { ok: false, error: `folders: at most ${MAX_FOLDERS} folders` };
+    if (!Array.isArray(input.folders)) return `${at}folders: must be a list`;
+    if (input.folders.length > MAX_FOLDERS) return `${at}folders: at most ${MAX_FOLDERS} folders`;
     const ids = new Set<string>();
     for (const [i, raw] of input.folders.entries()) {
       const folder = validateFolder(raw);
-      if (typeof folder === "string") return { ok: false, error: `folders[${i}]: ${folder}` };
-      if (ids.has(folder.id)) return { ok: false, error: `folders[${i}]: id "${folder.id}" is used twice` };
+      if (typeof folder === "string") return `${at}folders[${i}]: ${folder}`;
+      if (ids.has(folder.id)) return `${at}folders[${i}]: id "${folder.id}" is used twice`;
       ids.add(folder.id);
-      config.folders.push(folder);
+      screen.folders.push(folder);
     }
   }
-  if (input.parental !== undefined) {
-    const parental = validateParental(input.parental);
-    if (typeof parental === "string") return { ok: false, error: parental };
-    config.parental = parental;
+  if (input.websites !== undefined) {
+    if (!Array.isArray(input.websites)) return `${at}websites: must be a list`;
+    if (input.websites.length > MAX_WEBSITES) return `${at}websites: at most ${MAX_WEBSITES} websites`;
+    const ids = new Set<string>();
+    for (const [i, raw] of input.websites.entries()) {
+      const site = validateWebsite(raw);
+      if (typeof site === "string") return `${at}websites[${i}]: ${site}`;
+      if (ids.has(site.id)) return `${at}websites[${i}]: id "${site.id}" is used twice`;
+      ids.add(site.id);
+      screen.websites.push(site);
+    }
   }
   if (input.games !== undefined) {
-    const games = validateGames(input.games, "games");
-    if (typeof games === "string") return { ok: false, error: games };
-    config.games = games;
+    const games = validateGames(input.games, `${at}games`);
+    if (typeof games === "string") return games;
+    screen.games = games;
   }
-  // Old place of the games (before the Games tab): read if `games` is missing, never written.
+  return null;
+}
+
+/** A version-1 config (one home screen) → version 2, like `ConfigV1::convert` in Rust. */
+function validateV1(input: Record<string, unknown>): Validation {
+  const top = unknownKey(input, ["version", "home", "parental", "discs", "folders", "websites", "screensaver", "games", "programs"], "config");
+  if (top) return { ok: false, error: top };
+  const config = defaultConfig();
+  const screen = config.home_screens[0]!;
+  const problem = validateSections(input, "", screen);
+  if (problem) return { ok: false, error: problem };
+  if (input.parental !== undefined) {
+    const p = validateParental(input.parental, true);
+    if (typeof p === "string") return { ok: false, error: p };
+    config.parental = p.parental;
+    screen.limits = p.limits;
+  }
+  // Old place of the games (before the Games tab): used if `games` is missing.
   if (input.programs !== undefined) {
     const old = validateGames(input.programs, "programs");
     if (typeof old === "string") return { ok: false, error: old };
-    if (input.games === undefined) config.games = old;
+    if (input.games === undefined) screen.games = old;
   }
   if (input.screensaver !== undefined) {
     const s = validateScreensaver(input.screensaver);
     if (typeof s === "string") return { ok: false, error: s };
     config.screensaver = s;
   }
-  if (input.websites !== undefined) {
-    if (!Array.isArray(input.websites)) return { ok: false, error: "websites: must be a list" };
-    if (input.websites.length > MAX_WEBSITES) return { ok: false, error: `websites: at most ${MAX_WEBSITES} websites` };
-    const ids = new Set<string>();
-    for (const [i, raw] of input.websites.entries()) {
-      const site = validateWebsite(raw);
-      if (typeof site === "string") return { ok: false, error: `websites[${i}]: ${site}` };
-      if (ids.has(site.id)) return { ok: false, error: `websites[${i}]: id "${site.id}" is used twice` };
-      ids.add(site.id);
-      config.websites.push(site);
+  return { ok: true, config };
+}
+
+function validateStatistics(input: unknown): StatisticsSettings | string {
+  if (!isObject(input)) return "statistics: must be an object";
+  const extra = unknownKey(input, ["enabled", "keep_days"], "statistics");
+  if (extra) return extra;
+  const s: StatisticsSettings = { enabled: false, keep_days: 90 };
+  if (input.enabled !== undefined) {
+    if (typeof input.enabled !== "boolean") return "statistics.enabled: must be true or false";
+    s.enabled = input.enabled;
+  }
+  if (input.keep_days !== undefined) {
+    const n = input.keep_days;
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > MAX_KEEP_DAYS) return `statistics.keep_days must be 1 to ${MAX_KEEP_DAYS}`;
+    s.keep_days = n;
+  }
+  return s;
+}
+
+/** Validate untrusted input and fill in defaults (version 2; version 1 is converted). */
+export function validateConfig(input: unknown): Validation {
+  if (!isObject(input)) return { ok: false, error: "config must be an object" };
+  if (input.version === 1) return validateV1(input);
+  const top = unknownKey(input, ["version", "home_screens", "parental", "screensaver", "statistics"], "config");
+  if (top) return { ok: false, error: top };
+  if (input.version !== CONFIG_VERSION) {
+    return { ok: false, error: `unsupported config version ${String(input.version)} (expected ${CONFIG_VERSION})` };
+  }
+  const config = defaultConfig();
+  const list = input.home_screens;
+  if (!Array.isArray(list) || list.length === 0 || list.length > MAX_HOME_SCREENS) {
+    return { ok: false, error: `home_screens: 1 to ${MAX_HOME_SCREENS} home screens` };
+  }
+  config.home_screens = [];
+  const folderIds = new Set<string>();
+  const websiteIds = new Set<string>();
+  for (const [i, raw] of list.entries()) {
+    const at = `home_screens[${i}]`;
+    if (!isObject(raw)) return { ok: false, error: `${at}: must be an object` };
+    const extra = unknownKey(raw, ["id", "name", "default", "home", "discs", "folders", "websites", "games", "limits"], at);
+    if (extra) return { ok: false, error: extra };
+    const idName = checkIdAndName(raw.id, raw.name);
+    if (idName) return { ok: false, error: `${at}: ${idName}` };
+    if ([...(raw.name as string)].length > MAX_SCREEN_NAME_CHARS) {
+      return { ok: false, error: `${at}.name: at most ${MAX_SCREEN_NAME_CHARS} characters` };
     }
+    if (config.home_screens.some((s) => s.id === raw.id)) return { ok: false, error: `${at}: id "${String(raw.id)}" is used twice` };
+    const screen = newHomeScreen(raw.id as string, raw.name as string);
+    if (raw.default !== undefined) {
+      if (typeof raw.default !== "boolean") return { ok: false, error: `${at}.default: must be true or false` };
+      screen.default = raw.default;
+    }
+    const problem = validateSections(raw, `${at}.`, screen);
+    if (problem) return { ok: false, error: problem };
+    if (raw.limits !== undefined) {
+      const rules = validateLimits(raw.limits, `${at}.limits`);
+      if (typeof rules === "string") return { ok: false, error: rules };
+      screen.limits = rules;
+    }
+    // Folder and website ids are keys of our own files (recently played, logos).
+    for (const f of screen.folders) {
+      if (folderIds.has(f.id)) return { ok: false, error: `${at}.folders: id "${f.id}" is used on another home screen` };
+      folderIds.add(f.id);
+    }
+    for (const w of screen.websites) {
+      if (websiteIds.has(w.id)) return { ok: false, error: `${at}.websites: id "${w.id}" is used on another home screen` };
+      websiteIds.add(w.id);
+    }
+    config.home_screens.push(screen);
+  }
+  if (config.home_screens.filter((s) => s.default).length !== 1) {
+    return { ok: false, error: "home_screens: exactly one must be the default" };
+  }
+  if (input.parental !== undefined) {
+    const p = validateParental(input.parental, false);
+    if (typeof p === "string") return { ok: false, error: p };
+    config.parental = p.parental;
+  }
+  if (input.screensaver !== undefined) {
+    const s = validateScreensaver(input.screensaver);
+    if (typeof s === "string") return { ok: false, error: s };
+    config.screensaver = s;
+  }
+  if (input.statistics !== undefined) {
+    const s = validateStatistics(input.statistics);
+    if (typeof s === "string") return { ok: false, error: s };
+    config.statistics = s;
   }
   return { ok: true, config };
 }

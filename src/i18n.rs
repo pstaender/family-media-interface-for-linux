@@ -370,6 +370,13 @@ const DE: &[(&str, &str)] = &[
     ("Previous", "Zurück (Titel)"),
     ("Volume up", "Lauter"),
     ("Games", "Spiele"),
+    ("Home screens", "Startseiten"),
+    ("Shown now", "Wird gerade gezeigt"),
+    ("Switch to “{name}”", "Zu „{name}“ wechseln"),
+    (
+        "Enter the PIN to switch the home screen. Back: cancel.",
+        "Zum Wechseln der Startseite die PIN eingeben. Zurück: abbrechen.",
+    ),
     ("Brick Breaker", "Mauerbrecher"),
     ("Clear the walls of bricks", "Räume die Mauern ab"),
     ("Play", "Spielen"),

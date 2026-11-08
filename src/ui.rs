@@ -11,14 +11,14 @@ use eframe::egui::{
 };
 
 use crate::audio::AudioPlayer;
-use crate::config::{Config, FolderSettings};
+use crate::config::{FolderSettings, View};
 use crate::control::SharedConfig;
 use crate::control::UiRequest;
 use crate::disc::{self, DriveReport, DriveState, MediaKind};
 use crate::gamepad::{PadNav, Pads};
 use crate::library::{self, Entry, EntryKind, Filter};
 use crate::limits::{self, Status};
-use crate::lock::{LockAction, LockInfo, LockView, Nav};
+use crate::lock::{LockAction, LockInfo, LockView, Nav, Purpose};
 use crate::makemkv::{self, DiscInfo, ScanProgress};
 use crate::mpris::{MediaCommand, Mpris, Status as PlayStatus};
 use crate::pictures::{self, Picture};
@@ -26,6 +26,7 @@ use crate::player::{self, MovieOptions, PlayMode};
 use crate::pong::{PongAction, PongInput, PongState, PongView};
 use crate::recent;
 use crate::remote::{self, Action, Calibration, RemoteMap};
+use crate::stats::{Activity, Category};
 use crate::tr;
 use crate::usage::SharedTracker;
 use crate::volume::{self, Volume, VolumeCommand};
@@ -132,11 +133,17 @@ enum Screen {
     ConfirmExit {
         selected: usize,
     },
+    /// Choosing another home screen (asks for the PIN, if one is set).
+    SwitchHome {
+        selected: usize,
+    },
 }
 
 /// The round buttons at the top right of the home screen ("up" from the top row).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TopButton {
+    /// Switch the home screen (only with more than one).
+    Screens,
     Exit,
     Lock,
 }
@@ -558,6 +565,11 @@ pub struct App {
     /// Connected gamepads, and when the game was last advanced.
     pads: Pads,
     pong_tick: Instant,
+    /// The home screen shown (to notice a switch), the usage statistics, and what the
+    /// running player / website is (for them).
+    shown_screen: String,
+    stats: crate::stats::Recorder,
+    playing_activity: Option<Activity>,
     /// The current kind of screen and since when (see `just_opened`).
     screen_kind: std::mem::Discriminant<Screen>,
     screen_since: Instant,
@@ -644,6 +656,9 @@ impl App {
             inhibitor: inhibit::Inhibitor::spawn(),
             pads: Pads::default(),
             pong_tick: Instant::now(),
+            shown_screen: String::new(),
+            stats: Default::default(),
+            playing_activity: None,
             screen_kind: std::mem::discriminant(&Screen::Home),
             screen_since: Instant::now(),
         }
@@ -655,9 +670,65 @@ impl App {
     }
 
     /// The current config (may change at any time through a reload).
-    fn config(&self) -> (Config, Option<String>) {
+    /// The active home screen's settings plus the shared ones, and the config's error.
+    fn config(&self) -> (View, Option<String>) {
+        let active = self
+            .tracker
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .active()
+            .map(str::to_string);
         let state = self.config.lock().unwrap_or_else(|p| p.into_inner());
-        (state.config.clone(), state.error.clone())
+        (state.config.view(active.as_deref()), state.error.clone())
+    }
+
+    /// The websites of all home screens (for their logos).
+    fn all_websites(&self) -> Vec<crate::config::WebsiteSettings> {
+        let state = self.config.lock().unwrap_or_else(|p| p.into_inner());
+        state
+            .config
+            .home_screens
+            .iter()
+            .flat_map(|s| s.websites.iter().cloned())
+            .collect()
+    }
+
+    /// What is used right now, for the statistics (`None`: menus, home screen, lock screen).
+    fn current_activity(&self, config: &View) -> Option<Activity> {
+        if self.lock.is_some() {
+            return None;
+        }
+        let folder_name = |id: &str| {
+            config
+                .folders
+                .iter()
+                .find(|f| f.id == id)
+                .map_or_else(|| id.to_string(), |f| f.name.clone())
+        };
+        match &self.screen {
+            Screen::Playing { stopping: None, .. } => self.playing_activity.clone(),
+            Screen::Music(view) => {
+                let index = view.start + view.player.state().playlist_pos.unwrap_or(0);
+                let track = view.tracks.get(index)?;
+                let detail = track
+                    .path
+                    .strip_prefix(&view.root)
+                    .map_or_else(|_| track.name.clone(), |p| p.to_string_lossy().into_owned());
+                Some(Activity::new(
+                    Category::Music,
+                    folder_name(&view.back.folder_id),
+                    detail,
+                ))
+            }
+            Screen::Picture(view) => Some(Activity::new(
+                Category::Pictures,
+                folder_name(&view.back.folder_id),
+                view.back.sub.join("/"),
+            )),
+            Screen::Pong(_) => Some(Activity::new(Category::Game, "Ping Pong", "")),
+            Screen::Bricks(_) => Some(Activity::new(Category::Game, "Brick Breaker", "")),
+            _ => None,
+        }
     }
 
     /// Pull updates from background threads.
@@ -1244,8 +1315,8 @@ impl App {
 
     /// Load website logos that are new or changed (the admin interface writes them), drop
     /// those that are gone or turned off. Read-only; decoding happens in a thread.
-    fn check_logos(&mut self, config: &Config) {
-        let wanted: Vec<_> = config.websites.iter().filter(|w| w.show_logo).collect();
+    fn check_logos(&mut self, websites: &[crate::config::WebsiteSettings]) {
+        let wanted: Vec<_> = websites.iter().filter(|w| w.show_logo).collect();
         self.logos
             .retain(|id, _| wanted.iter().any(|w| &w.id == id));
         for site in wanted {
@@ -1396,7 +1467,8 @@ impl App {
                 .collect();
             self.folder_checked = Some(Instant::now());
             self.ctx.request_repaint_after(Duration::from_secs(5));
-            self.check_logos(&config);
+            let websites = self.all_websites();
+            self.check_logos(&websites);
         }
         while let Ok((id, modified, result)) = self.logo_rx.try_recv() {
             match result {
@@ -1560,18 +1632,39 @@ impl App {
                 || self.last_input.elapsed() < Duration::from_secs(60));
 
         let (config, _) = self.config();
+        // Another home screen (switched from the admin panel or on the TV): start on its
+        // home screen.
+        if config.screen_id != self.shown_screen {
+            if !self.shown_screen.is_empty() {
+                log::info!("home screen: {}", config.screen_id);
+                self.go_home();
+                self.focus = (0, 0);
+                self.top_focus = None;
+                self.row_scroll_x = [0.0; 4];
+                self.rows_scroll_y = 0.0;
+                self.folder_checked = None; // its folders are checked right away
+            }
+            self.shown_screen = config.screen_id.clone();
+        }
+        let activity = self.current_activity(&config);
+        self.stats.update(
+            now.timestamp(),
+            activity,
+            &config.screen_id,
+            config.statistics.enabled,
+        );
         let mut tracker = self.tracker.lock().unwrap_or_else(|p| p.into_inner());
         if active {
             self.usage_carry += dt;
             let whole = self.usage_carry.floor();
             if whole >= 1.0 {
-                tracker.add_usage(now.date_naive(), whole as u64);
+                tracker.add_usage(&config.screen_id, now.date_naive(), whole as u64);
                 self.usage_carry -= whole;
             }
         }
         let status = limits::evaluate(
-            &config.parental.limits,
-            &tracker.situation(),
+            &config.limits,
+            &tracker.situation(&config.screen_id),
             now.naive_local(),
         );
         tracker.status = status.clone();
@@ -1638,7 +1731,11 @@ impl App {
         self.top_focus = None;
         if has_pin {
             self.screen = Screen::Home;
-            self.exit_view = Some(LockView::for_exit(shutdown));
+            self.exit_view = Some(LockView::for_purpose(if shutdown {
+                Purpose::ShutDown
+            } else {
+                Purpose::Exit
+            }));
         } else if shutdown {
             self.shut_down();
         } else {
@@ -1661,9 +1758,20 @@ impl App {
             .any(|c| self.remote_map.device_action(*c) == Some(Action::Ok))
     }
 
+    /// Show another home screen (its settings, items and time limits apply from now on).
+    fn switch_home_screen(&mut self, id: &str) {
+        log::info!("switching to home screen {id} on the TV");
+        self.tracker
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .set_active(id);
+        self.ctx.request_repaint();
+    }
+
     /// Before restarting / exiting: end the screensaver, players and music (waiting for
     /// them, so none is left behind) and save the usage.
     fn stop_all_now(&mut self) {
+        self.stats.finish(chrono::Local::now().timestamp());
         self.stop_screensaver();
         match std::mem::replace(&mut self.screen, Screen::Home) {
             Screen::Playing { mut child, .. } => {
@@ -1782,15 +1890,18 @@ impl App {
                 self.tracker
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
-                    .unlock(now, minutes);
+                    .unlock(&config.screen_id, now, minutes);
+                if config.statistics.enabled {
+                    crate::stats::prune(config.statistics.keep_days);
+                }
                 self.lock = None;
             }
-            LockAction::Exit { shutdown } => {
+            LockAction::Confirmed(purpose) => {
                 self.exit_view = None;
-                if shutdown {
-                    self.shut_down();
-                } else {
-                    self.exit_now();
+                match purpose {
+                    Purpose::Exit => self.exit_now(),
+                    Purpose::ShutDown => self.shut_down(),
+                    Purpose::Switch { id, .. } => self.switch_home_screen(&id),
                 }
             }
             LockAction::Cancel => self.exit_view = None,
@@ -1827,10 +1938,14 @@ impl App {
             .layout_no_wrap(tr!("Time left {time}", time = "0:00"), font.clone(), TEXT)
             .size();
         let box_size = size + Vec2::new(44.0 * s, 22.0 * s);
+        let (config, _) = self.config();
+        let buttons = 1.0
+            + f32::from(u8::from(config.parental.pin_hash.is_some()))
+            + f32::from(u8::from(config.screens.len() > 1));
         let rect = Rect::from_min_size(
             Pos2::new(
-                // Left of the lock button.
-                screen_rect.max.x - 190.0 * s - box_size.x,
+                // Left of the round buttons (margin 80, 76 wide, 24 apart).
+                screen_rect.max.x - (80.0 + 100.0 * buttons) * s - box_size.x,
                 screen_rect.min.y + 38.0 * s,
             ),
             box_size,
@@ -1971,6 +2086,14 @@ impl App {
         };
         let mut cmd = player::command(mode, device, info, &options);
         log::info!("starting player: {cmd:?}");
+        self.playing_activity = Some(Activity::new(
+            Category::Disc,
+            tile.title.clone(),
+            match mode {
+                PlayMode::DiscMenu => "disc menu",
+                _ => "movie",
+            },
+        ));
         self.screen = match cmd.spawn() {
             Ok(child) => {
                 if let Some(id) = track {
@@ -2088,6 +2211,11 @@ impl App {
         cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null());
         log::info!("opening website {}: {cmd:?}", site.id);
+        self.playing_activity = Some(Activity::new(
+            Category::Website,
+            site.name.clone(),
+            website_domain(site),
+        ));
         self.screen = match cmd.spawn() {
             Ok(child) => Screen::Playing {
                 child,
@@ -2115,6 +2243,17 @@ impl App {
         };
         let mut cmd = player::video_file_command(&entry.path, &options);
         log::info!("playing {}: {cmd:?}", entry.path.display());
+        let folder = config
+            .folders
+            .iter()
+            .find(|f| f.id == browse.folder_id)
+            .map_or_else(|| browse.folder_id.clone(), |f| f.name.clone());
+        let mut detail = browse.sub.join("/");
+        if !detail.is_empty() {
+            detail.push('/');
+        }
+        detail.push_str(&entry.name);
+        self.playing_activity = Some(Activity::new(Category::Video, folder, detail));
         self.screen = match cmd.spawn() {
             Ok(child) => {
                 resume::spawn_monitor(socket.clone(), resume::file_key(&entry.path));
@@ -2341,26 +2480,33 @@ impl App {
             RowKind::Games => games.len(),
         };
 
-        // The buttons at the top right ("up" from the top row): exit, and lock (only with a
-        // PIN, so nobody gets locked out).
+        // The buttons at the top right ("up" from the top row), left to right: home screens
+        // (only with more than one), exit, and lock (only with a PIN, so nobody gets locked
+        // out).
         let has_pin = config.parental.pin_hash.is_some();
-        if !has_pin && self.top_focus == Some(TopButton::Lock) {
+        let several = config.screens.len() > 1;
+        let buttons: Vec<TopButton> = [
+            several.then_some(TopButton::Screens),
+            Some(TopButton::Exit),
+            has_pin.then_some(TopButton::Lock),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if self.top_focus.is_some_and(|b| !buttons.contains(&b)) {
             self.top_focus = Some(TopButton::Exit);
         }
-        if home && self.top_focus.is_some() {
+        if home && let Some(focused) = self.top_focus {
+            let at = buttons.iter().position(|b| *b == focused).unwrap_or(0);
             if keys.down {
                 self.top_focus = None;
-            } else if keys.left {
-                self.top_focus = Some(TopButton::Exit);
-            } else if keys.right && has_pin {
-                self.top_focus = Some(TopButton::Lock);
+            } else if keys.left && at > 0 {
+                self.top_focus = Some(buttons[at - 1]);
+            } else if keys.right && at + 1 < buttons.len() {
+                self.top_focus = Some(buttons[at + 1]);
             }
         } else if home && keys.up && self.focus.0 == 0 {
-            self.top_focus = Some(if has_pin {
-                TopButton::Lock
-            } else {
-                TopButton::Exit
-            });
+            self.top_focus = buttons.last().copied();
         } else if home {
             let (mut row, mut col) = self.focus;
             if keys.up && row > 0 {
@@ -2527,6 +2673,31 @@ impl App {
                 Vec2::splat(size),
             )
         };
+        // Home screens: left of the exit button.
+        if several {
+            let rect = button((size + 24.0 * s) * if has_pin { 2.0 } else { 1.0 });
+            let response = ui.interact(
+                rect,
+                ui.make_persistent_id("screens-button"),
+                Sense::click(),
+            );
+            let focused =
+                home && (self.top_focus == Some(TopButton::Screens) || response.hovered());
+            paint_screens_button(ui.painter(), rect, focused, s);
+            if home
+                && (response.clicked()
+                    || (self.top_focus == Some(TopButton::Screens) && keys.enter))
+            {
+                let current = config
+                    .screens
+                    .iter()
+                    .position(|(id, ..)| *id == config.screen_id)
+                    .unwrap_or(0);
+                self.screen = Screen::SwitchHome { selected: current };
+                self.ctx.request_repaint();
+                return;
+            }
+        }
         // Exit: left of the lock button (or in its place without a PIN).
         {
             let rect = button(if has_pin { size + 24.0 * s } else { 0.0 });
@@ -2571,7 +2742,7 @@ impl App {
                 self.tracker
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
-                    .lock();
+                    .lock(&config.screen_id);
                 self.ctx.request_repaint();
                 return;
             }
@@ -2644,6 +2815,59 @@ impl App {
             | Screen::Pong(_)
             | Screen::Bricks(_)
             | Screen::VideoChoose { .. } => {}
+            Screen::SwitchHome { selected } => {
+                let count = config.screens.len() + 1;
+                let mut selected = (*selected).min(count - 1);
+                if keys.prev() {
+                    selected = selected.saturating_sub(1);
+                }
+                if keys.next() {
+                    selected = (selected + 1).min(count - 1);
+                }
+                let mut items: Vec<MenuItem> = config
+                    .screens
+                    .iter()
+                    .map(|(id, name, default)| {
+                        let mark = if *default { "★ " } else { "" };
+                        let hint = if *id == config.screen_id {
+                            tr!("Shown now")
+                        } else {
+                            ""
+                        };
+                        MenuItem::new(format!("{mark}{name}"), hint)
+                    })
+                    .collect();
+                items.push(MenuItem::new(tr!("Cancel"), ""));
+                let clicked = paint_menu(
+                    ui,
+                    painter,
+                    screen_rect,
+                    s,
+                    tr!("Home screens"),
+                    &items,
+                    selected,
+                )
+                .filter(|_| !self.just_opened());
+                match clicked.or(keys.enter.then_some(selected)) {
+                    _ if keys.back => self.screen = Screen::Home,
+                    Some(i) if i < config.screens.len() => {
+                        let (id, name, _) = config.screens[i].clone();
+                        self.screen = Screen::Home;
+                        self.top_focus = None;
+                        if id != config.screen_id {
+                            if has_pin {
+                                // Only a parent may switch.
+                                self.exit_view =
+                                    Some(LockView::for_purpose(Purpose::Switch { id, name }));
+                            } else {
+                                self.switch_home_screen(&id);
+                            }
+                        }
+                    }
+                    Some(_) => self.screen = Screen::Home,
+                    None => self.screen = Screen::SwitchHome { selected },
+                }
+            }
             Screen::ConfirmExit { selected } => {
                 let mut selected = *selected;
                 if keys.prev() {
@@ -3582,6 +3806,34 @@ fn paint_power_hold(
     let mut filled = bar;
     filled.set_width(bar.width() * progress);
     painter.rect_filled(filled, radius, Color32::from_rgb(0xff, 0x6b, 0x5c));
+}
+
+/// The home screens button: two people.
+fn paint_screens_button(painter: &egui::Painter, rect: Rect, focused: bool, s: f32) {
+    let r = rect.width() / 2.0;
+    let c = rect.center();
+    painter.circle_filled(c, r, if focused { ACCENT } else { TILE_BG });
+    if focused {
+        painter.circle_stroke(c, r, Stroke::new(3.0 * s, TEXT));
+    }
+    for (dx, size) in [(-0.22, 0.85), (0.22, 1.0)] {
+        let head = c + Vec2::new(dx * r, -0.2 * r * size);
+        painter.circle_filled(head, 0.16 * r * size, TEXT);
+        let body = Rect::from_center_size(
+            c + Vec2::new(dx * r, 0.28 * r),
+            Vec2::new(0.42 * r * size, 0.32 * r * size),
+        );
+        painter.rect_filled(
+            body,
+            CornerRadius {
+                nw: (0.2 * r) as u8,
+                ne: (0.2 * r) as u8,
+                sw: 2,
+                se: 2,
+            },
+            TEXT,
+        );
+    }
 }
 
 /// The exit button: the power-off symbol (a ring open at the top, a line through the gap).

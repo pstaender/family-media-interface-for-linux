@@ -18,7 +18,8 @@ import {
   sessionCookie,
   sessionToken,
 } from "./auth";
-import { isNormalizedAbsolutePath, validateConfig, defaultConfig, type Config } from "./config";
+import { allWebsites, isNormalizedAbsolutePath, validateConfig, defaultConfig, type Config } from "./config";
+import { defaultStatisticsDir, deleteStatistics, readStatistics } from "./statistics";
 import { NOT_RUNNING, sendCommand } from "./control";
 import { readJson, writeJsonAtomic } from "./files";
 import { defaultLogoDir, readLogo, refreshLogos, updateLogo } from "./logos";
@@ -43,6 +44,8 @@ export interface AdminOptions {
   logoDir?: string;
   /** Screensaver videos ($XDG_CACHE_HOME/curator/aerial). */
   aerialDir?: string;
+  /** Usage statistics ($XDG_DATA_HOME/curator/statistics). */
+  statisticsDir?: string;
   /** Tests only: the running media centers' pids (default: from /proc). */
   listMediaCenters?: () => Promise<number[]>;
 }
@@ -106,6 +109,14 @@ export function createAdminServer(options: AdminOptions) {
   const auth = new Auth(join(options.configDir, "admin.json"));
   const logoDir = options.logoDir ?? defaultLogoDir();
   const aerial = new Aerial(options.aerialDir);
+  const statisticsDir = options.statisticsDir ?? defaultStatisticsDir();
+  /** A home screen id from a request (checked like the config's ids), or undefined. */
+  const screenParam = (value: unknown): string | undefined | null =>
+    value === undefined || value === null || value === ""
+      ? undefined
+      : typeof value === "string" && /^[a-z0-9][a-z0-9-]{0,39}$/.test(value)
+        ? value
+        : null;
   const listMediaCenters = options.listMediaCenters ?? (() => mediaCenterPids());
   /** Media centers of this user other than the one answering on the control socket. */
   const strayMediaCenters = async (connectedPid: unknown): Promise<number[]> => {
@@ -254,7 +265,7 @@ export function createAdminServer(options: AdminOptions) {
             if (stored.pin_length !== undefined) v.config.parental.pin_length = stored.pin_length;
             const result = await saveAndApply(v.config);
             // In the background: the media center picks up new logo files by itself.
-            void refreshLogos(logoDir, v.config.websites);
+            void refreshLogos(logoDir, allWebsites(v.config));
             // Downloads / deletes the screensaver videos in the background.
             aerial.sync(v.config.screensaver);
             return json(result);
@@ -301,7 +312,9 @@ export function createAdminServer(options: AdminOptions) {
                   ? { command: "unlock", minutes }
                   : null;
             if (!command) return json({ error: "Choose minutes (1-1440) or the rest of today." }, 400);
-            const reply = await sendCommand(socketPath, command);
+            const screen = screenParam(body?.home_screen);
+            if (screen === null) return json({ error: "Invalid home screen." }, 400);
+            const reply = await sendCommand(socketPath, screen ? { ...command, home_screen: screen } : command);
             return reply.ok ? json({ ok: true }) : json({ error: reply.error }, 502);
           },
           { mutating: true },
@@ -310,8 +323,10 @@ export function createAdminServer(options: AdminOptions) {
 
       "/api/unlock/end": {
         POST: api(
-          async () => {
-            const reply = await sendCommand(socketPath, "end_unlock");
+          async (req) => {
+            const screen = screenParam((await readBody(req))?.home_screen);
+            if (screen === null) return json({ error: "Invalid home screen." }, 400);
+            const reply = await sendCommand(socketPath, { command: "end_unlock", ...(screen ? { home_screen: screen } : {}) });
             return reply.ok ? json({ ok: true }) : json({ error: reply.error }, 502);
           },
           { mutating: true },
@@ -320,10 +335,39 @@ export function createAdminServer(options: AdminOptions) {
 
       "/api/lock": {
         POST: api(
-          async () => {
-            const reply = await sendCommand(socketPath, "lock");
+          async (req) => {
+            const screen = screenParam((await readBody(req))?.home_screen);
+            if (screen === null) return json({ error: "Invalid home screen." }, 400);
+            const reply = await sendCommand(socketPath, { command: "lock", ...(screen ? { home_screen: screen } : {}) });
             return reply.ok ? json({ ok: true }) : json({ error: reply.error }, 502);
           },
+          { mutating: true },
+        ),
+      },
+
+      "/api/home-screen": {
+        // Show this home screen on the TV now.
+        POST: api(
+          async (req) => {
+            const screen = screenParam((await readBody(req))?.home_screen);
+            if (!screen) return json({ error: "Choose a home screen." }, 400);
+            const reply = await sendCommand(socketPath, { command: "switch_home_screen", home_screen: screen });
+            return reply.ok ? json({ ok: true }) : json({ error: reply.error }, 502);
+          },
+          { mutating: true },
+        ),
+      },
+
+      "/api/statistics": {
+        // The last `days` days (1-366) of usage statistics.
+        GET: api(async (req) => {
+          const days = Number(new URL(req.url).searchParams.get("days") ?? "7");
+          if (!Number.isInteger(days) || days < 1 || days > 366) return json({ error: "days must be 1 to 366." }, 400);
+          return json({ entries: await readStatistics(statisticsDir, days) });
+        }),
+        // Delete all collected statistics (only our own day files).
+        DELETE: api(
+          async () => json({ ok: true, deleted: await deleteStatistics(statisticsDir) }),
           { mutating: true },
         ),
       },
@@ -348,7 +392,7 @@ export function createAdminServer(options: AdminOptions) {
         POST: api(
           async (req) => {
             const id = (req as Request & { params: { id: string } }).params.id;
-            const site = (await loadConfig()).config.websites.find((w) => w.id === id);
+            const site = allWebsites((await loadConfig()).config).find((w) => w.id === id);
             if (!site) return json({ error: "Save the website first." }, 404);
             if (!site.show_logo) return json({ error: "The logo is turned off for this website." }, 400);
             try {
@@ -433,8 +477,11 @@ export function createAdminServer(options: AdminOptions) {
       },
 
       "/api/status": {
-        GET: api(async () => {
-          const reply = await sendCommand(socketPath, "status", 2000);
+        GET: api(async (req) => {
+          // ?home_screen=…: that home screen's usage and limits (default: the one on the TV).
+          const screen = screenParam(new URL(req.url).searchParams.get("home_screen"));
+          if (screen === null) return json({ error: "Invalid home screen." }, 400);
+          const reply = await sendCommand(socketPath, { command: "status", ...(screen ? { home_screen: screen } : {}) }, 2000);
           // More than one media center: the one on the TV may not get the changes.
           const extraPids = await strayMediaCenters(reply.ok ? reply.pid : undefined);
           const extraInstances = extraPids.length;
@@ -444,6 +491,9 @@ export function createAdminServer(options: AdminOptions) {
               extraPids,
               running: true,
               configError: reply.config_error ?? null,
+              homeScreen: reply.home_screen ?? null,
+              activeHomeScreen: reply.active_home_screen ?? null,
+              activeLocked: reply.active_locked === true,
               locked: reply.locked === true,
               lockReason: reply.lock_reason ?? null,
               remainingSecs: reply.remaining_secs ?? null,

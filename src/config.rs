@@ -10,7 +10,15 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u32 = 1;
+/// 2: home screens (`home_screens`), each with its own items and time limits. Files of
+/// version 1 (one home screen) are still read and converted (`parse`).
+pub const VERSION: u32 = 2;
+/// At most this many home screens.
+pub const MAX_HOME_SCREENS: usize = 10;
+/// Home screen names are short (shown in menus on the TV).
+const MAX_SCREEN_NAME_CHARS: usize = 30;
+/// The home screen a version-1 config becomes (its usage data moves there too).
+pub const V1_SCREEN_ID: &str = "home";
 const MAX_LANGUAGES: usize = 10;
 const MAX_FOLDERS: usize = 50;
 const MAX_NAME_CHARS: usize = 60;
@@ -18,9 +26,143 @@ const MAX_PATH_BYTES: usize = 4096;
 const MAX_WEBSITES: usize = 50;
 const MAX_URL_BYTES: usize = 2048;
 
+/// The whole config (version 2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    pub version: u32,
+    /// At least one; exactly one is the default (★): shown at the start and preselected
+    /// in the admin panel.
+    pub home_screens: Vec<HomeScreen>,
+    #[serde(default)]
+    pub parental: ParentalSettings,
+    /// For all home screens.
+    #[serde(default)]
+    pub screensaver: ScreensaverSettings,
+    #[serde(default)]
+    pub statistics: StatisticsSettings,
+}
+
+/// One home screen: its own items and time limits (like a profile).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HomeScreen {
+    pub id: String,
+    /// Short title (menus on the TV, admin panel).
+    pub name: String,
+    #[serde(default)]
+    pub default: bool,
+    #[serde(default)]
+    pub home: HomeSettings,
+    #[serde(default)]
+    pub discs: DiscSettings,
+    #[serde(default)]
+    pub folders: Vec<FolderSettings>,
+    #[serde(default)]
+    pub websites: Vec<WebsiteSettings>,
+    #[serde(default)]
+    pub games: GameSettings,
+    #[serde(default)]
+    pub limits: Vec<LimitRule>,
+}
+
+impl HomeScreen {
+    fn new(id: &str, name: &str) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            default: true,
+            home: HomeSettings::default(),
+            discs: DiscSettings::default(),
+            folders: Vec::new(),
+            websites: Vec::new(),
+            games: GameSettings::default(),
+            limits: Vec::new(),
+        }
+    }
+}
+
+/// Usage statistics (`src/stats.rs`): what was used when, kept for `keep_days`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct StatisticsSettings {
+    pub enabled: bool,
+    pub keep_days: u32,
+}
+
+impl Default for StatisticsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            keep_days: 90,
+        }
+    }
+}
+
+pub const MAX_KEEP_DAYS: u32 = 3650;
+
+/// What the media center works with: the active home screen's settings plus the shared
+/// ones (field names as before home screens existed).
+#[derive(Debug, Clone, PartialEq)]
+pub struct View {
+    pub screen_id: String,
+    pub screen_name: String,
+    /// All home screens: id, name, default.
+    pub screens: Vec<(String, String, bool)>,
+    pub home: HomeSettings,
+    pub discs: DiscSettings,
+    pub folders: Vec<FolderSettings>,
+    pub websites: Vec<WebsiteSettings>,
+    pub games: GameSettings,
+    pub limits: Vec<LimitRule>,
+    pub parental: ParentalSettings,
+    pub screensaver: ScreensaverSettings,
+    pub statistics: StatisticsSettings,
+}
+
+impl Config {
+    /// The default (★) home screen.
+    pub fn default_screen(&self) -> &HomeScreen {
+        self.home_screens
+            .iter()
+            .find(|s| s.default)
+            .or(self.home_screens.first())
+            .expect("a valid config has at least one home screen")
+    }
+
+    /// The home screen with this id, else the default one.
+    pub fn screen(&self, id: Option<&str>) -> &HomeScreen {
+        id.and_then(|id| self.home_screens.iter().find(|s| s.id == id))
+            .unwrap_or_else(|| self.default_screen())
+    }
+
+    pub fn view(&self, active: Option<&str>) -> View {
+        let s = self.screen(active);
+        View {
+            screen_id: s.id.clone(),
+            screen_name: s.name.clone(),
+            screens: self
+                .home_screens
+                .iter()
+                .map(|s| (s.id.clone(), s.name.clone(), s.default))
+                .collect(),
+            home: s.home.clone(),
+            discs: s.discs.clone(),
+            folders: s.folders.clone(),
+            websites: s.websites.clone(),
+            games: s.games.clone(),
+            limits: s.limits.clone(),
+            parental: self.parental.clone(),
+            screensaver: self.screensaver.clone(),
+            statistics: self.statistics.clone(),
+        }
+    }
+}
+
+/// A version-1 config (one home screen); only read, then converted.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConfigV1 {
     pub version: u32,
     #[serde(default)]
     pub home: HomeSettings,
@@ -31,16 +173,65 @@ pub struct Config {
     #[serde(default)]
     pub websites: Vec<WebsiteSettings>,
     #[serde(default)]
-    pub parental: ParentalSettings,
+    pub parental: ParentalV1,
     #[serde(default)]
     pub screensaver: ScreensaverSettings,
     #[serde(default)]
     pub games: GameSettings,
     /// Where the games were before they got their own "Games" tab (`programs.pong`): still
-    /// read and moved to `games` (`parse`), never written. "Programs" (registered programs)
-    /// will be a different thing.
-    #[serde(default, rename = "programs", skip_serializing)]
+    /// read and moved to `games`. "Programs" (registered programs) will be a different thing.
+    #[serde(default, rename = "programs")]
     pub legacy_programs: Option<GameSettings>,
+}
+
+impl ConfigV1 {
+    /// One home screen ("Home", ★) with everything; the limits move into it.
+    fn convert(self, had_games: bool) -> Config {
+        let games = match self.legacy_programs {
+            Some(old) if !had_games => old,
+            _ => self.games,
+        };
+        Config {
+            version: VERSION,
+            home_screens: vec![HomeScreen {
+                home: self.home,
+                discs: self.discs,
+                folders: self.folders,
+                websites: self.websites,
+                games,
+                limits: self.parental.limits,
+                ..HomeScreen::new(V1_SCREEN_ID, "Home")
+            }],
+            parental: ParentalSettings {
+                pin_hash: self.parental.pin_hash,
+                pin_length: self.parental.pin_length,
+                pin_backoff_doubling: self.parental.pin_backoff_doubling,
+            },
+            screensaver: self.screensaver,
+            statistics: StatisticsSettings::default(),
+        }
+    }
+}
+
+/// `parental` of a version-1 config (with the time limits).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct ParentalV1 {
+    pin_hash: Option<String>,
+    pin_length: Option<u8>,
+    pin_backoff_doubling: bool,
+    limits: Vec<LimitRule>,
+}
+
+impl Default for ParentalV1 {
+    fn default() -> Self {
+        Self {
+            pin_hash: None,
+            pin_length: None,
+            pin_backoff_doubling: true,
+            limits: Vec::new(),
+        }
+    }
 }
 
 /// The "Games" row: built-in games.
@@ -200,7 +391,6 @@ pub struct ParentalSettings {
     pub pin_length: Option<u8>,
     /// Wrong PIN: wait 5 s, and with this option double the wait after each further try.
     pub pin_backoff_doubling: bool,
-    pub limits: Vec<LimitRule>,
 }
 
 impl Default for ParentalSettings {
@@ -209,7 +399,6 @@ impl Default for ParentalSettings {
             pin_hash: None,
             pin_length: None,
             pin_backoff_doubling: true,
-            limits: Vec::new(),
         }
     }
 }
@@ -414,14 +603,10 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             version: VERSION,
-            home: HomeSettings::default(),
-            discs: DiscSettings::default(),
-            folders: Vec::new(),
-            websites: Vec::new(),
+            home_screens: vec![HomeScreen::new(V1_SCREEN_ID, "Home")],
             parental: ParentalSettings::default(),
             screensaver: ScreensaverSettings::default(),
-            games: GameSettings::default(),
-            legacy_programs: None,
+            statistics: StatisticsSettings::default(),
         }
     }
 }
@@ -429,21 +614,13 @@ impl Default for Config {
 impl Config {
     /// Used when the config exists but can't be read: everything that could be restricted is off.
     pub fn locked_down() -> Self {
-        Self {
-            version: VERSION,
-            home: HomeSettings::default(),
-            discs: DiscSettings {
-                enabled: false,
-                allow_disc_menu: false,
-                ..DiscSettings::default()
-            },
-            folders: Vec::new(),
-            websites: Vec::new(),
-            parental: ParentalSettings::default(),
-            screensaver: ScreensaverSettings::default(),
-            games: GameSettings::default(),
-            legacy_programs: None,
-        }
+        let mut config = Self::default();
+        config.home_screens[0].discs = DiscSettings {
+            enabled: false,
+            allow_disc_menu: false,
+            ..DiscSettings::default()
+        };
+        config
     }
 }
 
@@ -466,67 +643,96 @@ pub fn config_path() -> Option<PathBuf> {
     Some(config_dir()?.join("config.json"))
 }
 
-/// Parse and validate config JSON.
+/// Parse and validate config JSON (version 2, or version 1, converted).
 pub fn parse(text: &str) -> Result<Config, String> {
     let value: serde_json::Value =
         serde_json::from_str(text).map_err(|e| format!("invalid config: {e}"))?;
-    settings_are_objects(&value)?;
-    let has_games = value.get("games").is_some();
-    let mut config: Config =
-        serde_json::from_value(value).map_err(|e| format!("invalid config: {e}"))?;
-    // The old place of the games (`programs`) counts unless `games` is there too.
-    if let Some(old) = config.legacy_programs.take()
-        && !has_games
-    {
-        config.games = old;
-    }
+    let config = match value.get("version").and_then(serde_json::Value::as_u64) {
+        Some(1) => {
+            settings_are_objects_v1(&value)?;
+            let had_games = value.get("games").is_some();
+            let v1: ConfigV1 =
+                serde_json::from_value(value).map_err(|e| format!("invalid config: {e}"))?;
+            v1.convert(had_games)
+        }
+        _ => {
+            settings_are_objects(&value)?;
+            serde_json::from_value(value).map_err(|e| format!("invalid config: {e}"))?
+        }
+    };
     validate(&config)?;
     Ok(config)
+}
+
+fn object(v: Option<&serde_json::Value>, path: &str) -> Result<(), String> {
+    match v {
+        None | Some(serde_json::Value::Object(_)) => Ok(()),
+        Some(_) => Err(format!("invalid config: {path} must be an object")),
+    }
+}
+
+/// Inside one home screen (or a version-1 config): settings sections must be objects.
+fn screen_sections_are_objects(value: &serde_json::Value, at: &str) -> Result<(), String> {
+    use serde_json::Value;
+    for key in ["home", "discs", "games"] {
+        object(value.get(key), &format!("{at}{key}"))?;
+    }
+    for path in ["games/pong", "games/bricks"] {
+        object(
+            value.pointer(&format!("/{path}")),
+            &format!("{at}{}", path.replace('/', ".")),
+        )?;
+    }
+    for list in ["folders", "websites"] {
+        if let Some(Value::Array(items)) = value.get(list) {
+            for (i, item) in items.iter().enumerate() {
+                object(Some(item), &format!("{at}{list}[{i}]"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn limits_are_objects(rules: Option<&serde_json::Value>, at: &str) -> Result<(), String> {
+    if let Some(serde_json::Value::Array(rules)) = rules {
+        for (i, rule) in rules.iter().enumerate() {
+            object(Some(rule), &format!("{at}[{i}]"))?;
+            object(rule.get("scope"), &format!("{at}[{i}].scope"))?;
+        }
+    }
+    Ok(())
 }
 
 /// serde also builds a settings struct from a list (`"home": []`); the admin interface (and
 /// the schema) only accept objects, so lists are refused here, at every level.
 fn settings_are_objects(value: &serde_json::Value) -> Result<(), String> {
     use serde_json::Value;
-    fn object(v: Option<&Value>, path: &str) -> Result<(), String> {
-        match v {
-            None | Some(Value::Object(_)) => Ok(()),
-            Some(_) => Err(format!("invalid config: {path} must be an object")),
-        }
-    }
     object(Some(value), "the config")?;
-    for key in [
-        "home",
-        "discs",
-        "parental",
-        "screensaver",
-        "games",
-        "programs",
-    ] {
+    for key in ["parental", "screensaver", "statistics"] {
         object(value.get(key), key)?;
     }
-    for path in [
-        "games/pong",
-        "games/bricks",
-        "programs/pong",
-        "programs/bricks",
-    ] {
-        object(value.pointer(&format!("/{path}")), &path.replace('/', "."))?;
-    }
-    for list in ["folders", "websites"] {
-        if let Some(Value::Array(items)) = value.get(list) {
-            for (i, item) in items.iter().enumerate() {
-                object(Some(item), &format!("{list}[{i}]"))?;
-            }
-        }
-    }
-    if let Some(Value::Array(rules)) = value.pointer("/parental/limits") {
-        for (i, rule) in rules.iter().enumerate() {
-            object(Some(rule), &format!("parental.limits[{i}]"))?;
-            object(rule.get("scope"), &format!("parental.limits[{i}].scope"))?;
+    if let Some(Value::Array(screens)) = value.get("home_screens") {
+        for (i, screen) in screens.iter().enumerate() {
+            let at = format!("home_screens[{i}]");
+            object(Some(screen), &at)?;
+            screen_sections_are_objects(screen, &format!("{at}."))?;
+            limits_are_objects(screen.get("limits"), &format!("{at}.limits"))?;
         }
     }
     Ok(())
+}
+
+/// The same for a version-1 config.
+fn settings_are_objects_v1(value: &serde_json::Value) -> Result<(), String> {
+    object(Some(value), "the config")?;
+    for key in ["parental", "screensaver", "programs"] {
+        object(value.get(key), key)?;
+    }
+    for path in ["programs/pong", "programs/bricks"] {
+        object(value.pointer(&format!("/{path}")), &path.replace('/', "."))?;
+    }
+    screen_sections_are_objects(value, "")?;
+    limits_are_objects(value.pointer("/parental/limits"), "parental.limits")
 }
 
 fn validate(config: &Config) -> Result<(), String> {
@@ -536,12 +742,45 @@ fn validate(config: &Config) -> Result<(), String> {
             config.version
         ));
     }
-    check_text(&config.home.title).map_err(|e| format!("home.title: {e}"))?;
-    if !LANGUAGES.contains(&config.home.language.as_str()) {
+    let screens = &config.home_screens;
+    if screens.is_empty() || screens.len() > MAX_HOME_SCREENS {
         return Err(format!(
-            "home.language must be one of {}",
-            LANGUAGES.join(", ")
+            "home_screens: 1 to {MAX_HOME_SCREENS} home screens"
         ));
+    }
+    if screens.iter().filter(|s| s.default).count() != 1 {
+        return Err("home_screens: exactly one must be the default".into());
+    }
+    for (i, screen) in screens.iter().enumerate() {
+        let at = format!("home_screens[{i}]");
+        validate_screen(screen).map_err(|e| format!("{at}.{e}"))?;
+        if screens[..i].iter().any(|s| s.id == screen.id) {
+            return Err(format!("{at}: id \"{}\" is used twice", screen.id));
+        }
+        // Folder and website ids are keys of our own files (recently played, logos):
+        // unique across all home screens.
+        for f in &screen.folders {
+            if screens[..i]
+                .iter()
+                .any(|s| s.folders.iter().any(|o| o.id == f.id))
+            {
+                return Err(format!(
+                    "{at}.folders: id \"{}\" is used on another home screen",
+                    f.id
+                ));
+            }
+        }
+        for w in &screen.websites {
+            if screens[..i]
+                .iter()
+                .any(|s| s.websites.iter().any(|o| o.id == w.id))
+            {
+                return Err(format!(
+                    "{at}.websites: id \"{}\" is used on another home screen",
+                    w.id
+                ));
+            }
+        }
     }
     if let Some(hash) = &config.parental.pin_hash
         && (!hash.starts_with("$argon2") || hash.len() > 512)
@@ -556,15 +795,37 @@ fn validate(config: &Config) -> Result<(), String> {
             return Err("parental.pin_length needs a pin_hash".into());
         }
     }
-    if config.parental.limits.len() > MAX_LIMITS {
-        return Err(format!("parental.limits: at most {MAX_LIMITS} rules"));
+    validate_screensaver(&config.screensaver).map_err(|e| format!("screensaver.{e}"))?;
+    if !(1..=MAX_KEEP_DAYS).contains(&config.statistics.keep_days) {
+        return Err(format!("statistics.keep_days must be 1 to {MAX_KEEP_DAYS}"));
     }
-    for (i, rule) in config.parental.limits.iter().enumerate() {
-        validate_limit(rule).map_err(|e| format!("parental.limits[{i}]: {e}"))?;
+    Ok(())
+}
+
+/// One home screen (errors start with the field, e.g. `folders[0]: …`).
+fn validate_screen(screen: &HomeScreen) -> Result<(), String> {
+    validate_id_and_name(&screen.id, "x").map_err(|e| format!("id: {e}"))?;
+    let chars = screen.name.chars().count();
+    if chars > MAX_SCREEN_NAME_CHARS {
+        return Err(format!("name: at most {MAX_SCREEN_NAME_CHARS} characters"));
+    }
+    check_text(&screen.name).map_err(|e| format!("name {e}"))?;
+    check_text(&screen.home.title).map_err(|e| format!("home.title: {e}"))?;
+    if !LANGUAGES.contains(&screen.home.language.as_str()) {
+        return Err(format!(
+            "home.language must be one of {}",
+            LANGUAGES.join(", ")
+        ));
+    }
+    if screen.limits.len() > MAX_LIMITS {
+        return Err(format!("limits: at most {MAX_LIMITS} rules"));
+    }
+    for (i, rule) in screen.limits.iter().enumerate() {
+        validate_limit(rule).map_err(|e| format!("limits[{i}]: {e}"))?;
     }
     for (field, list) in [
-        ("discs.audio_languages", &config.discs.audio_languages),
-        ("discs.subtitle_languages", &config.discs.subtitle_languages),
+        ("discs.audio_languages", &screen.discs.audio_languages),
+        ("discs.subtitle_languages", &screen.discs.subtitle_languages),
     ] {
         if list.len() > MAX_LANGUAGES {
             return Err(format!("{field}: at most {MAX_LANGUAGES} languages"));
@@ -580,28 +841,27 @@ fn validate(config: &Config) -> Result<(), String> {
             }
         }
     }
-    validate_screensaver(&config.screensaver).map_err(|e| format!("screensaver.{e}"))?;
-    if !(3..=21).contains(&config.games.pong.points_to_win) {
+    if !(3..=21).contains(&screen.games.pong.points_to_win) {
         return Err("games.pong.points_to_win must be 3 to 21".into());
     }
-    if !(1..=9).contains(&config.games.bricks.lives) {
+    if !(1..=9).contains(&screen.games.bricks.lives) {
         return Err("games.bricks.lives must be 1 to 9".into());
     }
-    if config.folders.len() > MAX_FOLDERS {
+    if screen.folders.len() > MAX_FOLDERS {
         return Err(format!("folders: at most {MAX_FOLDERS} folders"));
     }
-    if config.websites.len() > MAX_WEBSITES {
+    if screen.websites.len() > MAX_WEBSITES {
         return Err(format!("websites: at most {MAX_WEBSITES} websites"));
     }
-    for (i, site) in config.websites.iter().enumerate() {
+    for (i, site) in screen.websites.iter().enumerate() {
         validate_website(site).map_err(|e| format!("websites[{i}]: {e}"))?;
-        if config.websites[..i].iter().any(|w| w.id == site.id) {
+        if screen.websites[..i].iter().any(|w| w.id == site.id) {
             return Err(format!("websites[{i}]: id \"{}\" is used twice", site.id));
         }
     }
-    for (i, folder) in config.folders.iter().enumerate() {
+    for (i, folder) in screen.folders.iter().enumerate() {
         validate_folder(folder).map_err(|e| format!("folders[{i}]: {e}"))?;
-        if config.folders[..i].iter().any(|f| f.id == folder.id) {
+        if screen.folders[..i].iter().any(|f| f.id == folder.id) {
             return Err(format!("folders[{i}]: id \"{}\" is used twice", folder.id));
         }
     }
@@ -741,17 +1001,70 @@ mod tests {
     }
 
     #[test]
+    fn home_screens() {
+        let config = parse(include_str!("../docs/config.example.json")).unwrap();
+        assert_eq!(config.home_screens.len(), 2);
+        assert_eq!(config.default_screen().id, "family");
+        assert_eq!(config.screen(Some("kids")).name, "Kids");
+        assert_eq!(
+            config.screen(Some("gone")).id,
+            "family",
+            "unknown: the default"
+        );
+        assert!(config.statistics.enabled);
+        assert_eq!(config.statistics.keep_days, 90);
+        let view = config.view(Some("kids"));
+        assert_eq!(view.screen_id, "kids");
+        assert_eq!(view.limits.len(), 1);
+        assert_eq!(view.folders[0].id, "kids-stories");
+        assert_eq!(view.screens.len(), 2);
+        assert!(view.parental.pin_backoff_doubling);
+        // Missing file: one home screen with the star.
+        let d = Config::default();
+        assert_eq!(d.home_screens.len(), 1);
+        assert!(d.home_screens[0].default);
+        assert!(!d.statistics.enabled);
+    }
+
+    #[test]
+    fn version_1_becomes_one_home_screen() {
+        let c = parse(
+            r#"{"version":1,"home":{"title":"Kino"},"folders":[{"id":"m","name":"M","path":"/m","video":true}],
+               "parental":{"pin_backoff_doubling":false,"limits":[{"type":"budget","minutes":60,"scope":{"kind":"every_day"}}]},
+               "programs":{"pong":{"enabled":true}}}"#,
+        )
+        .unwrap();
+        assert_eq!(c.version, VERSION);
+        assert_eq!(c.home_screens.len(), 1);
+        let s = &c.home_screens[0];
+        assert_eq!(
+            (s.id.as_str(), s.name.as_str(), s.default),
+            (V1_SCREEN_ID, "Home", true)
+        );
+        assert_eq!(s.home.title, "Kino");
+        assert_eq!(s.folders[0].id, "m");
+        assert_eq!(s.limits.len(), 1, "the limits move into the home screen");
+        assert!(s.games.pong.enabled, "games from their old place too");
+        assert!(!c.parental.pin_backoff_doubling);
+        // Written as version 2.
+        let written = serde_json::to_value(&c).unwrap();
+        assert_eq!(written["version"], 2);
+        assert!(written.get("folders").is_none() && written["parental"].get("limits").is_none());
+        assert_eq!(parse(&written.to_string()).unwrap(), c);
+    }
+
+    #[test]
     fn example_config_is_valid() {
         let config = parse(include_str!("../docs/config.example.json")).unwrap();
-        assert_eq!(config.discs.audio_languages, ["deu", "eng"]);
+        assert_eq!(config.home_screens[0].discs.audio_languages, ["deu", "eng"]);
     }
 
     #[test]
     fn example_folders() {
         let config = parse(include_str!("../docs/config.example.json")).unwrap();
-        assert_eq!(config.folders.len(), 3);
-        assert!(config.folders[2].audio);
-        assert!(!config.folders[2].video);
+        assert_eq!(config.home_screens[0].folders.len(), 3);
+        assert!(config.home_screens[0].folders[2].audio);
+        assert!(!config.home_screens[0].folders[2].video);
     }
 
     #[test]
@@ -769,37 +1082,41 @@ mod tests {
     #[test]
     fn example_websites() {
         let config = parse(include_str!("../docs/config.example.json")).unwrap();
-        assert_eq!(config.websites.len(), 2);
-        assert!(config.websites[0].allow_subdomains);
-        assert!(!config.websites[1].allow_subdomains);
+        assert_eq!(config.home_screens[0].websites.len(), 2);
+        assert!(config.home_screens[0].websites[0].allow_subdomains);
+        assert!(!config.home_screens[0].websites[1].allow_subdomains);
         // Missing toggle: subdomains allowed.
         let c =
             parse(r#"{"version":1,"websites":[{"id":"k","name":"K","url":"https://kika.de/"}]}"#)
                 .unwrap();
-        assert!(c.websites[0].allow_subdomains);
-        assert!(c.websites[0].show_logo); // logo on by default
-        assert!(!config.websites[1].show_logo);
+        assert!(c.home_screens[0].websites[0].allow_subdomains);
+        assert!(c.home_screens[0].websites[0].show_logo); // logo on by default
+        assert!(!config.home_screens[0].websites[1].show_logo);
     }
 
     #[test]
     fn home_title() {
         let config = parse(include_str!("../docs/config.example.json")).unwrap();
-        assert_eq!(config.home.title, "Family Cinema");
+        assert_eq!(config.home_screens[0].home.title, "Family Cinema");
         let c = parse(r#"{"version":1,"home":{"show_title":false}}"#).unwrap();
-        assert_eq!(c.home.title, "curator");
-        assert!(!c.home.show_title);
-        assert!(parse(r#"{"version":1}"#).unwrap().home.show_title);
-        assert_eq!(c.home.language, "auto");
-        assert_eq!(config.home.language, "de");
+        assert_eq!(c.home_screens[0].home.title, "curator");
+        assert!(!c.home_screens[0].home.show_title);
+        assert!(
+            parse(r#"{"version":1}"#).unwrap().home_screens[0]
+                .home
+                .show_title
+        );
+        assert_eq!(c.home_screens[0].home.language, "auto");
+        assert_eq!(config.home_screens[0].home.language, "de");
     }
 
     #[test]
     fn example_parental() {
         let config = parse(include_str!("../docs/config.example.json")).unwrap();
         assert!(config.parental.pin_backoff_doubling);
-        assert_eq!(config.parental.limits.len(), 4);
+        assert_eq!(config.home_screens[0].limits.len(), 4);
         assert_eq!(
-            config.parental.limits[1],
+            config.home_screens[0].limits[1],
             LimitRule::Window {
                 from: Some("07:00".into()),
                 until: "19:30".into(),
@@ -834,22 +1151,31 @@ mod tests {
     #[test]
     fn games() {
         let c = parse(r#"{"version":1}"#).unwrap();
-        assert!(!c.games.pong.enabled && !c.games.bricks.enabled);
-        assert_eq!(c.games.pong.computer_level, PongLevel::Normal);
-        assert_eq!(c.games.pong.points_to_win, 7);
+        assert!(!c.home_screens[0].games.pong.enabled && !c.home_screens[0].games.bricks.enabled);
+        assert_eq!(
+            c.home_screens[0].games.pong.computer_level,
+            PongLevel::Normal
+        );
+        assert_eq!(c.home_screens[0].games.pong.points_to_win, 7);
         let config = parse(include_str!("../docs/config.example.json")).unwrap();
-        assert!(config.games.pong.enabled && config.games.bricks.enabled);
-        assert_eq!(config.games.bricks.lives, 3);
-        assert!(config.games.bricks.sound);
-        assert_eq!(c.games.bricks.lives, 5);
-        assert!(!c.games.bricks.sound);
-        assert_eq!(config.games.pong.computer_level, PongLevel::Easy);
-        assert_eq!(config.games.pong.points_to_win, 5);
+        assert!(
+            config.home_screens[0].games.pong.enabled
+                && config.home_screens[0].games.bricks.enabled
+        );
+        assert_eq!(config.home_screens[0].games.bricks.lives, 3);
+        assert!(config.home_screens[0].games.bricks.sound);
+        assert_eq!(c.home_screens[0].games.bricks.lives, 5);
+        assert!(!c.home_screens[0].games.bricks.sound);
+        assert_eq!(
+            config.home_screens[0].games.pong.computer_level,
+            PongLevel::Easy
+        );
+        assert_eq!(config.home_screens[0].games.pong.points_to_win, 5);
         // The old place (`programs`) is read, moved to `games` and not written back.
         let old = parse(r#"{"version":1,"programs":{"pong":{"enabled":true,"points_to_win":9}}}"#)
             .unwrap();
-        assert!(old.games.pong.enabled);
-        assert_eq!(old.games.pong.points_to_win, 9);
+        assert!(old.home_screens[0].games.pong.enabled);
+        assert_eq!(old.home_screens[0].games.pong.points_to_win, 9);
         let written = serde_json::to_string(&old).unwrap();
         assert!(!written.contains("programs") && written.contains(r#""games""#));
         // Both: `games` wins.
@@ -857,7 +1183,7 @@ mod tests {
             r#"{"version":1,"programs":{"pong":{"enabled":true}},"games":{"pong":{"enabled":false}}}"#,
         )
         .unwrap();
-        assert!(!both.games.pong.enabled);
+        assert!(!both.home_screens[0].games.pong.enabled);
     }
 
     #[test]
@@ -875,8 +1201,8 @@ mod tests {
         let config = parse(r#"{"version":1}"#).unwrap();
         assert_eq!(config, Config::default());
         let config = parse(r#"{"version":1,"discs":{"enabled":false}}"#).unwrap();
-        assert!(!config.discs.enabled);
-        assert!(config.discs.allow_disc_menu);
+        assert!(!config.home_screens[0].discs.enabled);
+        assert!(config.home_screens[0].discs.allow_disc_menu);
     }
 
     #[test]
@@ -977,6 +1303,29 @@ mod tests {
             r#"{"version":1,"parental":{"limits":[{"type":"budget","minutes":60,"scope":["every_day"]}]}}"#,
             "[1]",
             "not json",
+            // Version 2: home screens.
+            r#"{"version":2}"#,
+            r#"{"version":2,"home_screens":[]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A"}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true},{"id":"b","name":"B","default":true}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true},{"id":"a","name":"B"}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"A","name":"A","default":true}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"","default":true}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A name that is much too long for it","default":true}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"pin":"1"}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"folders":[{"id":"f","name":"F","path":"/f","video":true}]},{"id":"b","name":"B","folders":[{"id":"f","name":"F","path":"/g","video":true}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"websites":[{"id":"w","name":"W","url":"https://a.de/"}]},{"id":"b","name":"B","websites":[{"id":"w","name":"W","url":"https://b.de/"}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"limits":[{"type":"budget","minutes":0,"scope":{"kind":"every_day"}}]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"discs":[]}]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true,"limits":[["budget"]]}]}"#,
+            r#"{"version":2,"home_screens":[["a"]]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true}],"statistics":{"keep_days":0}}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true}],"statistics":{"keep_days":3651}}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true}],"statistics":{"enabled":"yes"}}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true}],"statistics":[]}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true}],"parental":{"limits":[]}}"#,
+            r#"{"version":2,"home_screens":[{"id":"a","name":"A","default":true}],"folders":[]}"#,
+            r#"{"version":3,"home_screens":[{"id":"a","name":"A","default":true}]}"#,
         ] {
             assert!(parse(bad).is_err(), "should reject {bad}");
         }
@@ -987,7 +1336,7 @@ mod tests {
         let path = temp_file("broken.json", "{ broken");
         let state = load_initial(Some(&path));
         assert_eq!(state.config, Config::locked_down());
-        assert!(!state.config.discs.enabled);
+        assert!(!state.config.home_screens[0].discs.enabled);
         assert!(state.error.is_some());
     }
 
@@ -1003,16 +1352,19 @@ mod tests {
     fn reload_keeps_last_valid_config() {
         let path = temp_file("reload.json", r#"{"version":1,"discs":{"enabled":false}}"#);
         let mut state = load_initial(Some(&path));
-        assert!(!state.config.discs.enabled);
+        assert!(!state.config.home_screens[0].discs.enabled);
 
         std::fs::write(&path, r#"{"version":1,"discs":{"audio_languages":["x"]}}"#).unwrap();
         assert!(reload(&mut state, &path).is_err());
-        assert!(!state.config.discs.enabled, "old config must stay active");
+        assert!(
+            !state.config.home_screens[0].discs.enabled,
+            "old config must stay active"
+        );
         assert!(state.error.is_some());
 
         std::fs::write(&path, r#"{"version":1}"#).unwrap();
         assert!(reload(&mut state, &path).is_ok());
-        assert!(state.config.discs.enabled);
+        assert!(state.config.home_screens[0].discs.enabled);
         assert_eq!(state.error, None);
     }
 }

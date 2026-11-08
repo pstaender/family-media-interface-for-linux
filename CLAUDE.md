@@ -82,6 +82,26 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
 - **Smart search:** one search field covering everything the current profile may use (apps,
   websites, discs, media). Make it typo-tolerant (fuzzy matching) and never let it show
   items the profile isn't allowed to see.
+- **Home screens (implemented, config version 2, `home_screens`):** like profiles: each has
+  a short name, its own home settings, discs, folders, websites, games and time limits.
+  Shared: PIN, screensaver, statistics, remote. Exactly one is the default (★). Folder and
+  website ids are unique across home screens (keys of `recent.json` and the logos); a new
+  one is a copy of the default with new ids (`addHomeScreen`). `config::View` is the active
+  one's settings under the old field names. A version-1 file is read and converted into
+  one screen `home` ("Home"); `usage.json` from before moves there too. Usage time, unlock
+  and the parent's lock are per home screen (`usage::ScreenUsage`); wrong PIN tries are
+  shared; the active one is stored (`Stored.active`), so a restart can't switch to a less
+  restricted one. Switching: admin panel → Status (`switch_home_screen`) or on the TV (button
+  left of the power button, only with more than one; asks for the PIN via
+  `LockView::for_purpose`). Admin: bar above the per-home-screen tabs (select, New, Rename,
+  Make default, Delete), preset to ★; Status and Time limits use the same selection.
+- **Usage statistics (implemented, `statistics` in config.json, `src/stats.rs`, admin:
+  Parental control → Usage):** off by default. `Recorder::update` every frame with "what is
+  in front" (`App::current_activity`: disc, video file, music track, pictures folder,
+  website, game; none on menus or the lock screen); one JSON line per activity (≥ 5 s) when
+  it ends, in `$XDG_DATA_HOME/curator/statistics/<YYYY-MM-DD>.jsonl`. Days older than
+  `keep_days` are deleted at start and on unlock. The admin panel reads them
+  (`admin/src/statistics.ts`, grouped by `usage-summary.ts`) and can delete them all.
 - **PIN and time limits (implemented, v1):**
   - PIN: 4–8 digits, set/changed/removed in the admin panel (`POST`/`DELETE /api/pin`), stored
     only as argon2id hash (`parental.pin_hash`, Bun.password); the hash never goes to the
@@ -93,7 +113,7 @@ media either: mpv gets `--screenshot-dir` and `--watch-later-dir` inside our cac
     OK needed). Every check counts as a try, so there is no checking of partial PINs.
   - Wrong PIN: wait 5 s; with `pin_backoff_doubling` (default on) 5, 10, 20, 40 s … (max 1 h).
     Failures and the waiting time are persisted, so a restart doesn't reset them.
-  - Limits (`parental.limits`, `src/limits.rs`, pure + tested): time **budget** (minutes) or
+  - Limits (`limits` of each home screen, `src/limits.rs`, pure + tested): time **budget** (minutes) or
     time **window** (`from` optional, `until`), each for **today** (stores the date),
     **weekdays**, **this week** (stores the Monday; a week budget counts the whole week) or
     **every day**. Most specific wins: today > weekdays > this week > every day; a week budget
@@ -491,6 +511,8 @@ src/
   power.rs        power button: press / hold 3 s (log out) / hold 8 s (shut down); logind
   gamepad.rs      gamepad state and menu navigation (events from remote.rs)
   inhibit.rs      keeps the computer from blanking the screen (D-Bus inhibit)
+  stats.rs        usage statistics (what was used when; day files, pruning)
+  sound.rs        game sounds (generated WAV files, played with pw-play / paplay / aplay)
   makemkv.rs      makemkvcon robot-output parser, main title selection
   player.rs       builds the player commands (mpv / VLC with libmmbd)
   resume.rs       resume positions via mpv IPC

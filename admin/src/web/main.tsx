@@ -2,6 +2,15 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import {
   MAX_AERIAL_VIDEOS,
+  MAX_HOME_SCREENS,
+  MAX_KEEP_DAYS,
+  MAX_SCREEN_NAME_CHARS,
+  addHomeScreen,
+  allItemIds,
+  cleanScreenName,
+  defaultScreen,
+  makeDefaultScreen,
+  removeHomeScreen,
   WEEKDAYS,
   websiteDomain,
   type AerialQuality,
@@ -9,12 +18,14 @@ import {
   type PongLevel,
   type ScreensaverMode,
   type FolderSettings,
+  type HomeScreen,
   type Language,
   type LimitRule,
   type Scope,
   type WebsiteSettings,
   type Weekday,
 } from "../config";
+import { summarize, type UsageEntry } from "../usage-summary";
 import { ICONS } from "./icons";
 
 // ---------------------------------------------------------------------------
@@ -196,6 +207,11 @@ function LoginPage({ onDone }: { onDone: () => void }) {
 type Notice = { kind: "ok" | "warn" | "error"; text: string } | null;
 type Status = {
   running: boolean;
+  /** The home screen these values are about, and the one shown on the TV. */
+  homeScreen?: string | null;
+  activeHomeScreen?: string | null;
+  /** Whether the home screen on the TV is locked (`locked` is about `homeScreen`). */
+  activeLocked?: boolean;
   /** Media centers of this user besides the one connected to the admin panel. */
   extraInstances?: number;
   extraPids?: number[];
@@ -249,6 +265,7 @@ const PAGES: { id: string; label: string; icon: string; tabs: TabDef[] }[] = [
     tabs: [
       { id: "status", label: "Status", icon: "chart-bar" },
       { id: "limits", label: "Time limits", icon: "hourglass", saves: true },
+      { id: "usage", label: "Usage", icon: "report-analytics", saves: true },
     ],
   },
   {
@@ -279,6 +296,13 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
   const [status, setStatus] = useState<Status | null>(null);
   const [busy, setBusy] = useState(false);
   const [hash, setHash] = useState(location.hash);
+  // The home screen being edited / looked at; preset to the default (★) one.
+  const [screenId, setScreenId] = useState<string | null>(null);
+  const screen = config ? (config.home_screens.find((s) => s.id === screenId) ?? defaultScreen(config)) : null;
+  // A new home screen the media center doesn't know yet has no status.
+  const savedConfig = saved ? (JSON.parse(saved) as Config) : null;
+  const screenIsSaved = !!screen && !!savedConfig && savedConfig.home_screens.some((s) => s.id === screen.id);
+  const statusScreen = screenIsSaved ? screen.id : undefined;
 
   useEffect(() => {
     const onHash = () => {
@@ -290,14 +314,16 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
   }, []);
 
   const loadStatus = useCallback(() => {
-    api<Status>("GET", "/api/status").then(setStatus).catch(() => setStatus(null));
-  }, []);
+    const query = statusScreen ? `?home_screen=${encodeURIComponent(statusScreen)}` : "";
+    api<Status>("GET", `/api/status${query}`).then(setStatus).catch(() => setStatus(null));
+  }, [statusScreen]);
 
   const loadConfig = useCallback(async () => {
     try {
       const r = await api<{ config: Config; pinSet: boolean; pinAutoSubmit: boolean; error?: string }>("GET", "/api/config");
       setConfig(r.config);
       setSaved(JSON.stringify(r.config));
+      setScreenId((id) => id ?? defaultScreen(r.config).id);
       setPinSet(r.pinSet);
       setPinAutoSubmit(r.pinAutoSubmit);
       if (r.error) setNotice({ kind: "error", text: `${r.error} Saving will replace it.` });
@@ -308,12 +334,19 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
 
   useEffect(() => {
     loadConfig();
+  }, [loadConfig]);
+
+  useEffect(() => {
     loadStatus();
     const timer = setInterval(loadStatus, 5000);
     return () => clearInterval(timer);
-  }, [loadConfig, loadStatus]);
+  }, [loadStatus]);
 
-  if (!config) return <main>{notice && <div className={`banner ${notice.kind}`}>{notice.text}</div>}</main>;
+  if (!config || !screen) return <main>{notice && <div className={`banner ${notice.kind}`}>{notice.text}</div>}</main>;
+
+  const setScreen = (s: HomeScreen) =>
+    setConfig({ ...config, home_screens: config.home_screens.map((x) => (x.id === s.id ? s : x)) });
+  const allIds = allItemIds(config);
 
   const { page, tab } = route(hash);
   const dirty = JSON.stringify(config) !== saved;
@@ -344,22 +377,22 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
     case "media/home":
       content = (
         <>
-          <HomeTab config={config} setConfig={setConfig} />
+          <HomeTab config={screen} setConfig={setScreen} />
           <RestartCard status={status} reload={loadStatus} setNotice={setNotice} />
         </>
       );
       break;
     case "media/discs":
-      content = <DiscsTab config={config} setConfig={setConfig} />;
+      content = <DiscsTab config={screen} setConfig={setScreen} />;
       break;
     case "media/folders":
-      content = <FoldersSection folders={config.folders} onChange={(folders) => setConfig({ ...config, folders })} />;
+      content = <FoldersSection folders={screen.folders} allIds={allIds} onChange={(folders) => setScreen({ ...screen, folders })} />;
       break;
     case "media/websites":
-      content = <WebsitesSection websites={config.websites} onChange={(websites) => setConfig({ ...config, websites })} />;
+      content = <WebsitesSection websites={screen.websites} allIds={allIds} onChange={(websites) => setScreen({ ...screen, websites })} />;
       break;
     case "media/games":
-      content = <GamesTab config={config} setConfig={setConfig} />;
+      content = <GamesTab config={screen} setConfig={setScreen} />;
       break;
     case "media/screensaver":
       content = <ScreensaverTab config={config} setConfig={setConfig} />;
@@ -368,16 +401,29 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
       content = <RemoteTab status={status} reload={loadStatus} setNotice={setNotice} />;
       break;
     case "parental/status":
-      content = <StatusTab status={status} reload={loadStatus} setNotice={setNotice} pinSet={pinSet} />;
+      content = (
+        <StatusTab
+          status={status}
+          reload={loadStatus}
+          setNotice={setNotice}
+          pinSet={pinSet}
+          screen={screen}
+          saved={screenIsSaved}
+          config={config}
+        />
+      );
       break;
     case "parental/limits":
       content = (
         <LimitsTab
           status={status}
-          limits={config.parental.limits}
-          onChange={(limits) => setConfig({ ...config, parental: { ...config.parental, limits } })}
+          limits={screen.limits}
+          onChange={(limits) => setScreen({ ...screen, limits })}
         />
       );
+      break;
+    case "parental/usage":
+      content = <UsageTab config={config} setConfig={setConfig} setNotice={setNotice} />;
       break;
     case "security/pin":
       content = (
@@ -402,7 +448,7 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
     <div className="layout">
       <nav className="sidebar">
         <div className="brand">
-          <strong>{config.home.title}</strong>
+          <strong>{defaultScreen(config).home.title}</strong>
           <span>Admin</span>
         </div>
         <StatusLine status={status} />
@@ -433,6 +479,16 @@ function SettingsPage({ onLogout }: { onLogout: () => void }) {
         )}
         {notice && <div className={`banner ${notice.kind}`}>{notice.text}</div>}
         <ExtraInstancesBanner status={status} reload={loadStatus} setNotice={setNotice} />
+        {SCREEN_TABS.includes(`${page.id}/${tab.id}`) && (
+          <ScreenBar
+            config={config}
+            setConfig={setConfig}
+            screen={screen}
+            select={setScreenId}
+            manage={page.id === "media"}
+            activeId={status?.activeHomeScreen ?? null}
+          />
+        )}
         {content}
         {tab.saves && (
           <div className="savebar">
@@ -458,15 +514,110 @@ function StatusLine({ status }: { status: Status | null }) {
   }
   return (
     <span className="status">
-      <span className={`dot ${status.locked ? "locked" : "on"}`} /> {status.locked ? "Locked" : "Media center is running"}
+      <span className={`dot ${status.activeLocked ? "locked" : "on"}`} /> {status.activeLocked ? "Locked" : "Media center is running"}
       {status.configError ? ` — settings problem: ${status.configError}` : ""}
     </span>
   );
 }
 
 type ConfigProps = { config: Config; setConfig: (c: Config) => void };
+type ScreenProps = { config: HomeScreen; setConfig: (s: HomeScreen) => void };
 
-function HomeTab({ config, setConfig }: ConfigProps) {
+/** The tabs that belong to one home screen (they show the home screen bar). */
+const SCREEN_TABS = ["media/home", "media/discs", "media/folders", "media/websites", "media/games", "parental/status", "parental/limits"];
+
+/** Choose a home screen; on the media page also create, rename, star and delete them. */
+function ScreenBar(props: {
+  config: Config;
+  setConfig: (c: Config) => void;
+  screen: HomeScreen;
+  select: (id: string) => void;
+  manage: boolean;
+  activeId: string | null;
+}) {
+  const { config, setConfig, screen, select, manage, activeId } = props;
+  // `null`: no form; otherwise the title being entered for a new one or for renaming.
+  const [form, setForm] = useState<{ mode: "new" | "rename"; name: string } | null>(null);
+  const name = form ? cleanScreenName(form.name) : null;
+  const update = (screens: HomeScreen[]) => setConfig({ ...config, home_screens: screens });
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!form || name === null) return;
+    if (form.mode === "new") {
+      const created = addHomeScreen(config, name);
+      setConfig(created.config);
+      select(created.id);
+    } else {
+      update(config.home_screens.map((s) => (s.id === screen.id ? { ...s, name } : s)));
+    }
+    setForm(null);
+  };
+  const remove = () => {
+    if (!confirm(`Delete the home screen "${screen.name}" with its items and time limits?`)) return;
+    setConfig(removeHomeScreen(config, screen.id));
+    select(defaultScreen(config).id);
+  };
+
+  return (
+    <section className="card screen-bar">
+      <div className="row">
+        <Icon name={screen.default ? "star-filled" : "star"} size={20} />
+        <select aria-label="Home screen" value={screen.id} onChange={(e) => select(e.target.value)}>
+          {config.home_screens.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.default ? "★ " : ""}
+              {s.name}
+              {s.id === activeId ? " (on the TV)" : ""}
+            </option>
+          ))}
+        </select>
+        {manage && (
+          <>
+            <button disabled={config.home_screens.length >= MAX_HOME_SCREENS} onClick={() => setForm({ mode: "new", name: "" })}>
+              <Icon name="plus" size={16} /> New
+            </button>
+            <button onClick={() => setForm({ mode: "rename", name: screen.name })}>
+              <Icon name="pencil" size={16} /> Rename
+            </button>
+            <button
+              disabled={screen.default}
+              title="The default home screen is shown at the start and preselected here."
+              onClick={() => setConfig(makeDefaultScreen(config, screen.id))}
+            >
+              <Icon name="star" size={16} /> Make default
+            </button>
+            <button disabled={screen.default} onClick={remove}>
+              <Icon name="trash" size={16} /> Delete
+            </button>
+          </>
+        )}
+      </div>
+      {form && (
+        <form className="row" onSubmit={submit} style={{ marginTop: 10 }}>
+          <input
+            type="text"
+            autoFocus
+            maxLength={MAX_SCREEN_NAME_CHARS}
+            placeholder="Short title, e.g. Kids"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            style={{ maxWidth: 280 }}
+          />
+          <button className="primary" type="submit" disabled={name === null}>
+            {form.mode === "new" ? "Create" : "Rename"}
+          </button>
+          <button type="button" onClick={() => setForm(null)}>
+            Cancel
+          </button>
+          {form.mode === "new" && <small className="hint" style={{ margin: 0 }}>Starts as a copy of the default home screen.</small>}
+        </form>
+      )}
+    </section>
+  );
+}
+
+function HomeTab({ config, setConfig }: ScreenProps) {
   return (
     <section className="card">
       <label className="toggle">
@@ -511,7 +662,7 @@ function HomeTab({ config, setConfig }: ConfigProps) {
   );
 }
 
-function GamesTab({ config, setConfig }: ConfigProps) {
+function GamesTab({ config, setConfig }: ScreenProps) {
   const { pong, bricks } = config.games;
   const setPong = (patch: Partial<typeof pong>) =>
     setConfig({ ...config, games: { ...config.games, pong: { ...pong, ...patch } } });
@@ -864,8 +1015,8 @@ function RestartCard(props: { status: Status | null; reload: () => void; setNoti
   );
 }
 
-function DiscsTab({ config, setConfig }: ConfigProps) {
-  const setDiscs = (patch: Partial<Config["discs"]>) => setConfig({ ...config, discs: { ...config.discs, ...patch } });
+function DiscsTab({ config, setConfig }: ScreenProps) {
+  const setDiscs = (patch: Partial<HomeScreen["discs"]>) => setConfig({ ...config, discs: { ...config.discs, ...patch } });
   return (
     <section className="card">
       <p className="hint">DVDs and Blu-rays from the disc drive.</p>
@@ -986,13 +1137,21 @@ function RemoteTab(props: { status: Status | null; reload: () => void; setNotice
   );
 }
 
-function StatusTab(props: { status: Status | null; reload: () => void; setNotice: (n: Notice) => void; pinSet: boolean }) {
-  const { status } = props;
+function StatusTab(props: {
+  status: Status | null;
+  reload: () => void;
+  setNotice: (n: Notice) => void;
+  pinSet: boolean;
+  screen: HomeScreen;
+  saved: boolean;
+  config: Config;
+}) {
+  const { status, screen, config } = props;
   const [busy, setBusy] = useState(false);
   const act = async (path: string, body?: unknown, text = "Done.") => {
     setBusy(true);
     try {
-      await api("POST", path, body);
+      await api("POST", path, { ...(body as object | undefined), home_screen: screen.id });
       props.setNotice({ kind: "ok", text });
       props.reload();
     } catch (e) {
@@ -1001,6 +1160,13 @@ function StatusTab(props: { status: Status | null; reload: () => void; setNotice
       setBusy(false);
     }
   };
+  if (!props.saved) {
+    return (
+      <section className="card">
+        <p>"{screen.name}" isn't saved yet. Click "Save and apply" on one of its tabs first.</p>
+      </section>
+    );
+  }
   if (!status) return <section className="card">Loading…</section>;
   if (!status.running) {
     return (
@@ -1009,10 +1175,25 @@ function StatusTab(props: { status: Status | null; reload: () => void; setNotice
       </section>
     );
   }
+  const onTv = status.activeHomeScreen === screen.id;
+  const tvName = config.home_screens.find((s) => s.id === status.activeHomeScreen)?.name;
   const unlockedUntil = status.unlockedUntil ? new Date(status.unlockedUntil * 1000) : null;
   const unlockActive = !status.locked && unlockedUntil !== null && unlockedUntil > new Date();
   return (
     <>
+      {config.home_screens.length > 1 && (
+        <section className="card">
+          <h2>On the TV</h2>
+          <p className="hint">
+            {onTv ? `"${screen.name}" is shown on the TV now.` : `The TV shows "${tvName ?? "another home screen"}" now.`}
+          </p>
+          {!onTv && (
+            <button disabled={busy} onClick={() => act("/api/home-screen", undefined, `The TV shows "${screen.name}" now.`)}>
+              Show "{screen.name}" on the TV
+            </button>
+          )}
+        </section>
+      )}
       <section className={`card state ${status.locked ? "is-locked" : "is-open"}`}>
         <div className="state-head">
           <Icon name={status.locked ? "lock" : "lock-open"} size={32} />
@@ -1064,6 +1245,132 @@ function StatusTab(props: { status: Status | null; reload: () => void; setNotice
         <button disabled={busy} onClick={() => act("/api/lock", undefined, "Locked.")}>
           <Icon name="lock" size={16} /> Lock now
         </button>
+      </section>
+    </>
+  );
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  disc: "Discs",
+  video: "Videos",
+  music: "Music",
+  pictures: "Pictures",
+  website: "Websites",
+  game: "Games",
+};
+const clock = (unix: number) => new Date(unix * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+/** Used time, down to minutes (at least "1 min", so short uses don't read as nothing). */
+const usedText = (secs: number) => minutesText(Math.max(60, secs));
+
+function UsageTab(props: ConfigProps & { setNotice: (n: Notice) => void }) {
+  const { config, setConfig, setNotice } = props;
+  const stats = config.statistics;
+  const set = (patch: Partial<Config["statistics"]>) => setConfig({ ...config, statistics: { ...stats, ...patch } });
+  const [days, setDays] = useState(7);
+  const [filter, setFilter] = useState("all");
+  const [entries, setEntries] = useState<UsageEntry[] | null>(null);
+
+  const load = useCallback(() => {
+    api<{ entries: UsageEntry[] }>("GET", `/api/statistics?days=${days}`)
+      .then((r) => setEntries(r.entries))
+      .catch((e) => setNotice({ kind: "error", text: (e as Error).message }));
+  }, [days, setNotice]);
+  useEffect(load, [load]);
+
+  const deleteAll = async () => {
+    if (!confirm("Delete all collected usage statistics?")) return;
+    try {
+      await api("DELETE", "/api/statistics");
+      setNotice({ kind: "ok", text: "All usage statistics are deleted." });
+      load();
+    } catch (e) {
+      setNotice({ kind: "error", text: (e as Error).message });
+    }
+  };
+
+  const screenName = (id: string) => config.home_screens.find((s) => s.id === id)?.name ?? id;
+  const summaries = summarize(entries ?? [], filter === "all" ? undefined : filter);
+
+  return (
+    <>
+      <section className="card">
+        <label className="toggle">
+          <input type="checkbox" checked={stats.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
+          <span>
+            Collect usage statistics
+            <small>
+              The media center notes on which day, from when to when, which video, music, website, disc or game was
+              used. Everything stays on this computer.
+            </small>
+          </span>
+        </label>
+        <label className="field inline" style={{ marginTop: 10 }}>
+          <span>Delete statistics older than</span>
+          <input
+            type="number"
+            min={1}
+            max={MAX_KEEP_DAYS}
+            value={stats.keep_days}
+            disabled={!stats.enabled}
+            onChange={(e) => set({ keep_days: Math.min(MAX_KEEP_DAYS, Math.max(1, Math.round(Number(e.target.value) || 1))) })}
+          />
+          <small className="hint">days (checked when the media center starts or is unlocked)</small>
+        </label>
+      </section>
+      <section className="card">
+        <div className="row" style={{ marginBottom: 10 }}>
+          <select aria-label="Period" value={days} onChange={(e) => setDays(Number(e.target.value))}>
+            <option value={1}>Today</option>
+            <option value={7}>Last 7 days</option>
+            <option value={30}>Last 30 days</option>
+            <option value={366}>Last year</option>
+          </select>
+          {config.home_screens.length > 1 && (
+            <select aria-label="Home screen" value={filter} onChange={(e) => setFilter(e.target.value)}>
+              <option value="all">All home screens</option>
+              {config.home_screens.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <button disabled={!entries?.length} onClick={deleteAll}>
+            <Icon name="trash" size={16} /> Delete all
+          </button>
+        </div>
+        {entries === null && <p className="hint">Loading…</p>}
+        {entries !== null && summaries.length === 0 && <p className="hint">Nothing recorded in this period.</p>}
+        {summaries.map((d) => (
+          <div key={d.day} className="usage-day">
+            <h3>
+              {formatDate(d.day)} <small>{usedText(d.secs)}</small>
+            </h3>
+            {d.categories.map((c) => (
+              <details key={c.category} className="usage-category">
+                <summary>
+                  <span>{CATEGORY_LABELS[c.category]}</span>
+                  <small>{usedText(c.secs)}</small>
+                </summary>
+                <ul>
+                  {[...c.entries].reverse().map((e) => (
+                    <li key={`${e.from}-${e.item}-${e.detail}`}>
+                      <span className="usage-time">
+                        {clock(e.from)}–{clock(e.until)}
+                      </span>
+                      <span className="usage-what">
+                        {e.item}
+                        {e.detail && <small>{e.detail}</small>}
+                      </span>
+                      {config.home_screens.length > 1 && <small className="usage-screen">{screenName(e.home_screen)}</small>}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ))}
+          </div>
+        ))}
       </section>
     </>
   );
@@ -1482,7 +1789,7 @@ function newFolderId(name: string, taken: string[]): string {
   return id;
 }
 
-function FoldersSection(props: { folders: FolderSettings[]; onChange: (folders: FolderSettings[]) => void }) {
+function FoldersSection(props: { folders: FolderSettings[]; allIds: string[]; onChange: (folders: FolderSettings[]) => void }) {
   const { folders, onChange } = props;
   const [picking, setPicking] = useState<number | "new" | null>(null);
 
@@ -1495,7 +1802,7 @@ function FoldersSection(props: { folders: FolderSettings[]; onChange: (folders: 
       const name = base.slice(0, 60);
       onChange([
         ...folders,
-        { id: newFolderId(name, folders.map((f) => f.id)), name, path, video: true, audio: true, images: true },
+        { id: newFolderId(name, props.allIds), name, path, video: true, audio: true, images: true },
       ]);
     } else if (typeof picking === "number") {
       update(picking, { path });
@@ -1624,13 +1931,13 @@ function FolderPicker(props: { start?: string; onPick: (path: string) => void; o
 // ---------------------------------------------------------------------------
 // Websites
 
-function WebsitesSection(props: { websites: WebsiteSettings[]; onChange: (websites: WebsiteSettings[]) => void }) {
+function WebsitesSection(props: { websites: WebsiteSettings[]; allIds: string[]; onChange: (websites: WebsiteSettings[]) => void }) {
   const { websites, onChange } = props;
   const update = (i: number, patch: Partial<WebsiteSettings>) =>
     onChange(websites.map((w, j) => (j === i ? { ...w, ...patch } : w)));
 
   const add = () => {
-    const taken = websites.map((w) => w.id);
+    const taken = props.allIds;
     let id = "website";
     for (let n = 2; taken.includes(id); n++) id = `website-${n}`;
     onChange([...websites, { id, name: "", url: "https://", allow_subdomains: true, show_logo: true }]);

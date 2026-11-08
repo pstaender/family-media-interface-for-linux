@@ -284,7 +284,7 @@ Blocked pages are logged as `curator-web: blocked …`.
 | --- | --- |
 | `~/.config/curator/config.json` | settings (written by the admin panel) |
 | `~/.config/curator/admin.json` | admin password hash |
-| `~/.local/share/curator/` | resume positions, usage time (`usage.json`), remote buttons (`remote.json`), recently played files per folder (`recent.json`) |
+| `~/.local/share/curator/` | resume positions, usage statistics (`statistics/`, only if turned on), usage time (`usage.json`), remote buttons (`remote.json`), recently played files per folder (`recent.json`) |
 | `/etc/udev/rules.d/70-curator-remote.rules` | read access to the remote (`scripts/remote-access.sh`) |
 | `~/.cache/curator/` | disc info, website cookies and logos, screensaver videos (`aerial/`), player screenshots, MakeMKV build |
 | `/run/user/<uid>/curator*.sock` | control sockets |

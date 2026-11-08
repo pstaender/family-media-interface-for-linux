@@ -421,9 +421,7 @@ main.content h1 {
   gap: 4px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 18px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
+  flex-wrap: wrap; /* seven tabs don't fit in one row */
 }
 
 .tabs a {
@@ -879,4 +877,73 @@ table.buttons th {
 .banner-hint code {
   user-select: all;
   overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- home screens */
+
+.screen-bar select {
+  max-width: 320px;
+}
+
+/* ---------------------------------------------------------------- usage */
+
+.usage-day h3 {
+  font-size: 16px;
+  margin: 16px 0 6px;
+}
+
+.usage-day h3 small {
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 8px;
+}
+
+.usage-category {
+  border-top: 1px solid var(--border);
+  padding: 8px 0;
+}
+
+.usage-category summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.usage-category summary small {
+  color: var(--muted);
+}
+
+.usage-category ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.usage-category li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 14px;
+}
+
+.usage-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.usage-what {
+  overflow-wrap: anywhere;
+}
+
+.usage-what small {
+  display: block;
+  color: var(--muted);
+}
+
+.usage-screen {
+  color: var(--muted);
+  white-space: nowrap;
 }
